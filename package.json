@@ -56,7 +56,8 @@
     "lint": "biome check --write src/",
     "lint:fix": "biome check --write src/",
     "format": "biome check --write src/",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm test && npm run build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
