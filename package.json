@@ -1,6 +1,7 @@
 {
   "name": "sinapsai",
   "version": "1.0.0",
+  "description": "Blazing-fast in-process AI Gateway & Control Plane with Circuit Breaker, Failover, and Unified LLM API for Node.js & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -12,6 +13,43 @@
       "require": "./dist/index.cjs"
     }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "README.id.md",
+    "LICENSE",
+    "CONTRIBUTING.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roedyrustam/sinapsai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/roedyrustam/sinapsai/issues"
+  },
+  "homepage": "https://github.com/roedyrustam/sinapsai#readme",
+  "keywords": [
+    "ai",
+    "llm",
+    "ai-gateway",
+    "llm-gateway",
+    "circuit-breaker",
+    "failover",
+    "load-balancer",
+    "openai",
+    "anthropic",
+    "gemini",
+    "groq",
+    "openrouter",
+    "fault-tolerance",
+    "in-memory",
+    "control-plane",
+    "typescript",
+    "developer-tools",
+    "resilience"
+  ],
+  "author": "Roedy Rustam",
+  "license": "CC-BY-4.0",
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration",
     "dev": "tsup --watch",
@@ -20,10 +58,6 @@
     "format": "biome check --write src/",
     "test": "vitest run"
   },
-  "keywords": [],
-  "author": "Roedy Rustam",
-  "license": "CC-BY-4.0",
-  "description": "Local AI Control Plane & Unified API Gateway for LLM Providers",
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
     "@types/node": "^26.6.3",

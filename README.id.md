@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
@@ -19,8 +20,30 @@ Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalis
 
 ---
 
+## 🥊 Mengapa SinapsAI?
+
+Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda menjalankan container Docker terpisah, menyiapkan Redis/PostgreSQL, atau mengirimkan API keys dan prompt pengguna melalui server pihak ketiga.
+
+**SinapsAI berjalan langsung di dalam proses aplikasi Node.js Anda:**
+
+| Fitur | **SinapsAI** ⚡ | SDK Provider Langsung | Cloud Gateway (Portkey/Helicone) | LiteLLM Proxy |
+| :--- | :---: | :---: | :---: | :---: |
+| **Bebas Infrastruktur Tambahan** (Tanpa Docker/Redis) | ✅ **100% In-Process** | ✅ Ya | ❌ Perlu Akun Cloud Pihak Ketiga | ❌ Perlu Docker / Python |
+| **Tambahan Latensi Eksekusi** | ⚡ **<10ms** | 0ms | ⚠️ +50ms s/d +250ms (Extra hop) | ⚠️ +20ms s/d +80ms |
+| **Privasi Data & Kunci API** | 🔒 **Zero Data Leakage** | 🔒 Langsung | ⚠️ Melalui Gateway Pihak Ketiga | 🔒 Self-hosted |
+| **In-Memory Circuit Breaker** | ✅ **Bawaan** | ❌ Manual coding | ⚠️ Fitur cloud | ⚠️ Retry dasar |
+| **Failover Multi-Provider Otomatis** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
+| **Round-Robin Load Balancing** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
+| **Perutean Biaya Terendah (Lowest Cost)** | ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Paket berbayar | ✅ Ya |
+| **Native TypeScript (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Bervariasi | ❌ Layanan terpisah | ❌ Python |
+
+> 📁 Ingin langsung mencoba kodenya? Kunjungi **[Folder Contoh Kode (`/examples`)](./examples)**!
+
+---
+
 ## 📑 Daftar Isi
 
+- [Mengapa SinapsAI?](#-mengapa-sinapsai)
 - [Fitur Utama](#-fitur-utama)
 - [Arsitektur & Alur Kerja](#-arsitektur--alur-kerja)
 - [Instalasi](#-instalasi)
@@ -34,6 +57,7 @@ Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalis
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
 - [Pengujian & Pengembangan](#-pengujian--pengembangan)
+- [Cara Berkontribusi](#-cara-berkontribusi)
 - [Lisensi](#-lisensi)
 
 ---

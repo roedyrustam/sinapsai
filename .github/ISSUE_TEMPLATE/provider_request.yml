@@ -1,0 +1,41 @@
+name: 🔌 New LLM Provider Request
+description: Request built-in support for a new LLM provider (e.g. DeepSeek, Mistral, Cohere, Bedrock)
+labels: ['provider', 'enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Want SinapsAI to natively support another LLM provider or local engine? Let us know below!
+  - type: input
+    id: provider-name
+    attributes:
+      label: Provider Name
+      description: Name of the LLM provider or API service
+      placeholder: e.g. DeepSeek, Mistral AI, Cohere, AWS Bedrock
+    validations:
+      required: true
+  - type: input
+    id: docs-url
+    attributes:
+      label: Provider API Documentation URL
+      description: Link to their official API docs
+      placeholder: https://api-docs.example.com
+    validations:
+      required: true
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Supported Capabilities
+      description: What features does this provider support?
+      options:
+        - label: Chat Completions
+        - label: Streaming (SSE)
+        - label: OpenAI-compatible API endpoint
+        - label: Self-hosted / Local execution
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why should we support this provider?
+      description: How will this benefit developers building with SinapsAI?
+    validations:
+      required: true

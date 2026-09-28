@@ -1,0 +1,28 @@
+name: 💡 Feature Request
+description: Suggest an idea or architectural improvement for SinapsAI
+labels: ['enhancement', 'discussion']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make SinapsAI more resilient, faster, or easier to use? We'd love to hear it!
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear description of what problem you are trying to solve.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: How should this feature work? Code mockups are appreciated!
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: What other approaches or workarounds have you looked at?

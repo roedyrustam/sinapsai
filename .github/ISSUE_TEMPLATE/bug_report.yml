@@ -1,0 +1,49 @@
+name: 🐛 Bug Report
+description: Create a report to help us reproduce and fix a bug in SinapsAI
+labels: ['bug', 'triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this issue! Please provide as much detail as possible.
+  - type: input
+    id: version
+    attributes:
+      label: SinapsAI Version
+      description: What version of `sinapsai` are you using?
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime & Environment
+      description: Node.js version, OS, TypeScript version
+      placeholder: e.g. Node 20.11.0, macOS Sonoma, TypeScript 5.4
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal Reproducible Example
+      description: Please share a short snippet showing how to trigger the problem.
+      render: typescript
+      placeholder: |
+        import { SinapsClient, OpenAiProvider } from 'sinapsai';
+        // Your minimal code here
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs Actual Behavior
+      description: What did you expect to happen, and what happened instead?
+    validations:
+      required: true
