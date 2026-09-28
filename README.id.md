@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
   <img src="https://img.shields.io/badge/Tests-49%20Passed-brightgreen.svg" alt="Tests Passed" />
@@ -350,6 +351,20 @@ npm run lint
 # Membangun bundle produksi (CJS + ESM + Type Declarations)
 npm run build
 ```
+
+---
+
+## 🤝 Cara Berkontribusi
+
+Kami menyambut kontribusi dalam berbagai bentuk — provider baru, perbaikan bug, pengujian, maupun peningkatan dokumentasi!
+
+Baca **[Panduan Berkontribusi (CONTRIBUTING.md)](./CONTRIBUTING.md)** untuk informasi lengkap tentang:
+- Persiapan lingkungan pengembangan lokal
+- Panduan langkah demi langkah menambahkan provider LLM baru
+- Standar penulisan pengujian dengan Vitest mock
+- Aturan gaya kode (Biome: indentasi, kutipan, semicolons)
+- Konvensi pesan commit (Conventional Commits)
+- Cara membuka Pull Request yang terstruktur dengan baik
 
 ---
 

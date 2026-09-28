@@ -6,11 +6,13 @@
 </p>
 
 <p align="center">
+  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
   <img src="https://img.shields.io/badge/Tests-49%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
+
 
 **SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, Groq, OpenRouter, and custom endpoints) through a single, standardized **Unified API**.
 
@@ -350,6 +352,20 @@ npm run lint
 # Build production artifacts (ESM, CommonJS, and .d.ts typings)
 npm run build
 ```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions of all kinds — new providers, bug fixes, tests, and documentation improvements!
+
+Please read the **[Contributing Guide](./CONTRIBUTING.md)** for:
+- Development environment setup
+- Step-by-step guide for adding a new LLM provider
+- Test writing standards with Vitest mocks
+- Code style rules (Biome)
+- Commit message convention (Conventional Commits)
+- How to open a well-structured Pull Request
 
 ---
 
