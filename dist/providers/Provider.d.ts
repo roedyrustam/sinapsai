@@ -1,0 +1,8 @@
+import type { UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+export interface Provider {
+    id: string;
+    name: string;
+    costPer1kTokens?: number;
+    generateContent(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+}
+//# sourceMappingURL=Provider.d.ts.map

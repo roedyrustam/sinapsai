@@ -1,0 +1,34 @@
+{
+  "name": "sinapsai",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly --declaration",
+    "dev": "tsup --watch",
+    "lint": "biome check --write src/",
+    "lint:fix": "biome check --write src/",
+    "format": "biome check --write src/",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "Roedy Rustam",
+  "license": "CC-BY-4.0",
+  "description": "Local AI Control Plane & Unified API Gateway for LLM Providers",
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.3",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
