@@ -22,11 +22,38 @@ export class OpenAiProvider implements Provider {
     return this.config.costPer1kTokens;
   }
 
+  get retries(): number | undefined {
+    return this.config.retries;
+  }
+
+  get retryDelayMs(): number | undefined {
+    return this.config.retryDelayMs;
+  }
+
+  public resolveModel(model: string): string {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+
   public formatRequest(request: UnifiedApiRequest) {
+    const messages = request.messages.map((m) => {
+      // biome-ignore lint/suspicious/noExplicitAny: OpenAI message format
+      const msg: any = {
+        role: m.role,
+        content: m.content,
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+
     // biome-ignore lint/suspicious/noExplicitAny: request format varies by provider
     const payload: any = {
-      model: request.model,
-      messages: request.messages,
+      model: this.resolveModel(request.model),
+      messages,
     };
 
     if (request.temperature !== undefined) {
@@ -37,6 +64,15 @@ export class OpenAiProvider implements Provider {
     }
     if (request.stream) {
       payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
     }
     return payload;
   }
@@ -51,7 +87,8 @@ export class OpenAiProvider implements Provider {
         {
           message: {
             role: 'assistant',
-            content: choice?.message?.content || '',
+            content: choice?.message?.content ?? null,
+            tool_calls: choice?.message?.tool_calls,
           },
           finishReason: choice?.finish_reason || 'stop',
         },
@@ -77,6 +114,15 @@ export class OpenAiProvider implements Provider {
     let timeoutId: NodeJS.Timeout | undefined;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(), {
+          once: true,
+        });
+      }
     }
 
     try {
@@ -114,7 +160,8 @@ export class OpenAiProvider implements Provider {
                     {
                       delta: {
                         role: chunk?.delta?.role,
-                        content: chunk?.delta?.content || '',
+                        content: chunk?.delta?.content,
+                        tool_calls: chunk?.delta?.tool_calls,
                       },
                       finishReason: chunk?.finish_reason || null,
                     },

@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-49%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-62%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -54,6 +54,10 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [3. Round-Robin Load Balancing](#3-round-robin-load-balancing)
   - [4. Lowest-Cost Routing](#4-lowest-cost-routing)
   - [5. Observability with Event Hooks](#5-observability-with-event-hooks)
+  - [6. Retries with Exponential Backoff & Jitter](#6-retries-with-exponential-backoff--jitter)
+  - [7. In-Memory Prompt Response Caching](#7-in-memory-prompt-response-caching)
+  - [8. Tool Calling & Function Execution](#8-tool-calling--function-execution)
+  - [9. Structured Outputs (JSON Mode)](#9-structured-outputs-json-mode)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -66,14 +70,17 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 ## ✨ Key Features
 
 - 🌐 **Unified API**: Communicate seamlessly across different LLM providers using standard request/response structures aligned with the OpenAI Chat Completions specification.
+- 🛠️ **Universal Tool Calling & JSON Mode**: Define tools once with standard JSON Schema (`tools`, `toolChoice`). SinapsAI automatically translates function calls to Anthropic's XML/tool syntax, Gemini's function declarations, and OpenAI formats.
 - 🛡️ **In-Memory Circuit Breaker**: Detects provider outages instantaneously and trips (*Open Circuit*) to prevent cascading latencies and application thread blockage.
 - 🔀 **Flexible Routing Strategies**:
   - `failover`: Automatically falls back to secondary providers when primary models fail or time out.
   - `load-balance`: Distributes requests in a round-robin rotation across multiple keys or endpoints to avert rate limiting (HTTP 429).
   - `lowest-cost`: Dynamically sorts and invokes the most cost-effective provider using token pricing (`costPer1kTokens`).
+- ⚡ **Exponential Backoff & Retries**: Automatically retries transient network errors and rate limits (429, 5xx) with random jitter before failing over.
+- 💾 **In-Memory Prompt Hash Caching**: Fast in-memory response caching with configurable TTL to avoid duplicate calls and cut costs.
 - 🌊 **Native SSE Streaming**: Stream completions in real time using native asynchronous generators (`for await...of`).
 - 🔒 **Zero Data Leakage & 100% Local**: Runs strictly within your application's memory space. API keys and prompt payloads never leave your infrastructure.
-- 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`) for APM metrics and custom alerting.
+- 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) for APM metrics and custom alerting.
 
 ---
 
@@ -274,6 +281,9 @@ Integrate lifecycle events with your telemetry and monitoring pipelines (Datadog
 const client = new SinapsClient({
   providers: [...],
   hooks: {
+    onSuccess: (provider, response, latencyMs) => {
+      telemetry.recordSuccess(provider.name, latencyMs, response.usage?.totalTokens);
+    },
     onFallback: (error, fromProvider, toProvider) => {
       telemetry.recordFallback(fromProvider.name, toProvider.name, error.message);
     },
@@ -286,8 +296,113 @@ const client = new SinapsClient({
     onRateLimit: (provider, error) => {
       telemetry.recordRateLimit(provider.name);
     },
+    onRetry: (provider, error, attempt, delayMs) => {
+      console.warn(`[Retry] Retrying ${provider.name} (attempt ${attempt}) after ${Math.round(delayMs)}ms...`);
+    },
   },
 });
+```
+
+---
+
+### 6. Retries with Exponential Backoff & Jitter
+
+Configure per-provider or global retry attempts for transient server glitches (5xx, timeouts, 429) before falling over:
+
+```typescript
+const client = new SinapsClient({
+  retries: 2,            // Retry transient errors up to 2 times
+  retryDelayMs: 250,     // Initial backoff delay (doubles each attempt + random jitter)
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+});
+```
+
+---
+
+### 7. In-Memory Prompt Response Caching
+
+Instantly serve repeated prompt queries with 0ms overhead and zero token consumption using built-in in-memory caching:
+
+```typescript
+const client = new SinapsClient({
+  cache: {
+    enabled: true,       // Cache responses for identical prompts
+    ttlSeconds: 300,     // Cache lifespan (default 5 minutes)
+  },
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+```
+
+---
+
+### 8. Tool Calling & Function Execution
+
+Define functions once using OpenAI's standard JSON schema. SinapsAI automatically maps and parses them across OpenAI, Anthropic Claude, and Google Gemini:
+
+```typescript
+import { SinapsClient, OpenAiProvider, AnthropicProvider, GeminiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  strategy: 'failover',
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! }),
+  ],
+});
+
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'What is the stock price of Apple (AAPL)?' }],
+  tools: [
+    {
+      type: 'function',
+      function: {
+        name: 'get_stock_price',
+        description: 'Get the current stock price for a given ticker symbol',
+        parameters: {
+          type: 'object',
+          properties: {
+            symbol: { type: 'string', description: 'Stock ticker, e.g. AAPL' },
+          },
+          required: ['symbol'],
+        },
+      },
+    },
+  ],
+  toolChoice: 'auto',
+});
+
+if (response.choices[0].finishReason === 'tool_calls') {
+  const toolCall = response.choices[0].message.tool_calls?.[0];
+  console.log('Tool to call:', toolCall?.function.name);
+  console.log('Arguments:', toolCall?.function.arguments);
+}
+```
+
+---
+
+### 9. Structured Outputs (JSON Mode)
+
+Enforce valid JSON object responses natively across all providers (`responseFormat: { type: 'json_object' }`):
+
+```typescript
+const response = await client.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    { role: 'system', content: 'You are a data extractor. Always return JSON.' },
+    { role: 'user', content: 'Generate a profile for John Doe, age 28, engineer.' },
+  ],
+  responseFormat: { type: 'json_object' },
+});
+
+const data = JSON.parse(response.choices[0].message.content || '{}');
+console.log(data);
 ```
 
 ---

@@ -55,12 +55,14 @@ var init_stream = __esm({
 var CircuitBreaker = class {
   storage;
   failureThreshold;
+  recoverySuccessThreshold;
   resetTimeoutMs;
   onCircuitOpen;
   onCircuitClose;
   constructor(storage, options = {}) {
     this.storage = storage;
     this.failureThreshold = options.failureThreshold || 3;
+    this.recoverySuccessThreshold = options.recoverySuccessThreshold || 1;
     this.resetTimeoutMs = options.resetTimeoutMs || 3e4;
     this.onCircuitOpen = options.onCircuitOpen;
     this.onCircuitClose = options.onCircuitClose;
@@ -81,35 +83,40 @@ var CircuitBreaker = class {
       const failures = await this.storage.get(
         `cb:failures:${providerId}`
       );
-      const previousState = await this.storage.get(
-        `cb:state:${providerId}`
-      );
-      await this.storage.delete(`cb:failures:${providerId}`);
-      await this.storage.set(`cb:state:${providerId}`, "CLOSED");
-      if (previousState === "OPEN" || failures !== null && failures >= this.failureThreshold) {
-        this.onCircuitClose?.(providerId);
+      const state = await this.storage.get(`cb:state:${providerId}`);
+      if (state === "OPEN" || failures !== null && failures >= this.failureThreshold) {
+        const successes = await this.storage.increment(
+          `cb:successes:${providerId}`
+        );
+        if (successes >= this.recoverySuccessThreshold) {
+          await this.storage.delete(`cb:failures:${providerId}`);
+          await this.storage.delete(`cb:successes:${providerId}`);
+          await this.storage.set(`cb:state:${providerId}`, "CLOSED");
+          this.onCircuitClose?.(providerId);
+        }
+      } else {
+        await this.storage.delete(`cb:failures:${providerId}`);
+        await this.storage.delete(`cb:successes:${providerId}`);
+        await this.storage.set(`cb:state:${providerId}`, "CLOSED");
       }
     } catch (_error) {
     }
   }
   async recordFailure(providerId) {
     try {
+      await this.storage.delete(`cb:successes:${providerId}`);
       const failures = await this.storage.increment(
         `cb:failures:${providerId}`
       );
-      if (failures === this.failureThreshold) {
+      if (failures >= this.failureThreshold) {
         await this.storage.set(
           `cb:state:${providerId}`,
           "OPEN",
           this.resetTimeoutMs / 1e3
         );
-        this.onCircuitOpen?.(providerId);
-      } else if (failures > this.failureThreshold) {
-        await this.storage.set(
-          `cb:state:${providerId}`,
-          "OPEN",
-          this.resetTimeoutMs / 1e3
-        );
+        if (failures === this.failureThreshold) {
+          this.onCircuitOpen?.(providerId);
+        }
       }
     } catch (_error) {
     }
@@ -222,6 +229,10 @@ var Router = class {
   circuitBreaker;
   hooks;
   currentProviderIndex = 0;
+  retries;
+  retryDelayMs;
+  cacheOptions;
+  storage;
   constructor(providers, circuitBreaker, options = {}) {
     if (!providers || providers.length === 0) {
       throw new Error("At least one provider must be configured");
@@ -230,11 +241,52 @@ var Router = class {
     this.strategy = options.strategy || "failover";
     this.circuitBreaker = circuitBreaker;
     this.hooks = options.hooks;
+    this.retries = options.retries ?? 0;
+    this.retryDelayMs = options.retryDelayMs ?? 300;
+    this.cacheOptions = options.cache;
+    this.storage = options.storage;
   }
   getProviderById(id) {
     return this.providers.find((p) => p.id === id);
   }
+  computeCacheKey(request) {
+    const raw = JSON.stringify({
+      m: request.model,
+      msgs: request.messages,
+      t: request.temperature,
+      max: request.maxTokens
+    });
+    let hash = 5381;
+    for (let i = 0; i < raw.length; i++) {
+      hash = hash * 33 ^ raw.charCodeAt(i);
+    }
+    return `cache:${request.model}:${(hash >>> 0).toString(16)}`;
+  }
+  isRetryableError(error) {
+    const status = error.status;
+    if (status) {
+      if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+        return false;
+      }
+      return true;
+    }
+    const msg = error.message.toLowerCase();
+    if (msg.includes("invalid api key") || msg.includes("unauthorized") || msg.includes("not found") || msg.includes("permission denied")) {
+      return false;
+    }
+    return true;
+  }
   async execute(request) {
+    if (this.cacheOptions?.enabled && !request.stream && this.storage) {
+      try {
+        const cacheKey = this.computeCacheKey(request);
+        const cached = await this.storage.get(cacheKey);
+        if (cached) {
+          return cached;
+        }
+      } catch (_e) {
+      }
+    }
     let providersList = this.providers;
     if (this.strategy === "lowest-cost") {
       providersList = [...this.providers].sort((a, b) => {
@@ -269,16 +321,51 @@ var Router = class {
         previousError = error;
         continue;
       }
-      try {
-        return await this.circuitBreaker.execute(provider, request);
-      } catch (error) {
-        const err = error;
-        errors.push(err);
-        if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
-          this.hooks?.onRateLimit?.(provider, err);
+      const maxRetries = provider.retries ?? this.retries;
+      const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+      let attempt = 0;
+      while (true) {
+        const startTime = Date.now();
+        try {
+          const res = await this.circuitBreaker.execute(provider, request);
+          const latencyMs = Date.now() - startTime;
+          if (!request.stream && "choices" in res) {
+            const apiRes = res;
+            this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
+            if (this.cacheOptions?.enabled && this.storage) {
+              try {
+                const cacheKey = this.computeCacheKey(request);
+                await this.storage.set(
+                  cacheKey,
+                  apiRes,
+                  this.cacheOptions.ttlSeconds ?? 300
+                );
+              } catch (_e) {
+              }
+            }
+          }
+          return res;
+        } catch (error) {
+          const err = error;
+          if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
+            this.hooks?.onRateLimit?.(provider, err);
+          }
+          if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
+            attempt++;
+            const jitter = Math.random() * 50;
+            const delay = Math.min(
+              baseDelay * 2 ** (attempt - 1) + jitter,
+              1e4
+            );
+            this.hooks?.onRetry?.(provider, err, attempt, delay);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          errors.push(err);
+          previousProvider = provider;
+          previousError = err;
+          break;
         }
-        previousProvider = provider;
-        previousError = err;
       }
     }
     throw new AggregateError(errors, "All providers failed or are unavailable");
@@ -308,20 +395,29 @@ var SinapsClient = class {
     });
     this.router = new Router(options.providers, cb, {
       strategy: options.strategy,
-      hooks: options.hooks
+      hooks: options.hooks,
+      retries: options.retries,
+      retryDelayMs: options.retryDelayMs,
+      cache: options.cache,
+      storage: this.storage
     });
   }
   chat = {
     completions: {
-      create: async (request) => {
+      create: (async (request) => {
         const fullReq = {
           model: request.model || "default",
           messages: request.messages,
           temperature: request.temperature,
-          maxTokens: request.maxTokens
+          maxTokens: request.maxTokens,
+          stream: request.stream,
+          signal: request.signal,
+          tools: request.tools,
+          toolChoice: request.toolChoice,
+          responseFormat: request.responseFormat
         };
         return this.router.execute(fullReq);
-      }
+      })
     }
   };
 };
@@ -338,9 +434,21 @@ var AnthropicProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
   formatRequest(request) {
     const payload = {
-      model: request.model,
+      model: this.resolveModel(request.model),
       max_tokens: request.maxTokens || 4096,
       messages: []
     };
@@ -350,23 +458,76 @@ var AnthropicProvider = class {
     const systemMessages = [];
     for (const msg of request.messages) {
       if (msg.role === "system") {
-        systemMessages.push(msg.content);
+        if (msg.content) systemMessages.push(msg.content);
+      } else if (msg.role === "tool") {
+        payload.messages.push({
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: msg.tool_call_id,
+              content: msg.content || ""
+            }
+          ]
+        });
+      } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+        const contentBlocks = [];
+        if (msg.content) {
+          contentBlocks.push({ type: "text", text: msg.content });
+        }
+        for (const tc of msg.tool_calls) {
+          let input = {};
+          try {
+            input = JSON.parse(tc.function.arguments);
+          } catch {
+            input = {};
+          }
+          contentBlocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.function.name,
+            input
+          });
+        }
+        payload.messages.push({
+          role: "assistant",
+          content: contentBlocks
+        });
       } else {
         const lastMsg = payload.messages[payload.messages.length - 1];
-        if (lastMsg && lastMsg.role === msg.role) {
+        if (lastMsg && lastMsg.role === msg.role && typeof lastMsg.content === "string" && typeof msg.content === "string") {
           lastMsg.content += `
 
 ${msg.content}`;
         } else {
           payload.messages.push({
             role: msg.role,
-            content: msg.content
+            content: msg.content ?? ""
           });
         }
       }
     }
     if (systemMessages.length > 0) {
       payload.system = systemMessages.join("\n");
+    }
+    if (request.tools) {
+      payload.tools = request.tools.map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters || { type: "object" }
+      }));
+    }
+    if (request.toolChoice) {
+      if (request.toolChoice === "auto") {
+        payload.tool_choice = { type: "auto" };
+      } else if (request.toolChoice === "required") {
+        payload.tool_choice = { type: "any" };
+      } else if (typeof request.toolChoice === "object") {
+        payload.tool_choice = {
+          type: "tool",
+          name: request.toolChoice.function.name
+        };
+      }
     }
     if (request.stream) {
       payload.stream = true;
@@ -375,10 +536,30 @@ ${msg.content}`;
   }
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data) {
-    const text = data.content?.map((c) => c.text).join("") || "";
+    let text = "";
+    const toolCalls = [];
+    if (Array.isArray(data.content)) {
+      for (const block of data.content) {
+        if (block.type === "text") {
+          text += block.text;
+        } else if (block.type === "tool_use") {
+          toolCalls.push({
+            id: block.id,
+            type: "function",
+            function: {
+              name: block.name,
+              arguments: JSON.stringify(block.input || {})
+            }
+          });
+        }
+      }
+    }
     let finishReason = "stop";
     if (data.stop_reason) {
       switch (data.stop_reason) {
+        case "tool_use":
+          finishReason = "tool_calls";
+          break;
         case "max_tokens":
           finishReason = "length";
           break;
@@ -397,7 +578,8 @@ ${msg.content}`;
         {
           message: {
             role: "assistant",
-            content: text
+            content: text || null,
+            tool_calls: toolCalls.length > 0 ? toolCalls : void 0
           },
           finishReason
         }
@@ -417,6 +599,15 @@ ${msg.content}`;
     let timeoutId;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
     }
     try {
       const response = await fetch(url, {
@@ -455,7 +646,7 @@ ${msg.content}`;
                   if (parsed.delta?.type === "text_delta") {
                     yield {
                       id: messageId,
-                      model: request.model,
+                      model: payload.model,
                       choices: [
                         {
                           delta: {
@@ -487,7 +678,7 @@ ${msg.content}`;
                     }
                     yield {
                       id: messageId,
-                      model: request.model,
+                      model: payload.model,
                       choices: [
                         {
                           delta: {},
@@ -530,22 +721,67 @@ var GeminiProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
   // Exposed for testing
   formatRequest(request) {
     const contents = [];
     const systemParts = [];
     for (const msg of request.messages) {
       if (msg.role === "system") {
-        systemParts.push({ text: msg.content });
+        if (msg.content) systemParts.push({ text: msg.content });
+      } else if (msg.role === "tool") {
+        contents.push({
+          role: "user",
+          parts: [
+            {
+              functionResponse: {
+                name: msg.name || "function",
+                response: { content: msg.content }
+              }
+            }
+          ]
+        });
+      } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+        const parts = [];
+        if (msg.content) parts.push({ text: msg.content });
+        for (const tc of msg.tool_calls) {
+          let args = {};
+          try {
+            args = JSON.parse(tc.function.arguments);
+          } catch {
+            args = {};
+          }
+          parts.push({
+            functionCall: {
+              name: tc.function.name,
+              args
+            }
+          });
+        }
+        contents.push({
+          role: "model",
+          parts
+        });
       } else {
         const geminiRole = msg.role === "assistant" ? "model" : "user";
         const lastContent = contents[contents.length - 1];
-        if (lastContent && lastContent.role === geminiRole) {
+        if (lastContent && lastContent.role === geminiRole && typeof msg.content === "string") {
           lastContent.parts.push({ text: msg.content });
         } else {
           contents.push({
             role: geminiRole,
-            parts: [{ text: msg.content }]
+            parts: [{ text: msg.content ?? "" }]
           });
         }
       }
@@ -557,6 +793,9 @@ var GeminiProvider = class {
     if (request.maxTokens !== void 0) {
       generationConfig.maxOutputTokens = request.maxTokens;
     }
+    if (request.responseFormat?.type === "json_object") {
+      generationConfig.responseMimeType = "application/json";
+    }
     const payload = { contents };
     if (systemParts.length > 0) {
       payload.systemInstruction = { parts: systemParts };
@@ -564,15 +803,46 @@ var GeminiProvider = class {
     if (Object.keys(generationConfig).length > 0) {
       payload.generationConfig = generationConfig;
     }
+    if (request.tools) {
+      payload.tools = [
+        {
+          functionDeclarations: request.tools.map((t) => ({
+            name: t.function.name,
+            description: t.function.description,
+            parameters: t.function.parameters
+          }))
+        }
+      ];
+    }
     return payload;
   }
   // Exposed for testing
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data, model) {
     const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.[0]?.text || "";
+    let text = "";
+    const toolCalls = [];
+    if (candidate?.content?.parts) {
+      for (const part of candidate.content.parts) {
+        if (part.text) {
+          text += part.text;
+        }
+        if (part.functionCall) {
+          toolCalls.push({
+            id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            type: "function",
+            function: {
+              name: part.functionCall.name,
+              arguments: JSON.stringify(part.functionCall.args || {})
+            }
+          });
+        }
+      }
+    }
     let finishReason = "stop";
-    if (candidate?.finishReason) {
+    if (toolCalls.length > 0) {
+      finishReason = "tool_calls";
+    } else if (candidate?.finishReason) {
       switch (candidate.finishReason) {
         case "MAX_TOKENS":
           finishReason = "length";
@@ -595,7 +865,8 @@ var GeminiProvider = class {
         {
           message: {
             role: "assistant",
-            content: text
+            content: text || null,
+            tool_calls: toolCalls.length > 0 ? toolCalls : void 0
           },
           finishReason
         }
@@ -609,17 +880,22 @@ var GeminiProvider = class {
   }
   async generateContent(request) {
     const payload = this.formatRequest(request);
+    const targetModel = this.resolveModel(request.model);
     const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const endpoint = request.stream ? "streamGenerateContent?alt=sse" : "generateContent";
-    `${baseUrl}/models/${request.model}:${endpoint}&key=${this.config.apiKey}`.replace(
-      ":streamGenerateContent?alt=sse&key=",
-      ":streamGenerateContent?alt=sse&key="
-    ).replace(":generateContent&key=", ":generateContent?key=");
-    const finalUrl = `${baseUrl}/models/${request.model}:${request.stream ? "streamGenerateContent?alt=sse&key=" : "generateContent?key="}${this.config.apiKey}`;
+    const finalUrl = `${baseUrl}/models/${targetModel}:${request.stream ? "streamGenerateContent?alt=sse&key=" : "generateContent?key="}${this.config.apiKey}`;
     const controller = new AbortController();
     let timeoutId;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
     }
     try {
       const response = await fetch(finalUrl, {
@@ -645,7 +921,7 @@ var GeminiProvider = class {
             for await (const msg of parseSSE2(response)) {
               try {
                 const parsed = JSON.parse(msg.data);
-                const chunk = self.formatResponse(parsed, request.model);
+                const chunk = self.formatResponse(parsed, targetModel);
                 yield {
                   id: chunk.id,
                   model: chunk.model,
@@ -668,7 +944,7 @@ var GeminiProvider = class {
         })(this);
       }
       const data = await response.json();
-      return this.formatResponse(data, request.model);
+      return this.formatResponse(data, targetModel);
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
@@ -692,10 +968,32 @@ var GroqProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
   formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
     const payload = {
-      model: request.model,
-      messages: request.messages
+      model: this.resolveModel(request.model),
+      messages
     };
     if (request.temperature !== void 0) {
       payload.temperature = request.temperature;
@@ -705,6 +1003,15 @@ var GroqProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
     }
     return payload;
   }
@@ -718,7 +1025,8 @@ var GroqProvider = class {
         {
           message: {
             role: "assistant",
-            content: choice?.message?.content || ""
+            content: choice?.message?.content ?? null,
+            tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
         }
@@ -738,6 +1046,15 @@ var GroqProvider = class {
     let timeoutId;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
     }
     try {
       const response = await fetch(url, {
@@ -772,7 +1089,8 @@ var GroqProvider = class {
                     {
                       delta: {
                         role: chunk?.delta?.role,
-                        content: chunk?.delta?.content || ""
+                        content: chunk?.delta?.content,
+                        tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null
                     }
@@ -811,10 +1129,32 @@ var OpenAiProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
   formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
     const payload = {
-      model: request.model,
-      messages: request.messages
+      model: this.resolveModel(request.model),
+      messages
     };
     if (request.temperature !== void 0) {
       payload.temperature = request.temperature;
@@ -824,6 +1164,15 @@ var OpenAiProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
     }
     return payload;
   }
@@ -837,7 +1186,8 @@ var OpenAiProvider = class {
         {
           message: {
             role: "assistant",
-            content: choice?.message?.content || ""
+            content: choice?.message?.content ?? null,
+            tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
         }
@@ -857,6 +1207,15 @@ var OpenAiProvider = class {
     let timeoutId;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
     }
     try {
       const response = await fetch(url, {
@@ -891,7 +1250,8 @@ var OpenAiProvider = class {
                     {
                       delta: {
                         role: chunk?.delta?.role,
-                        content: chunk?.delta?.content || ""
+                        content: chunk?.delta?.content,
+                        tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null
                     }
@@ -930,10 +1290,32 @@ var OpenRouterProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
   formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
     const payload = {
-      model: request.model,
-      messages: request.messages
+      model: this.resolveModel(request.model),
+      messages
     };
     if (request.temperature !== void 0) {
       payload.temperature = request.temperature;
@@ -943,6 +1325,15 @@ var OpenRouterProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
     }
     return payload;
   }
@@ -956,7 +1347,8 @@ var OpenRouterProvider = class {
         {
           message: {
             role: "assistant",
-            content: choice?.message?.content || ""
+            content: choice?.message?.content ?? null,
+            tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
         }
@@ -976,6 +1368,15 @@ var OpenRouterProvider = class {
     let timeoutId;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
     }
     try {
       const response = await fetch(url, {
@@ -1010,7 +1411,8 @@ var OpenRouterProvider = class {
                     {
                       delta: {
                         role: chunk?.delta?.role,
-                        content: chunk?.delta?.content || ""
+                        content: chunk?.delta?.content,
+                        tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null
                     }

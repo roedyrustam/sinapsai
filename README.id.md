@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-49%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-62%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -54,6 +54,10 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [3. Round-Robin Load Balancing](#3-round-robin-load-balancing)
   - [4. Perutean Biaya Terendah (Lowest Cost)](#4-perutean-biaya-terendah-lowest-cost)
   - [5. Observabilitas via Event Hooks](#5-observabilitas-via-event-hooks)
+  - [6. Retries dengan Exponential Backoff & Jitter](#6-retries-dengan-exponential-backoff--jitter)
+  - [7. In-Memory Prompt Response Caching](#7-in-memory-prompt-response-caching)
+  - [8. Tool Calling & Eksekusi Fungsi](#8-tool-calling--eksekusi-fungsi)
+  - [9. Structured Outputs (JSON Mode)](#9-structured-outputs-json-mode)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -66,14 +70,17 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 ## ✨ Fitur Utama
 
 - 🌐 **Unified API**: Berkomunikasi dengan berbagai model LLM menggunakan format request & response standar yang kompatibel dengan format OpenAI Chat Completions.
+- 🛠️ **Universal Tool Calling & JSON Mode**: Definisikan fungsi/tools sekali saja dengan format JSON Schema standar (`tools`, `toolChoice`). SinapsAI secara otomatis mengonversikannya ke format XML/tools Anthropic Claude, fungsi Gemini, dan OpenAI.
 - 🛡️ **In-Memory Circuit Breaker**: Mendeteksi lonjakan error provider secara instan dan membuka sirkuit (*Open Circuit*) guna mencegah *cascading failures* dan waktu tunggu (timeout) yang berlebihan.
 - 🔀 **Strategi Perutean Fleksibel**:
   - `failover`: Otomatis beralih ke provider berikutnya secara instan saat provider utama mengalami error / timeout.
   - `load-balance`: Membagi lalu lintas permintaan secara rotasi (*Round-Robin*) untuk menghindari pembatasan kuota (*Rate Limit 429*).
   - `lowest-cost`: Mengurutkan dan merutekan permintaan ke provider termurah berdasarkan konfigurasi `costPer1kTokens`.
+- ⚡ **Exponential Backoff & Retries**: Mencoba ulang kegagalan jaringan sementara (429, 5xx) dengan jitter acak sebelum melakukan failover.
+- 💾 **In-Memory Prompt Hash Caching**: Menyimpan cache respons di memori dengan TTL untuk prompt identik sehingga menghemat token dan waktu respons.
 - 🌊 **Dukungan Streaming SSE**: Streaming respons teks *real-time* menggunakan async generator native (`for await...of`).
 - 🔒 **Privasi & Keamanan Penuh**: 100% berjalan lokal di memori proses aplikasi Anda. Kunci API dan konten prompt tidak pernah dikirimkan ke server pihak ketiga.
-- 🪝 **Event Hooks**: Memantau siklus hidup request (`onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`) untuk integrasi ke sistem APM, Prometheus, atau logging.
+- 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) untuk integrasi ke sistem APM, Prometheus, atau logging.
 
 ---
 
@@ -274,6 +281,10 @@ Tangkap seluruh aktivitas penting secara terprogram:
 const client = new SinapsClient({
   providers: [...],
   hooks: {
+    onSuccess: (provider, response, latencyMs) => {
+      metrics.recordLatency(provider.name, latencyMs);
+      console.log(`[Success] ${provider.name} selesai dalam ${latencyMs}ms`);
+    },
     onFallback: (error, fromProvider, toProvider) => {
       metrics.increment('ai.gateway.fallback', { from: fromProvider.name, to: toProvider.name });
     },
@@ -286,8 +297,113 @@ const client = new SinapsClient({
     onRateLimit: (provider, error) => {
       metrics.increment('ai.gateway.rate_limited', { provider: provider.name });
     },
+    onRetry: (provider, error, attempt, delayMs) => {
+      console.warn(`[Retry] Mencoba ulang ${provider.name} (percobaan ${attempt}) setelah ${Math.round(delayMs)}ms...`);
+    },
   },
 });
+```
+
+---
+
+### 6. Retries Otomatis dengan Exponential Backoff & Jitter
+
+Konfigurasikan percobaan ulang otomatis untuk menangani lonjakan error jaringan sesaat (5xx, timeout, 429) sebelum berpindah ke provider cadangan:
+
+```typescript
+const client = new SinapsClient({
+  retries: 2,            // Maksimal 2x retry per provider
+  retryDelayMs: 250,     // Delay awal backoff (otomatis berlipat ganda + random jitter)
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+});
+```
+
+---
+
+### 7. In-Memory Response Caching
+
+Layani permintaan prompt yang identik secara instan dengan 0ms latensi dan tanpa konsumsi token tambahan:
+
+```typescript
+const client = new SinapsClient({
+  cache: {
+    enabled: true,       // Aktifkan in-memory cache
+    ttlSeconds: 300,     // Masa aktif cache (default: 5 menit)
+  },
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+```
+
+---
+
+### 8. Tool Calling & Eksekusi Fungsi
+
+Definisikan format fungsi sekali saja menggunakan format JSON Schema OpenAI standar. SinapsAI secara otomatis mengonversikannya untuk OpenAI, Anthropic Claude, dan Google Gemini:
+
+```typescript
+import { SinapsClient, OpenAiProvider, AnthropicProvider, GeminiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  strategy: 'failover',
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! }),
+  ],
+});
+
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Berapa harga saham Apple (AAPL) saat ini?' }],
+  tools: [
+    {
+      type: 'function',
+      function: {
+        name: 'get_stock_price',
+        description: 'Mendapatkan harga saham terkini berdasarkan simbol ticker',
+        parameters: {
+          type: 'object',
+          properties: {
+            symbol: { type: 'string', description: 'Simbol saham, contoh: AAPL' },
+          },
+          required: ['symbol'],
+        },
+      },
+    },
+  ],
+  toolChoice: 'auto',
+});
+
+if (response.choices[0].finishReason === 'tool_calls') {
+  const toolCall = response.choices[0].message.tool_calls?.[0];
+  console.log('Fungsi yang dipanggil:', toolCall?.function.name);
+  console.log('Argumen:', toolCall?.function.arguments);
+}
+```
+
+---
+
+### 9. Structured Outputs (JSON Mode)
+
+Pastikan model selalu menghasilkan output objek JSON yang valid dan konsisten (`responseFormat: { type: 'json_object' }`):
+
+```typescript
+const response = await client.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    { role: 'system', content: 'Anda adalah ekstraktor data. Selalu kembalikan respons dalam format JSON.' },
+    { role: 'user', content: 'Buat profil singkat untuk Budi, usia 28, engineer di Jakarta.' },
+  ],
+  responseFormat: { type: 'json_object' },
+});
+
+const data = JSON.parse(response.choices[0].message.content || '{}');
+console.log(data);
 ```
 
 ---

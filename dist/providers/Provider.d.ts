@@ -3,6 +3,8 @@ export interface Provider {
     id: string;
     name: string;
     costPer1kTokens?: number;
+    retries?: number;
+    retryDelayMs?: number;
     generateContent(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
 }
 //# sourceMappingURL=Provider.d.ts.map

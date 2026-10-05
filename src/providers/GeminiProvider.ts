@@ -22,6 +22,21 @@ export class GeminiProvider implements Provider {
     return this.config.costPer1kTokens;
   }
 
+  get retries(): number | undefined {
+    return this.config.retries;
+  }
+
+  get retryDelayMs(): number | undefined {
+    return this.config.retryDelayMs;
+  }
+
+  public resolveModel(model: string): string {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+
   // Exposed for testing
   public formatRequest(request: UnifiedApiRequest) {
     // biome-ignore lint/suspicious/noExplicitAny: complex gemini payload
@@ -31,16 +46,58 @@ export class GeminiProvider implements Provider {
 
     for (const msg of request.messages) {
       if (msg.role === 'system') {
-        systemParts.push({ text: msg.content });
+        if (msg.content) systemParts.push({ text: msg.content });
+      } else if (msg.role === 'tool') {
+        contents.push({
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                name: msg.name || 'function',
+                response: { content: msg.content },
+              },
+            },
+          ],
+        });
+      } else if (
+        msg.role === 'assistant' &&
+        msg.tool_calls &&
+        msg.tool_calls.length > 0
+      ) {
+        // biome-ignore lint/suspicious/noExplicitAny: gemini parts
+        const parts: any[] = [];
+        if (msg.content) parts.push({ text: msg.content });
+        for (const tc of msg.tool_calls) {
+          let args = {};
+          try {
+            args = JSON.parse(tc.function.arguments);
+          } catch {
+            args = {};
+          }
+          parts.push({
+            functionCall: {
+              name: tc.function.name,
+              args,
+            },
+          });
+        }
+        contents.push({
+          role: 'model',
+          parts,
+        });
       } else {
         const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
         const lastContent = contents[contents.length - 1];
-        if (lastContent && lastContent.role === geminiRole) {
+        if (
+          lastContent &&
+          lastContent.role === geminiRole &&
+          typeof msg.content === 'string'
+        ) {
           lastContent.parts.push({ text: msg.content });
         } else {
           contents.push({
             role: geminiRole,
-            parts: [{ text: msg.content }],
+            parts: [{ text: msg.content ?? '' }],
           });
         }
       }
@@ -54,6 +111,9 @@ export class GeminiProvider implements Provider {
     if (request.maxTokens !== undefined) {
       generationConfig.maxOutputTokens = request.maxTokens;
     }
+    if (request.responseFormat?.type === 'json_object') {
+      generationConfig.responseMimeType = 'application/json';
+    }
 
     // biome-ignore lint/suspicious/noExplicitAny: request format varies by provider
     const payload: any = { contents };
@@ -63,6 +123,17 @@ export class GeminiProvider implements Provider {
     if (Object.keys(generationConfig).length > 0) {
       payload.generationConfig = generationConfig;
     }
+    if (request.tools) {
+      payload.tools = [
+        {
+          functionDeclarations: request.tools.map((t) => ({
+            name: t.function.name,
+            description: t.function.description,
+            parameters: t.function.parameters,
+          })),
+        },
+      ];
+    }
 
     return payload;
   }
@@ -71,10 +142,32 @@ export class GeminiProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any, model: string): UnifiedApiResponse {
     const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.[0]?.text || '';
-    let finishReason = 'stop';
+    let text = '';
+    // biome-ignore lint/suspicious/noExplicitAny: gemini tool calls
+    const toolCalls: any[] = [];
 
-    if (candidate?.finishReason) {
+    if (candidate?.content?.parts) {
+      for (const part of candidate.content.parts) {
+        if (part.text) {
+          text += part.text;
+        }
+        if (part.functionCall) {
+          toolCalls.push({
+            id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            type: 'function',
+            function: {
+              name: part.functionCall.name,
+              arguments: JSON.stringify(part.functionCall.args || {}),
+            },
+          });
+        }
+      }
+    }
+
+    let finishReason = 'stop';
+    if (toolCalls.length > 0) {
+      finishReason = 'tool_calls';
+    } else if (candidate?.finishReason) {
       switch (candidate.finishReason) {
         case 'MAX_TOKENS':
           finishReason = 'length';
@@ -98,7 +191,8 @@ export class GeminiProvider implements Provider {
         {
           message: {
             role: 'assistant',
-            content: text,
+            content: text || null,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },
           finishReason,
         },
@@ -117,26 +211,25 @@ export class GeminiProvider implements Provider {
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> {
     const payload = this.formatRequest(request);
+    const targetModel = this.resolveModel(request.model);
 
     const baseUrl =
       this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
-    const endpoint = request.stream
-      ? 'streamGenerateContent?alt=sse'
-      : 'generateContent';
-    const _url =
-      `${baseUrl}/models/${request.model}:${endpoint}&key=${this.config.apiKey}`
-        .replace(
-          ':streamGenerateContent?alt=sse&key=',
-          ':streamGenerateContent?alt=sse&key=',
-        )
-        .replace(':generateContent&key=', ':generateContent?key=');
-
-    const finalUrl = `${baseUrl}/models/${request.model}:${request.stream ? 'streamGenerateContent?alt=sse&key=' : 'generateContent?key='}${this.config.apiKey}`;
+    const finalUrl = `${baseUrl}/models/${targetModel}:${request.stream ? 'streamGenerateContent?alt=sse&key=' : 'generateContent?key='}${this.config.apiKey}`;
 
     const controller = new AbortController();
     let timeoutId: NodeJS.Timeout | undefined;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(), {
+          once: true,
+        });
+      }
     }
 
     try {
@@ -165,7 +258,7 @@ export class GeminiProvider implements Provider {
             for await (const msg of parseSSE(response)) {
               try {
                 const parsed = JSON.parse(msg.data);
-                const chunk = self.formatResponse(parsed, request.model);
+                const chunk = self.formatResponse(parsed, targetModel);
                 yield {
                   id: chunk.id,
                   model: chunk.model,
@@ -194,7 +287,7 @@ export class GeminiProvider implements Provider {
       }
 
       const data = await response.json();
-      return this.formatResponse(data, request.model);
+      return this.formatResponse(data, targetModel);
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;

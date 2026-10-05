@@ -140,6 +140,48 @@ describe('CircuitBreaker', () => {
     );
   });
 
+  it('should require recoverySuccessThreshold successful probes before closing', async () => {
+    const onCircuitClose = vi.fn();
+    circuitBreaker = new CircuitBreaker(storage, {
+      failureThreshold: 2,
+      recoverySuccessThreshold: 2,
+      resetTimeoutMs: 100,
+      onCircuitClose,
+    });
+
+    const provider = createMockProvider('test-rec', true);
+
+    // Fail until open
+    await expect(
+      circuitBreaker.execute(provider, mockRequest),
+    ).rejects.toThrow();
+    await expect(
+      circuitBreaker.execute(provider, mockRequest),
+    ).rejects.toThrow();
+
+    // Verify it is open
+    await expect(circuitBreaker.execute(provider, mockRequest)).rejects.toThrow(
+      'Circuit breaker is OPEN',
+    );
+
+    // Wait for resetTimeoutMs
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // First probe succeeds
+    provider.generateContent = vi.fn().mockResolvedValue(mockResponse);
+    const res1 = await circuitBreaker.execute(provider, mockRequest);
+    expect(res1).toBe(mockResponse);
+    // Not closed yet because threshold is 2!
+    expect(onCircuitClose).not.toHaveBeenCalled();
+
+    // Second probe succeeds
+    const res2 = await circuitBreaker.execute(provider, mockRequest);
+    expect(res2).toBe(mockResponse);
+    // Now it should be closed!
+    expect(onCircuitClose).toHaveBeenCalledWith('test-rec');
+    expect(onCircuitClose).toHaveBeenCalledTimes(1);
+  });
+
   describe('Storage Resilience', () => {
     it('should fail-open and allow request if storage.get throws', async () => {
       const provider = createMockProvider('test_storage_read');

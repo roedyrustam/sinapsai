@@ -22,10 +22,25 @@ export class AnthropicProvider implements Provider {
     return this.config.costPer1kTokens;
   }
 
+  get retries(): number | undefined {
+    return this.config.retries;
+  }
+
+  get retryDelayMs(): number | undefined {
+    return this.config.retryDelayMs;
+  }
+
+  public resolveModel(model: string): string {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+
   public formatRequest(request: UnifiedApiRequest) {
     // biome-ignore lint/suspicious/noExplicitAny: request format varies by provider
     const payload: any = {
-      model: request.model,
+      model: this.resolveModel(request.model),
       max_tokens: request.maxTokens || 4096,
       messages: [],
     };
@@ -38,15 +53,59 @@ export class AnthropicProvider implements Provider {
 
     for (const msg of request.messages) {
       if (msg.role === 'system') {
-        systemMessages.push(msg.content);
+        if (msg.content) systemMessages.push(msg.content);
+      } else if (msg.role === 'tool') {
+        payload.messages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: msg.tool_call_id,
+              content: msg.content || '',
+            },
+          ],
+        });
+      } else if (
+        msg.role === 'assistant' &&
+        msg.tool_calls &&
+        msg.tool_calls.length > 0
+      ) {
+        // biome-ignore lint/suspicious/noExplicitAny: anthropic content blocks
+        const contentBlocks: any[] = [];
+        if (msg.content) {
+          contentBlocks.push({ type: 'text', text: msg.content });
+        }
+        for (const tc of msg.tool_calls) {
+          let input = {};
+          try {
+            input = JSON.parse(tc.function.arguments);
+          } catch {
+            input = {};
+          }
+          contentBlocks.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input,
+          });
+        }
+        payload.messages.push({
+          role: 'assistant',
+          content: contentBlocks,
+        });
       } else {
         const lastMsg = payload.messages[payload.messages.length - 1];
-        if (lastMsg && lastMsg.role === msg.role) {
+        if (
+          lastMsg &&
+          lastMsg.role === msg.role &&
+          typeof lastMsg.content === 'string' &&
+          typeof msg.content === 'string'
+        ) {
           lastMsg.content += `\n\n${msg.content}`;
         } else {
           payload.messages.push({
             role: msg.role,
-            content: msg.content,
+            content: msg.content ?? '',
           });
         }
       }
@@ -54,6 +113,27 @@ export class AnthropicProvider implements Provider {
 
     if (systemMessages.length > 0) {
       payload.system = systemMessages.join('\n');
+    }
+
+    if (request.tools) {
+      payload.tools = request.tools.map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters || { type: 'object' },
+      }));
+    }
+
+    if (request.toolChoice) {
+      if (request.toolChoice === 'auto') {
+        payload.tool_choice = { type: 'auto' };
+      } else if (request.toolChoice === 'required') {
+        payload.tool_choice = { type: 'any' };
+      } else if (typeof request.toolChoice === 'object') {
+        payload.tool_choice = {
+          type: 'tool',
+          name: request.toolChoice.function.name,
+        };
+      }
     }
 
     if (request.stream) {
@@ -65,12 +145,33 @@ export class AnthropicProvider implements Provider {
 
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any): UnifiedApiResponse {
-    // biome-ignore lint/suspicious/noExplicitAny: provider specific response
-    const text = data.content?.map((c: any) => c.text).join('') || '';
+    let text = '';
+    // biome-ignore lint/suspicious/noExplicitAny: anthropic tool calls
+    const toolCalls: any[] = [];
+
+    if (Array.isArray(data.content)) {
+      for (const block of data.content) {
+        if (block.type === 'text') {
+          text += block.text;
+        } else if (block.type === 'tool_use') {
+          toolCalls.push({
+            id: block.id,
+            type: 'function',
+            function: {
+              name: block.name,
+              arguments: JSON.stringify(block.input || {}),
+            },
+          });
+        }
+      }
+    }
 
     let finishReason = 'stop';
     if (data.stop_reason) {
       switch (data.stop_reason) {
+        case 'tool_use':
+          finishReason = 'tool_calls';
+          break;
         case 'max_tokens':
           finishReason = 'length';
           break;
@@ -90,7 +191,8 @@ export class AnthropicProvider implements Provider {
         {
           message: {
             role: 'assistant',
-            content: text,
+            content: text || null,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },
           finishReason,
         },
@@ -117,6 +219,15 @@ export class AnthropicProvider implements Provider {
     let timeoutId: NodeJS.Timeout | undefined;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(), {
+          once: true,
+        });
+      }
     }
 
     try {
@@ -157,7 +268,7 @@ export class AnthropicProvider implements Provider {
                   if (parsed.delta?.type === 'text_delta') {
                     yield {
                       id: messageId,
-                      model: request.model,
+                      model: payload.model,
                       choices: [
                         {
                           delta: {
@@ -188,7 +299,7 @@ export class AnthropicProvider implements Provider {
                     }
                     yield {
                       id: messageId,
-                      model: request.model,
+                      model: payload.model,
                       choices: [
                         {
                           delta: {},

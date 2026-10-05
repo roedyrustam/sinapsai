@@ -350,5 +350,139 @@ describe('Router', () => {
       expect(p1.generateContent).toHaveBeenCalledTimes(1);
       expect(p2.generateContent).not.toHaveBeenCalled(); // No fallback!
     });
+
+    it('should continue to execute and failover smoothly even if StateStorage completely throws', async () => {
+      const faultyStorage = {
+        get: vi.fn().mockRejectedValue(new Error('Storage GET failed')),
+        set: vi.fn().mockRejectedValue(new Error('Storage SET failed')),
+        delete: vi.fn().mockRejectedValue(new Error('Storage DELETE failed')),
+        increment: vi
+          .fn()
+          .mockRejectedValue(new Error('Storage INCREMENT failed')),
+      };
+
+      const cb = new CircuitBreaker(faultyStorage);
+      const p1 = createMockProvider('p1', true);
+      const p2 = createMockProvider('p2', false);
+      const router = new Router([p1, p2], cb, { strategy: 'failover' });
+
+      const res = await router.execute(mockRequest);
+      expect(res).toBe(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+      expect(p2.generateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should trigger onSuccess hook with provider, response, and latencyMs', async () => {
+      const onSuccess = vi.fn();
+      const p1 = createMockProvider('p1');
+      const router = new Router([p1], circuitBreaker, {
+        hooks: { onSuccess },
+      });
+
+      const res = await router.execute(mockRequest);
+      expect(res).toBe(mockResponse);
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onSuccess).toHaveBeenCalledWith(
+        p1,
+        mockResponse,
+        expect.any(Number),
+      );
+    });
+
+    it('should retry a failing provider when retries are configured and fire onRetry', async () => {
+      const onRetry = vi.fn();
+      const p1 = createMockProvider('p1');
+      let calls = 0;
+      p1.generateContent = vi.fn().mockImplementation(async () => {
+        calls++;
+        if (calls <= 2) {
+          const err = new Error('503 Service Unavailable');
+          (err as Error & { status?: number }).status = 503;
+          throw err;
+        }
+        return mockResponse;
+      });
+
+      const cb = new CircuitBreaker(storage, { failureThreshold: 5 });
+      const router = new Router([p1], cb, {
+        retries: 2,
+        retryDelayMs: 10,
+        hooks: { onRetry },
+      });
+
+      const res = await router.execute(mockRequest);
+      expect(res).toBe(mockResponse);
+      expect(calls).toBe(3); // 1 initial + 2 retries
+      expect(onRetry).toHaveBeenCalledTimes(2);
+    });
+
+    it('should stop retrying immediately if circuit breaker trips during retries and fallback to next provider', async () => {
+      const p1 = createMockProvider('p1');
+      let p1Calls = 0;
+      p1.generateContent = vi.fn().mockImplementation(async () => {
+        p1Calls++;
+        const err = new Error('500 Internal Server Error');
+        (err as Error & { status?: number }).status = 500;
+        throw err;
+      });
+
+      const p2 = createMockProvider('p2');
+
+      // Circuit trips after 2 failures, but retries configured to 5
+      const cb = new CircuitBreaker(storage, { failureThreshold: 2 });
+      const router = new Router([p1, p2], cb, {
+        retries: 5,
+        retryDelayMs: 10,
+        strategy: 'failover',
+      });
+
+      const res = await router.execute(mockRequest);
+      expect(res).toBe(mockResponse);
+      // p1 was called 2 times (initial + 1 retry = 2 failures -> trips circuit -> stops further retries!)
+      expect(p1Calls).toBe(2);
+      expect(p2.generateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not retry non-retryable errors (e.g. 401 Unauthorized)', async () => {
+      const onRetry = vi.fn();
+      const p1 = createMockProvider('p1');
+      p1.generateContent = vi.fn().mockImplementation(async () => {
+        const err = new Error('401 Unauthorized');
+        (err as Error & { status?: number }).status = 401;
+        throw err;
+      });
+
+      const p2 = createMockProvider('p2');
+
+      const router = new Router([p1, p2], circuitBreaker, {
+        retries: 3,
+        retryDelayMs: 10,
+        hooks: { onRetry },
+      });
+
+      const res = await router.execute(mockRequest);
+      expect(res).toBe(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1); // No retries for 401!
+      expect(onRetry).not.toHaveBeenCalled();
+      expect(p2.generateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should cache non-streaming responses when cache is enabled', async () => {
+      const p1 = createMockProvider('p1');
+      const router = new Router([p1], circuitBreaker, {
+        storage,
+        cache: { enabled: true, ttlSeconds: 60 },
+      });
+
+      // First call: executes provider
+      const res1 = await router.execute(mockRequest);
+      expect(res1).toBe(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+
+      // Second call: served from cache!
+      const res2 = await router.execute(mockRequest);
+      expect(res2).toEqual(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1); // NOT called again
+    });
   });
 });

@@ -3,6 +3,7 @@ import type { UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } fro
 import type { StateStorage } from './StateStorage.js';
 export interface CircuitBreakerOptions {
     failureThreshold?: number;
+    recoverySuccessThreshold?: number;
     resetTimeoutMs?: number;
     onCircuitOpen?: (providerId: string) => void;
     onCircuitClose?: (providerId: string) => void;
@@ -10,6 +11,7 @@ export interface CircuitBreakerOptions {
 export declare class CircuitBreaker {
     private storage;
     private failureThreshold;
+    private recoverySuccessThreshold;
     private resetTimeoutMs;
     private onCircuitOpen?;
     private onCircuitClose?;

@@ -6,6 +6,9 @@ export declare class GeminiProvider implements Provider {
     private config;
     constructor(config: ProviderConfig);
     get costPer1kTokens(): number | undefined;
+    get retries(): number | undefined;
+    get retryDelayMs(): number | undefined;
+    resolveModel(model: string): string;
     formatRequest(request: UnifiedApiRequest): any;
     formatResponse(data: any, model: string): UnifiedApiResponse;
     generateContent(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;

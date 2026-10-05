@@ -36,6 +36,52 @@ describe('SinapsClient', () => {
       messages: request.messages,
       temperature: 0.7,
       maxTokens: undefined,
+      stream: undefined,
+      signal: undefined,
     });
+  });
+
+  it('should forward stream: true and signal to the router', async () => {
+    async function* mockStream() {
+      yield {
+        id: 'chunk-1',
+        model: 'test',
+        choices: [
+          {
+            delta: { role: 'assistant' as const, content: 'streaming' },
+            finishReason: null,
+          },
+        ],
+      };
+    }
+
+    const mockProvider: Provider = {
+      name: 'mock',
+      id: 'mock-1',
+      generateContent: vi.fn().mockResolvedValue(mockStream()),
+    };
+
+    const client = new SinapsClient({
+      providers: [mockProvider],
+    });
+
+    const controller = new AbortController();
+    const stream = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hello stream' }],
+      stream: true,
+      signal: controller.signal,
+    });
+
+    expect(mockProvider.generateContent).toHaveBeenCalledWith({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hello stream' }],
+      temperature: undefined,
+      maxTokens: undefined,
+      stream: true,
+      signal: controller.signal,
+    });
+
+    expect(Symbol.asyncIterator in stream).toBe(true);
   });
 });

@@ -10,22 +10,34 @@ npm install sinapsai
 
 ## Penggunaan Dasar
 ```typescript
-import { SinapsAI } from 'sinapsai';
+import { 
+  SinapsClient, 
+  OpenAiProvider, 
+  AnthropicProvider 
+} from 'sinapsai';
 
-const client = new SinapsAI({
+const client = new SinapsClient({
+  strategy: 'failover',
   providers: [
-    { name: 'openai', apiKey: process.env.OPENAI_API_KEY },
-    { name: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY, fallback: true }
+    new OpenAiProvider({ 
+      apiKey: process.env.OPENAI_API_KEY! 
+    }),
+    new AnthropicProvider({ 
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+      defaultModel: 'claude-3-5-sonnet-20241022',
+      modelMap: {
+        'gpt-4o': 'claude-3-5-sonnet-20241022',
+      },
+    }),
   ],
-  strategy: 'failover'
 });
 
 async function run() {
   const response = await client.chat.completions.create({
-    model: 'gpt-4',
-    messages: [{ role: 'user', content: 'Halo, AI!' }]
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: 'Halo, AI!' }],
   });
-  console.log(response);
+  console.log(response.choices[0].message.content);
 }
 run();
 ```

@@ -160,5 +160,107 @@ describe('GeminiProvider', () => {
         { role: 'user', parts: [{ text: 'Again' }] },
       ]);
     });
+
+    it('should format tools and responseFormat correctly', () => {
+      const result = provider.formatRequest({
+        model: 'gemini-1.5-flash',
+        messages: [
+          { role: 'user', content: 'What is the price of BTC?' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'c1',
+                type: 'function',
+                function: {
+                  name: 'get_price',
+                  arguments: JSON.stringify({ symbol: 'BTC' }),
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            name: 'get_price',
+            content: '$68000',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_price',
+              description: 'Get price of crypto',
+              parameters: {
+                type: 'object',
+                properties: { symbol: { type: 'string' } },
+              },
+            },
+          },
+        ],
+        responseFormat: { type: 'json_object' },
+      });
+
+      expect(result.generationConfig.responseMimeType).toBe('application/json');
+      expect(result.tools).toEqual([
+        {
+          functionDeclarations: [
+            {
+              name: 'get_price',
+              description: 'Get price of crypto',
+              parameters: {
+                type: 'object',
+                properties: { symbol: { type: 'string' } },
+              },
+            },
+          ],
+        },
+      ]);
+      expect(result.contents[1].role).toBe('model');
+      expect(result.contents[1].parts[0]).toEqual({
+        functionCall: {
+          name: 'get_price',
+          args: { symbol: 'BTC' },
+        },
+      });
+      expect(result.contents[2].role).toBe('user');
+      expect(result.contents[2].parts[0]).toEqual({
+        functionResponse: {
+          name: 'get_price',
+          response: { content: '$68000' },
+        },
+      });
+    });
+
+    it('should parse functionCall response into tool_calls', () => {
+      const geminiResponse = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    name: 'get_price',
+                    args: { symbol: 'ETH' },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      };
+
+      const result = provider.formatResponse(
+        geminiResponse,
+        'gemini-1.5-flash',
+      );
+      expect(result.choices[0].finishReason).toBe('tool_calls');
+      expect(result.choices[0].message.tool_calls).toHaveLength(1);
+      expect(result.choices[0].message.tool_calls?.[0].function).toEqual({
+        name: 'get_price',
+        arguments: JSON.stringify({ symbol: 'ETH' }),
+      });
+    });
   });
 });

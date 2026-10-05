@@ -66,6 +66,31 @@ describe('AnthropicProvider', () => {
         { role: 'user', content: 'Again' },
       ]);
     });
+
+    it('should resolve model using modelMap or defaultModel', () => {
+      const mappedProvider = new AnthropicProvider({
+        apiKey: 'test-key',
+        defaultModel: 'claude-3-5-sonnet-20241022',
+        modelMap: {
+          'gpt-4o': 'claude-3-5-sonnet-20241022',
+          'gpt-4o-mini': 'claude-3-haiku-20240307',
+        },
+      });
+
+      // Mapped model
+      const req1 = mappedProvider.formatRequest({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hi' }],
+      });
+      expect(req1.model).toBe('claude-3-5-sonnet-20241022');
+
+      // Unmapped model fallback to defaultModel
+      const req2 = mappedProvider.formatRequest({
+        model: 'some-unknown-model',
+        messages: [{ role: 'user', content: 'Hi' }],
+      });
+      expect(req2.model).toBe('claude-3-5-sonnet-20241022');
+    });
   });
 
   describe('formatResponse', () => {
@@ -133,6 +158,106 @@ describe('AnthropicProvider', () => {
       expect(result.choices[0].message.content).toBe('Short answer.');
       expect(result.choices[0].finishReason).toBe('stop');
       expect(result.usage).toBeUndefined();
+    });
+
+    it('should format tool definitions and tool results correctly', () => {
+      const toolReq = provider.formatRequest({
+        model: 'claude-3-opus-20240229',
+        messages: [
+          { role: 'user', content: 'What is the weather in Tokyo?' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'tool_call_1',
+                type: 'function',
+                function: {
+                  name: 'get_weather',
+                  arguments: JSON.stringify({ city: 'Tokyo' }),
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'tool_call_1',
+            content: 'Sunny, 22C',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              description: 'Get weather for city',
+              parameters: {
+                type: 'object',
+                properties: { city: { type: 'string' } },
+              },
+            },
+          },
+        ],
+        toolChoice: 'auto',
+      });
+
+      expect(toolReq.tools).toEqual([
+        {
+          name: 'get_weather',
+          description: 'Get weather for city',
+          input_schema: {
+            type: 'object',
+            properties: { city: { type: 'string' } },
+          },
+        },
+      ]);
+      expect(toolReq.tool_choice).toEqual({ type: 'auto' });
+      expect(toolReq.messages[1].role).toBe('assistant');
+      expect(toolReq.messages[1].content).toEqual([
+        {
+          type: 'tool_use',
+          id: 'tool_call_1',
+          name: 'get_weather',
+          input: { city: 'Tokyo' },
+        },
+      ]);
+      expect(toolReq.messages[2].role).toBe('user');
+      expect(toolReq.messages[2].content).toEqual([
+        {
+          type: 'tool_result',
+          tool_use_id: 'tool_call_1',
+          content: 'Sunny, 22C',
+        },
+      ]);
+    });
+
+    it('should parse tool_use response into tool_calls with finishReason tool_calls', () => {
+      const anthropicToolResponse = {
+        id: 'msg_tool_1',
+        model: 'claude-3-opus-20240229',
+        stop_reason: 'tool_use',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_abc',
+            name: 'get_weather',
+            input: { city: 'Kyoto' },
+          },
+        ],
+      };
+
+      const result = provider.formatResponse(anthropicToolResponse);
+      expect(result.choices[0].finishReason).toBe('tool_calls');
+      expect(result.choices[0].message.tool_calls).toEqual([
+        {
+          id: 'call_abc',
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            arguments: JSON.stringify({ city: 'Kyoto' }),
+          },
+        },
+      ]);
     });
   });
 });

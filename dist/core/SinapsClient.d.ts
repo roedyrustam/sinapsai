@@ -1,7 +1,7 @@
 import type { Provider } from '../providers/Provider.js';
-import type { SinapsEventHooks, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, SinapsEventHooks, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
-import { type RouterStrategy } from './Router.js';
+import { type CacheOptions, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
 export interface SinapsClientOptions {
     providers: Provider[];
@@ -9,6 +9,9 @@ export interface SinapsClientOptions {
     storage?: StateStorage;
     circuitBreaker?: CircuitBreakerOptions;
     hooks?: SinapsEventHooks;
+    retries?: number;
+    retryDelayMs?: number;
+    cache?: CacheOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -16,9 +19,11 @@ export declare class SinapsClient {
     constructor(options: SinapsClientOptions);
     readonly chat: {
         completions: {
-            create: (request: Omit<UnifiedApiRequest, 'model'> & {
-                model?: string;
-            }) => Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+            create: {
+                (request: CreateChatCompletionRequestStreaming): Promise<AsyncIterable<UnifiedApiStreamChunk>>;
+                (request: CreateChatCompletionRequestNonStreaming): Promise<UnifiedApiResponse>;
+                (request: CreateChatCompletionRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+            };
         };
     };
 }

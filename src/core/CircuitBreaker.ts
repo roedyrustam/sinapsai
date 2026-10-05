@@ -8,6 +8,7 @@ import type { StateStorage } from './StateStorage.js';
 
 export interface CircuitBreakerOptions {
   failureThreshold?: number;
+  recoverySuccessThreshold?: number;
   resetTimeoutMs?: number;
   onCircuitOpen?: (providerId: string) => void;
   onCircuitClose?: (providerId: string) => void;
@@ -16,6 +17,7 @@ export interface CircuitBreakerOptions {
 export class CircuitBreaker {
   private storage: StateStorage;
   private failureThreshold: number;
+  private recoverySuccessThreshold: number;
   private resetTimeoutMs: number;
   private onCircuitOpen?: (providerId: string) => void;
   private onCircuitClose?: (providerId: string) => void;
@@ -23,6 +25,7 @@ export class CircuitBreaker {
   constructor(storage: StateStorage, options: CircuitBreakerOptions = {}) {
     this.storage = storage;
     this.failureThreshold = options.failureThreshold || 3;
+    this.recoverySuccessThreshold = options.recoverySuccessThreshold || 1;
     this.resetTimeoutMs = options.resetTimeoutMs || 30000;
     this.onCircuitOpen = options.onCircuitOpen;
     this.onCircuitClose = options.onCircuitClose;
@@ -46,18 +49,25 @@ export class CircuitBreaker {
       const failures = await this.storage.get<number>(
         `cb:failures:${providerId}`,
       );
-      const previousState = await this.storage.get<string>(
-        `cb:state:${providerId}`,
-      );
-
-      await this.storage.delete(`cb:failures:${providerId}`);
-      await this.storage.set(`cb:state:${providerId}`, 'CLOSED');
+      const state = await this.storage.get<string>(`cb:state:${providerId}`);
 
       if (
-        previousState === 'OPEN' ||
+        state === 'OPEN' ||
         (failures !== null && failures >= this.failureThreshold)
       ) {
-        this.onCircuitClose?.(providerId);
+        const successes = await this.storage.increment(
+          `cb:successes:${providerId}`,
+        );
+        if (successes >= this.recoverySuccessThreshold) {
+          await this.storage.delete(`cb:failures:${providerId}`);
+          await this.storage.delete(`cb:successes:${providerId}`);
+          await this.storage.set(`cb:state:${providerId}`, 'CLOSED');
+          this.onCircuitClose?.(providerId);
+        }
+      } else {
+        await this.storage.delete(`cb:failures:${providerId}`);
+        await this.storage.delete(`cb:successes:${providerId}`);
+        await this.storage.set(`cb:state:${providerId}`, 'CLOSED');
       }
     } catch (_error) {
       // Ignore storage errors so they don't fail a successful request
@@ -66,24 +76,19 @@ export class CircuitBreaker {
 
   async recordFailure(providerId: string): Promise<void> {
     try {
+      await this.storage.delete(`cb:successes:${providerId}`);
       const failures = await this.storage.increment(
         `cb:failures:${providerId}`,
       );
-      if (failures === this.failureThreshold) {
-        // Set to OPEN with TTL. When TTL expires, it becomes implicitly HALF_OPEN.
-        // Next failure will immediately re-open it since failures is not reset here.
+      if (failures >= this.failureThreshold) {
         await this.storage.set(
           `cb:state:${providerId}`,
           'OPEN',
           this.resetTimeoutMs / 1000,
         );
-        this.onCircuitOpen?.(providerId);
-      } else if (failures > this.failureThreshold) {
-        await this.storage.set(
-          `cb:state:${providerId}`,
-          'OPEN',
-          this.resetTimeoutMs / 1000,
-        );
+        if (failures === this.failureThreshold) {
+          this.onCircuitOpen?.(providerId);
+        }
       }
     } catch (_error) {
       // Ignore storage errors when recording failures
