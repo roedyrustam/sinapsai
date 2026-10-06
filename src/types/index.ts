@@ -31,6 +31,7 @@ export interface ToolCallChunk {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
+  reasoning_content?: string | null;
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
@@ -79,6 +80,7 @@ export interface UnifiedApiStreamChunk {
     delta: {
       role?: 'assistant';
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: ToolCallChunk[];
     };
     finishReason: string | null;
@@ -92,6 +94,7 @@ export interface UnifiedApiResponse {
     message: {
       role: 'assistant';
       content: string | null;
+      reasoning_content?: string | null;
       tool_calls?: ToolCall[];
     };
     finishReason: string;
@@ -105,7 +108,7 @@ export interface UnifiedApiResponse {
 
 export interface ProviderConfig {
   id?: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl?: string;
   timeoutMs?: number;
   costPer1kTokens?: number;

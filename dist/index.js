@@ -709,6 +709,170 @@ ${msg.content}`;
   }
 };
 
+// src/providers/DeepSeekProvider.ts
+var DeepSeekProvider = class {
+  id;
+  name = "DeepSeek";
+  config;
+  constructor(config) {
+    this.config = config;
+    this.id = config.id || `deepseek-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.stream) {
+      payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    return {
+      id: data.id || `deepseek-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            reasoning_content: choice?.message?.reasoning_content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: data.usage ? {
+        promptTokens: data.usage.prompt_tokens || 0,
+        completionTokens: data.usage.completion_tokens || 0,
+        totalTokens: data.usage.total_tokens || 0
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://api.deepseek.com";
+    const url = `${baseUrl}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `DeepSeek API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+          try {
+            for await (const msg of parseSSE2(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                yield {
+                  id: parsed.id || `deepseek-${Date.now()}`,
+                  model: parsed.model,
+                  choices: [
+                    {
+                      delta: {
+                        role: chunk?.delta?.role,
+                        content: chunk?.delta?.content,
+                        reasoning_content: chunk?.delta?.reasoning_content,
+                        tool_calls: chunk?.delta?.tool_calls
+                      },
+                      finishReason: chunk?.finish_reason || null
+                    }
+                  ]
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+          }
+        })();
+      }
+      const data = await response.json();
+      return this.formatResponse(data);
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream && timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+};
+
 // src/providers/GeminiProvider.ts
 var GeminiProvider = class {
   id;
@@ -1117,6 +1281,174 @@ var GroqProvider = class {
   }
 };
 
+// src/providers/OllamaProvider.ts
+var OllamaProvider = class {
+  id;
+  name = "Ollama";
+  config;
+  constructor(config = {}) {
+    this.config = config;
+    this.id = config.id || `ollama-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens ?? 0;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.stream) {
+      payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    const promptTokens = data.usage?.prompt_tokens ?? data.prompt_eval_count ?? 0;
+    const completionTokens = data.usage?.completion_tokens ?? data.eval_count ?? 0;
+    const totalTokens = data.usage?.total_tokens ?? promptTokens + completionTokens;
+    return {
+      id: data.id || `ollama-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: promptTokens || completionTokens ? {
+        promptTokens,
+        completionTokens,
+        totalTokens
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const rawBaseUrl = (this.config.baseUrl || "http://localhost:11434").replace(/\/+$/, "");
+    const baseUrl = rawBaseUrl.endsWith("/v1") ? rawBaseUrl : `${rawBaseUrl}/v1`;
+    const url = `${baseUrl}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (this.config.apiKey) {
+      headers.Authorization = `Bearer ${this.config.apiKey}`;
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Ollama API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+          try {
+            for await (const msg of parseSSE2(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                yield {
+                  id: parsed.id || `ollama-${Date.now()}`,
+                  model: parsed.model,
+                  choices: [
+                    {
+                      delta: {
+                        role: chunk?.delta?.role,
+                        content: chunk?.delta?.content,
+                        tool_calls: chunk?.delta?.tool_calls
+                      },
+                      finishReason: chunk?.finish_reason || null
+                    }
+                  ]
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+          }
+        })();
+      }
+      const data = await response.json();
+      return this.formatResponse(data);
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream && timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+};
+
 // src/providers/OpenAiProvider.ts
 var OpenAiProvider = class {
   id;
@@ -1439,6 +1771,6 @@ var OpenRouterProvider = class {
   }
 };
 
-export { AnthropicProvider, CircuitBreaker, GeminiProvider, GroqProvider, InMemoryStorage, OpenAiProvider, OpenRouterProvider, Router, SinapsClient };
+export { AnthropicProvider, CircuitBreaker, DeepSeekProvider, GeminiProvider, GroqProvider, InMemoryStorage, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

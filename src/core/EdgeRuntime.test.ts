@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AnthropicProvider,
+  DeepSeekProvider,
   GeminiProvider,
   GroqProvider,
   InMemoryStorage,
+  OllamaProvider,
   OpenAiProvider,
   OpenRouterProvider,
   SinapsClient,
@@ -32,12 +34,16 @@ describe('Edge Runtime Certification', () => {
     const gemini = new GeminiProvider({ apiKey: 'mock-key' });
     const groq = new GroqProvider({ apiKey: 'mock-key' });
     const openrouter = new OpenRouterProvider({ apiKey: 'mock-key' });
+    const deepseek = new DeepSeekProvider({ apiKey: 'mock-key' });
+    const ollama = new OllamaProvider();
 
     expect(openai.name).toBe('OpenAI');
     expect(anthropic.name).toBe('Anthropic');
     expect(gemini.name).toBe('Gemini');
     expect(groq.name).toBe('Groq');
     expect(openrouter.name).toBe('OpenRouter');
+    expect(deepseek.name).toBe('DeepSeek');
+    expect(ollama.name).toBe('Ollama');
   });
 
   it('should parse Web Streams SSE correctly in edge runtime environment', async () => {

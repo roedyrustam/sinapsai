@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0] - 2026-10-06
+### Added
+- **Native DeepSeek Provider**: Added `DeepSeekProvider` supporting `deepseek-chat` (V3) and `deepseek-reasoner` (R1).
+- **Reasoning Tokens Support**: Integrated `reasoning_content` across `ChatMessage`, `UnifiedApiResponse`, and streaming `UnifiedApiStreamChunk` for chain-of-thought models.
+- **Native Ollama Provider**: Added first-class `OllamaProvider` for zero-configuration local models (Llama 3.2, Qwen 2.5, DeepSeek-R1-Distill, Mistral) with optional `apiKey` and automatic token usage resolution.
+- Added comprehensive unit tests for `DeepSeekProvider` and `OllamaProvider` (81/81 total unit tests passing).
+- Added `examples/06-deepseek-reasoner.ts` showcasing reasoning tokens and chain-of-thought workflows.
+
 ## [1.2.0] - 2026-10-06
 ### Added
 - **Edge Runtime Certification**: 100% universal Web Standards execution certified for Cloudflare Workers, Bun, Deno, and Vercel Edge.

@@ -1,7 +1,7 @@
 # Dokumentasi SinapsAI
 
 ## Ikhtisar
-SinapsAI adalah paket NPM Node.js/TypeScript lokal yang berfungsi sebagai *Control Plane / AI Gateway*. Paket ini menghubungkan aplikasi Anda ke lebih dari 200 penyedia LLM (OpenAI, Anthropic, Gemini, dll) melalui antarmuka API yang bersatu (*Unified API*).
+SinapsAI adalah paket NPM Node.js/TypeScript lokal yang berfungsi sebagai *Control Plane / AI Gateway*. Paket ini menghubungkan aplikasi Anda ke berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Ollama, Groq, OpenRouter) melalui antarmuka API yang bersatu (*Unified API*).
 
 ## Instalasi
 ```bash

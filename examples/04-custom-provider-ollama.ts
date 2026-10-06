@@ -1,4 +1,5 @@
 import {
+  OllamaProvider,
   type Provider,
   SinapsClient,
   type UnifiedApiRequest,
@@ -6,39 +7,50 @@ import {
 } from '../src/index.js';
 
 /**
- * Example 04: Local Offline Provider (Ollama / vLLM / LM Studio)
+ * Example 04: Local Offline Provider (Native OllamaProvider & Custom Local Providers)
  *
- * Demonstrates creating your own zero-dependency local provider in 20 lines.
+ * Demonstrates using the built-in OllamaProvider for local LLMs,
+ * as well as implementing your own custom local provider (vLLM / LM Studio).
  */
-class LocalOllamaProvider implements Provider {
-  id = 'ollama-local';
-  name = 'Ollama';
+
+// Approach A: Using native built-in OllamaProvider (Zero Setup, First-Class Support)
+const nativeOllama = new OllamaProvider({
+  baseUrl: 'http://localhost:11434',
+  defaultModel: 'llama3.2',
+});
+
+// Approach B: Custom Local Provider in 20 lines (e.g. custom engine or local proxy)
+class CustomVllmProvider implements Provider {
+  id = 'vllm-local';
+  name = 'vLLM';
 
   async generateContent(
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse> {
-    const res = await fetch('http://localhost:11434/api/chat', {
+    const res = await fetch('http://localhost:8000/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: request.model || 'llama3',
+        model: request.model || 'meta-llama/Llama-3-8B-Instruct',
         messages: request.messages,
-        stream: false,
       }),
     });
 
     if (!res.ok) {
-      throw new Error(`Ollama request failed: ${res.statusText}`);
+      throw new Error(`vLLM request failed: ${res.statusText}`);
     }
 
     // biome-ignore lint/suspicious/noExplicitAny: response mapping
     const data: any = await res.json();
     return {
-      id: `ollama-${Date.now()}`,
+      id: `vllm-${Date.now()}`,
       model: request.model,
       choices: [
         {
-          message: { role: 'assistant', content: data.message?.content || '' },
+          message: {
+            role: 'assistant',
+            content: data.choices?.[0]?.message?.content || '',
+          },
           finishReason: 'stop',
         },
       ],
@@ -48,17 +60,19 @@ class LocalOllamaProvider implements Provider {
 
 async function run() {
   const client = new SinapsClient({
-    providers: [new LocalOllamaProvider()],
+    // Seamlessly failover from native local Ollama to custom vLLM
+    strategy: 'failover',
+    providers: [nativeOllama, new CustomVllmProvider()],
   });
 
   console.log('Sending request to local offline Ollama instance...');
   try {
     const res = await client.chat.completions.create({
-      model: 'llama3',
+      model: 'llama3.2',
       messages: [{ role: 'user', content: 'Hello local AI!' }],
     });
     if ('choices' in res) {
-      console.log(res.choices[0]?.message.content);
+      console.log('Result:', res.choices[0]?.message.content);
     }
   } catch (_e) {
     console.log(
