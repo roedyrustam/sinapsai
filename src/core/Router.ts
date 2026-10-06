@@ -3,6 +3,7 @@ import type {
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
   SinapsEventHooks,
+  SinapsMetrics,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
@@ -36,6 +37,17 @@ export class Router {
   private retryDelayMs: number;
   private cacheOptions?: CacheOptions;
   private storage?: StateStorage;
+  private metrics: SinapsMetrics = {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    cachedRequests: 0,
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalTokens: 0,
+    estimatedCostUsd: 0,
+    providerMetrics: {},
+  };
 
   constructor(
     providers: Provider[],
@@ -55,8 +67,88 @@ export class Router {
     this.storage = options.storage;
   }
 
-  getProviderById(id: string): Provider | undefined {
+  public getProviderById(id: string): Provider | undefined {
     return this.providers.find((p) => p.id === id);
+  }
+
+  public getMetrics(): SinapsMetrics {
+    return {
+      ...this.metrics,
+      providerMetrics: Object.fromEntries(
+        Object.entries(this.metrics.providerMetrics).map(([k, v]) => [
+          k,
+          { ...v },
+        ]),
+      ),
+    };
+  }
+
+  private recordMetrics(
+    providerId: string,
+    success: boolean,
+    latencyMs: number,
+    promptTokens = 0,
+    completionTokens = 0,
+    costUsd = 0,
+  ): void {
+    if (!this.metrics.providerMetrics[providerId]) {
+      this.metrics.providerMetrics[providerId] = {
+        requests: 0,
+        successes: 0,
+        failures: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        latencySumMs: 0,
+        averageLatencyMs: 0,
+      };
+    }
+
+    const pm = this.metrics.providerMetrics[providerId];
+    pm.requests++;
+    if (success) {
+      pm.successes++;
+      this.metrics.successfulRequests++;
+    } else {
+      pm.failures++;
+      this.metrics.failedRequests++;
+    }
+    pm.promptTokens += promptTokens;
+    pm.completionTokens += completionTokens;
+    pm.latencySumMs += latencyMs;
+    pm.averageLatencyMs = Math.round(
+      pm.latencySumMs / (pm.successes + pm.failures),
+    );
+
+    this.metrics.totalPromptTokens += promptTokens;
+    this.metrics.totalCompletionTokens += completionTokens;
+    this.metrics.totalTokens += promptTokens + completionTokens;
+    this.metrics.estimatedCostUsd = Number(
+      (this.metrics.estimatedCostUsd + costUsd).toFixed(6),
+    );
+  }
+
+  private estimateRequestCost(
+    provider: Provider,
+    request: UnifiedApiRequest,
+  ): number {
+    if (
+      provider.promptCostPer1k !== undefined &&
+      provider.completionCostPer1k !== undefined
+    ) {
+      let totalChars = 0;
+      if (Array.isArray(request.messages)) {
+        for (const msg of request.messages) {
+          totalChars += msg.content?.length ?? 0;
+        }
+      }
+      const estimatedPromptTokens = Math.max(1, Math.ceil(totalChars / 4));
+      const estimatedCompletionTokens = request.maxTokens ?? 500;
+      return (
+        (estimatedPromptTokens / 1000) * provider.promptCostPer1k +
+        (estimatedCompletionTokens / 1000) * provider.completionCostPer1k
+      );
+    }
+    return provider.costPer1kTokens ?? Number.POSITIVE_INFINITY;
   }
 
   private computeCacheKey(request: UnifiedApiRequest): string {
@@ -96,12 +188,16 @@ export class Router {
   async execute(
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> {
+    this.metrics.totalRequests++;
+
     // Check Cache if enabled and not streaming
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
       try {
         const cacheKey = this.computeCacheKey(request);
         const cached = await this.storage.get<UnifiedApiResponse>(cacheKey);
         if (cached) {
+          this.metrics.cachedRequests++;
+          this.metrics.successfulRequests++;
           return cached;
         }
       } catch (_e) {
@@ -113,8 +209,8 @@ export class Router {
 
     if (this.strategy === 'lowest-cost') {
       providersList = [...this.providers].sort((a, b) => {
-        const costA = a.costPer1kTokens ?? Infinity;
-        const costB = b.costPer1kTokens ?? Infinity;
+        const costA = this.estimateRequestCost(a, request);
+        const costB = this.estimateRequestCost(b, request);
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
       });
@@ -139,6 +235,22 @@ export class Router {
 
       if (previousProvider && previousError) {
         this.hooks?.onFallback?.(previousError, previousProvider, provider);
+      }
+
+      // Check proactive rate-limit throttle
+      if (this.storage) {
+        const throttled = await this.storage.get<number>(
+          `rl:req:${provider.id}`,
+        );
+        if (throttled !== null && throttled <= 0) {
+          const error = new Error(
+            `Provider ${provider.id} is proactively throttled due to rate limits`,
+          );
+          errors.push(error);
+          previousProvider = provider;
+          previousError = error;
+          continue;
+        }
       }
 
       const isAvailable = await this.circuitBreaker.isAvailable(provider.id);
@@ -166,6 +278,47 @@ export class Router {
             const apiRes = res as UnifiedApiResponse;
             this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
 
+            const promptTokens = apiRes.usage?.promptTokens ?? 0;
+            const completionTokens = apiRes.usage?.completionTokens ?? 0;
+            let costUsd = 0;
+            if (
+              provider.promptCostPer1k !== undefined &&
+              provider.completionCostPer1k !== undefined
+            ) {
+              costUsd =
+                (promptTokens / 1000) * provider.promptCostPer1k +
+                (completionTokens / 1000) * provider.completionCostPer1k;
+            } else if (provider.costPer1kTokens !== undefined) {
+              costUsd =
+                ((promptTokens + completionTokens) / 1000) *
+                provider.costPer1kTokens;
+            }
+
+            this.recordMetrics(
+              provider.id,
+              true,
+              latencyMs,
+              promptTokens,
+              completionTokens,
+              costUsd,
+            );
+
+            // Adaptive rate-limit handling
+            if (apiRes.rateLimit) {
+              if (
+                apiRes.rateLimit.remainingRequests !== undefined &&
+                apiRes.rateLimit.remainingRequests <= 1
+              ) {
+                this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
+                if (this.storage) {
+                  const ttlSec = apiRes.rateLimit.resetMs
+                    ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1000))
+                    : 10;
+                  await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
+                }
+              }
+            }
+
             if (this.cacheOptions?.enabled && this.storage) {
               try {
                 const cacheKey = this.computeCacheKey(request);
@@ -191,6 +344,9 @@ export class Router {
             err.message.toLowerCase().includes('rate limit')
           ) {
             this.hooks?.onRateLimit?.(provider, err);
+            if (this.storage) {
+              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+            }
           }
 
           if (
@@ -210,6 +366,14 @@ export class Router {
             continue;
           }
 
+          this.recordMetrics(
+            provider.id,
+            false,
+            Date.now() - startTime,
+            0,
+            0,
+            0,
+          );
           errors.push(err);
           previousProvider = provider;
           previousError = err;
@@ -236,12 +400,16 @@ export class Router {
   async executeEmbedding(
     request: CreateEmbeddingRequest,
   ): Promise<CreateEmbeddingResponse> {
+    this.metrics.totalRequests++;
+
     if (this.cacheOptions?.enabled && this.storage) {
       try {
         const cacheKey = this.computeEmbeddingCacheKey(request);
         const cached =
           await this.storage.get<CreateEmbeddingResponse>(cacheKey);
         if (cached) {
+          this.metrics.cachedRequests++;
+          this.metrics.successfulRequests++;
           return cached;
         }
       } catch (_e) {
@@ -263,8 +431,10 @@ export class Router {
 
     if (this.strategy === 'lowest-cost') {
       providersList = [...eligibleProviders].sort((a, b) => {
-        const costA = a.costPer1kTokens ?? Infinity;
-        const costB = b.costPer1kTokens ?? Infinity;
+        const costA =
+          a.promptCostPer1k ?? a.costPer1kTokens ?? Number.POSITIVE_INFINITY;
+        const costB =
+          b.promptCostPer1k ?? b.costPer1kTokens ?? Number.POSITIVE_INFINITY;
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
       });
@@ -289,6 +459,22 @@ export class Router {
 
       if (previousProvider && previousError) {
         this.hooks?.onFallback?.(previousError, previousProvider, provider);
+      }
+
+      // Check proactive rate-limit throttle
+      if (this.storage) {
+        const throttled = await this.storage.get<number>(
+          `rl:req:${provider.id}`,
+        );
+        if (throttled !== null && throttled <= 0) {
+          const error = new Error(
+            `Provider ${provider.id} is proactively throttled due to rate limits`,
+          );
+          errors.push(error);
+          previousProvider = provider;
+          previousError = error;
+          continue;
+        }
       }
 
       const isAvailable = await this.circuitBreaker.isAvailable(provider.id);
@@ -320,6 +506,23 @@ export class Router {
           await this.circuitBreaker.recordSuccess(provider.id);
           this.hooks?.onEmbeddingSuccess?.(provider, res, latencyMs);
 
+          const promptTokens = res.usage?.promptTokens ?? 0;
+          let costUsd = 0;
+          if (provider.promptCostPer1k !== undefined) {
+            costUsd = (promptTokens / 1000) * provider.promptCostPer1k;
+          } else if (provider.costPer1kTokens !== undefined) {
+            costUsd = (promptTokens / 1000) * provider.costPer1kTokens;
+          }
+
+          this.recordMetrics(
+            provider.id,
+            true,
+            latencyMs,
+            promptTokens,
+            0,
+            costUsd,
+          );
+
           if (this.cacheOptions?.enabled && this.storage) {
             try {
               const cacheKey = this.computeEmbeddingCacheKey(request);
@@ -343,6 +546,9 @@ export class Router {
             err.message.toLowerCase().includes('rate limit')
           ) {
             this.hooks?.onRateLimit?.(provider, err);
+            if (this.storage) {
+              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+            }
           }
 
           if (
@@ -363,6 +569,14 @@ export class Router {
           }
 
           await this.circuitBreaker.recordFailure(provider.id);
+          this.recordMetrics(
+            provider.id,
+            false,
+            Date.now() - startTime,
+            0,
+            0,
+            0,
+          );
           errors.push(err);
           previousProvider = provider;
           previousError = err;

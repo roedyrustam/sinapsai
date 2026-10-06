@@ -6,6 +6,8 @@ export declare class OllamaProvider implements Provider {
     private config;
     constructor(config?: ProviderConfig);
     get costPer1kTokens(): number | undefined;
+    get promptCostPer1k(): number | undefined;
+    get completionCostPer1k(): number | undefined;
     get retries(): number | undefined;
     get retryDelayMs(): number | undefined;
     resolveModel(model: string): string;

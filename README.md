@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-90%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-98%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -52,13 +52,14 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [1. Client Initialization with Automatic Failover](#1-client-initialization-with-automatic-failover)
   - [2. Real-Time Streaming (SSE)](#2-real-time-streaming-sse)
   - [3. Round-Robin Load Balancing](#3-round-robin-load-balancing)
-  - [4. Lowest-Cost Routing](#4-lowest-cost-routing)
-  - [5. Observability with Event Hooks](#5-observability-with-event-hooks)
-  - [6. Retries with Exponential Backoff & Jitter](#6-retries-with-exponential-backoff--jitter)
-  - [7. In-Memory Prompt Response Caching](#7-in-memory-prompt-response-caching)
-  - [8. Tool Calling & Function Execution](#8-tool-calling--function-execution)
-  - [9. Structured Outputs (JSON Mode)](#9-structured-outputs-json-mode)
-  - [10. Unified Text Embeddings](#10-unified-text-embeddings)
+  - [4. Lowest-Cost Routing (Dual-Token Pricing)](#4-lowest-cost-routing-dual-token-pricing)
+  - [5. Observability with Event Hooks & Rate Limiting](#5-observability-with-event-hooks--rate-limiting)
+  - [6. Real-Time In-Process Telemetry (getMetrics)](#6-real-time-in-process-telemetry-getmetrics)
+  - [7. Retries with Exponential Backoff & Jitter](#7-retries-with-exponential-backoff--jitter)
+  - [8. In-Memory Prompt Response Caching](#8-in-memory-prompt-response-caching)
+  - [9. Tool Calling & Function Execution](#9-tool-calling--function-execution)
+  - [10. Structured Outputs (JSON Mode)](#10-structured-outputs-json-mode)
+  - [11. Unified Text Embeddings](#11-unified-text-embeddings)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -252,21 +253,23 @@ const client = new SinapsClient({
 
 ### 4. Lowest-Cost Routing
 
-Automatically execute through the most cost-efficient provider configured:
+Automatically execute through the most cost-efficient provider using dynamic dual-token pricing (`promptCostPer1k` and `completionCostPer1k`):
 
 ```typescript
-import { SinapsClient, OpenAiProvider, GroqProvider } from 'sinapsai';
+import { SinapsClient, OpenAiProvider, DeepSeekProvider } from 'sinapsai';
 
 const client = new SinapsClient({
   strategy: 'lowest-cost',
   providers: [
     new OpenAiProvider({
       apiKey: process.env.OPENAI_API_KEY!,
-      costPer1kTokens: 0.005,
+      promptCostPer1k: 0.0025,    // $2.50 per 1M prompt tokens
+      completionCostPer1k: 0.010, // $10.00 per 1M completion tokens
     }),
-    new GroqProvider({
-      apiKey: process.env.GROQ_API_KEY!,
-      costPer1kTokens: 0.0005, // Prioritized first due to lower cost
+    new DeepSeekProvider({
+      apiKey: process.env.DEEPSEEK_API_KEY!,
+      promptCostPer1k: 0.00027,   // $0.27 per 1M prompt tokens
+      completionCostPer1k: 0.0011,// $1.10 per 1M completion tokens
     }),
   ],
 });
@@ -274,9 +277,9 @@ const client = new SinapsClient({
 
 ---
 
-### 5. Observability with Event Hooks
+### 5. Observability with Event Hooks & Rate Limiting
 
-Integrate lifecycle events with your telemetry and monitoring pipelines (Datadog, OpenTelemetry, Prometheus):
+Integrate lifecycle events with your telemetry and monitoring pipelines (Datadog, OpenTelemetry, Prometheus) and catch proactive rate limit warnings:
 
 ```typescript
 const client = new SinapsClient({
@@ -284,6 +287,9 @@ const client = new SinapsClient({
   hooks: {
     onSuccess: (provider, response, latencyMs) => {
       telemetry.recordSuccess(provider.name, latencyMs, response.usage?.totalTokens);
+    },
+    onRateLimitWarning: (provider, rateLimit) => {
+      console.warn(`[Warning] Provider ${provider.name} capacity low! Remaining: ${rateLimit.remainingRequests}`);
     },
     onFallback: (error, fromProvider, toProvider) => {
       telemetry.recordFallback(fromProvider.name, toProvider.name, error.message);
@@ -306,7 +312,24 @@ const client = new SinapsClient({
 
 ---
 
-### 6. Retries with Exponential Backoff & Jitter
+### 6. Real-Time In-Process Telemetry (`getMetrics`)
+
+Query cumulative runtime metrics anytime without external database dependencies:
+
+```typescript
+const metrics = client.getMetrics();
+
+console.log(`Total Requests: ${metrics.totalRequests}`);
+console.log(`Successes: ${metrics.successfulRequests}`);
+console.log(`Cached: ${metrics.cachedRequests}`);
+console.log(`Total Tokens: ${metrics.totalTokens}`);
+console.log(`Estimated Spend: $${metrics.estimatedCostUsd.toFixed(6)} USD`);
+console.table(metrics.providerMetrics);
+```
+
+---
+
+### 7. Retries with Exponential Backoff & Jitter
 
 Configure per-provider or global retry attempts for transient server glitches (5xx, timeouts, 429) before falling over:
 
@@ -323,7 +346,7 @@ const client = new SinapsClient({
 
 ---
 
-### 7. In-Memory Prompt Response Caching
+### 8. In-Memory Prompt Response Caching
 
 Instantly serve repeated prompt queries with 0ms overhead and zero token consumption using built-in in-memory caching:
 
@@ -341,7 +364,7 @@ const client = new SinapsClient({
 
 ---
 
-### 8. Tool Calling & Function Execution
+### 9. Tool Calling & Function Execution
 
 Define functions once using OpenAI's standard JSON schema. SinapsAI automatically maps and parses them across OpenAI, Anthropic Claude, and Google Gemini:
 
@@ -388,7 +411,7 @@ if (response.choices[0].finishReason === 'tool_calls') {
 
 ---
 
-### 9. Structured Outputs (JSON Mode)
+### 10. Structured Outputs (JSON Mode)
 
 Enforce valid JSON object responses natively across all providers (`responseFormat: { type: 'json_object' }`):
 
@@ -408,7 +431,7 @@ console.log(data);
 
 ---
 
-### 10. Unified Text Embeddings
+### 11. Unified Text Embeddings
 
 Generate vector embeddings with automatic multi-provider failover, circuit breaker protection, and in-memory caching to eliminate redundant costs:
 

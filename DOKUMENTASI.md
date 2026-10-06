@@ -46,9 +46,19 @@ async function run() {
     input: 'Teks pencarian semantik',
   });
   console.log('Embedding dimensions:', embedding.data[0].embedding.length);
+
+  // Real-Time In-Process Telemetry
+  const metrics = client.getMetrics();
+  console.log('Total Requests:', metrics.totalRequests);
+  console.log('Estimated USD Spend:', metrics.estimatedCostUsd);
 }
 run();
 ```
+
+## Fitur Utama v1.5.0
+1. **Dual-Token Pricing (`promptCostPer1k`, `completionCostPer1k`)**: Perhitungan biaya dinamis dan perutean `lowest-cost` otomatis berdasarkan rasio panjang prompt dan token keluaran.
+2. **Adaptive Rate-Limiting & Proactive Throttling**: Ekstraksi header kuota rate-limit (`x-ratelimit-*`, `retry-after`) secara otomatis. Mencegah error HTTP 429 dengan melewati provider yang kuotanya habis sebelum panggilan jaringan dikirim.
+3. **Telemetri Tanpa Database (`client.getMetrics()`)**: Rekapitulasi waktu-nyata untuk token prompt, token completion, estimasi pengeluaran USD, rasio cache hit, dan latensi per provider.
 
 ## Keamanan & Performa
 - **100% Lokal:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.

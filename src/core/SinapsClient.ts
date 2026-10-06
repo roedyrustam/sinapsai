@@ -6,6 +6,7 @@ import type {
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
   SinapsEventHooks,
+  SinapsMetrics,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
@@ -98,4 +99,8 @@ export class SinapsClient {
       return this.router.executeEmbedding(request);
     },
   };
+
+  public getMetrics(): SinapsMetrics {
+    return this.router.getMetrics();
+  }
 }

@@ -235,6 +235,17 @@ var Router = class {
   retryDelayMs;
   cacheOptions;
   storage;
+  metrics = {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    cachedRequests: 0,
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalTokens: 0,
+    estimatedCostUsd: 0,
+    providerMetrics: {}
+  };
   constructor(providers, circuitBreaker, options = {}) {
     if (!providers || providers.length === 0) {
       throw new Error("At least one provider must be configured");
@@ -250,6 +261,65 @@ var Router = class {
   }
   getProviderById(id) {
     return this.providers.find((p) => p.id === id);
+  }
+  getMetrics() {
+    return {
+      ...this.metrics,
+      providerMetrics: Object.fromEntries(
+        Object.entries(this.metrics.providerMetrics).map(([k, v]) => [
+          k,
+          { ...v }
+        ])
+      )
+    };
+  }
+  recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0) {
+    if (!this.metrics.providerMetrics[providerId]) {
+      this.metrics.providerMetrics[providerId] = {
+        requests: 0,
+        successes: 0,
+        failures: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        latencySumMs: 0,
+        averageLatencyMs: 0
+      };
+    }
+    const pm = this.metrics.providerMetrics[providerId];
+    pm.requests++;
+    if (success) {
+      pm.successes++;
+      this.metrics.successfulRequests++;
+    } else {
+      pm.failures++;
+      this.metrics.failedRequests++;
+    }
+    pm.promptTokens += promptTokens;
+    pm.completionTokens += completionTokens;
+    pm.latencySumMs += latencyMs;
+    pm.averageLatencyMs = Math.round(
+      pm.latencySumMs / (pm.successes + pm.failures)
+    );
+    this.metrics.totalPromptTokens += promptTokens;
+    this.metrics.totalCompletionTokens += completionTokens;
+    this.metrics.totalTokens += promptTokens + completionTokens;
+    this.metrics.estimatedCostUsd = Number(
+      (this.metrics.estimatedCostUsd + costUsd).toFixed(6)
+    );
+  }
+  estimateRequestCost(provider, request) {
+    if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+      let totalChars = 0;
+      if (Array.isArray(request.messages)) {
+        for (const msg of request.messages) {
+          totalChars += msg.content?.length ?? 0;
+        }
+      }
+      const estimatedPromptTokens = Math.max(1, Math.ceil(totalChars / 4));
+      const estimatedCompletionTokens = request.maxTokens ?? 500;
+      return estimatedPromptTokens / 1e3 * provider.promptCostPer1k + estimatedCompletionTokens / 1e3 * provider.completionCostPer1k;
+    }
+    return provider.costPer1kTokens ?? Number.POSITIVE_INFINITY;
   }
   computeCacheKey(request) {
     const raw = JSON.stringify({
@@ -279,11 +349,14 @@ var Router = class {
     return true;
   }
   async execute(request) {
+    this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
       try {
         const cacheKey = this.computeCacheKey(request);
         const cached = await this.storage.get(cacheKey);
         if (cached) {
+          this.metrics.cachedRequests++;
+          this.metrics.successfulRequests++;
           return cached;
         }
       } catch (_e) {
@@ -292,8 +365,8 @@ var Router = class {
     let providersList = this.providers;
     if (this.strategy === "lowest-cost") {
       providersList = [...this.providers].sort((a, b) => {
-        const costA = a.costPer1kTokens ?? Infinity;
-        const costB = b.costPer1kTokens ?? Infinity;
+        const costA = this.estimateRequestCost(a, request);
+        const costB = this.estimateRequestCost(b, request);
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
       });
@@ -312,6 +385,20 @@ var Router = class {
       const provider = providersList[index];
       if (previousProvider && previousError) {
         this.hooks?.onFallback?.(previousError, previousProvider, provider);
+      }
+      if (this.storage) {
+        const throttled = await this.storage.get(
+          `rl:req:${provider.id}`
+        );
+        if (throttled !== null && throttled <= 0) {
+          const error = new Error(
+            `Provider ${provider.id} is proactively throttled due to rate limits`
+          );
+          errors.push(error);
+          previousProvider = provider;
+          previousError = error;
+          continue;
+        }
       }
       const isAvailable = await this.circuitBreaker.isAvailable(provider.id);
       if (!isAvailable) {
@@ -334,6 +421,31 @@ var Router = class {
           if (!request.stream && "choices" in res) {
             const apiRes = res;
             this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
+            const promptTokens = apiRes.usage?.promptTokens ?? 0;
+            const completionTokens = apiRes.usage?.completionTokens ?? 0;
+            let costUsd = 0;
+            if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+              costUsd = promptTokens / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
+            } else if (provider.costPer1kTokens !== void 0) {
+              costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
+            }
+            this.recordMetrics(
+              provider.id,
+              true,
+              latencyMs,
+              promptTokens,
+              completionTokens,
+              costUsd
+            );
+            if (apiRes.rateLimit) {
+              if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
+                this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
+                if (this.storage) {
+                  const ttlSec = apiRes.rateLimit.resetMs ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1e3)) : 10;
+                  await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
+                }
+              }
+            }
             if (this.cacheOptions?.enabled && this.storage) {
               try {
                 const cacheKey = this.computeCacheKey(request);
@@ -351,6 +463,9 @@ var Router = class {
           const err = error;
           if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
             this.hooks?.onRateLimit?.(provider, err);
+            if (this.storage) {
+              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+            }
           }
           if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
             attempt++;
@@ -363,6 +478,14 @@ var Router = class {
             await new Promise((resolve) => setTimeout(resolve, delay));
             continue;
           }
+          this.recordMetrics(
+            provider.id,
+            false,
+            Date.now() - startTime,
+            0,
+            0,
+            0
+          );
           errors.push(err);
           previousProvider = provider;
           previousError = err;
@@ -384,11 +507,14 @@ var Router = class {
     return `cache:emb:${request.model}:${(hash >>> 0).toString(16)}`;
   }
   async executeEmbedding(request) {
+    this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && this.storage) {
       try {
         const cacheKey = this.computeEmbeddingCacheKey(request);
         const cached = await this.storage.get(cacheKey);
         if (cached) {
+          this.metrics.cachedRequests++;
+          this.metrics.successfulRequests++;
           return cached;
         }
       } catch (_e) {
@@ -405,8 +531,8 @@ var Router = class {
     let providersList = eligibleProviders;
     if (this.strategy === "lowest-cost") {
       providersList = [...eligibleProviders].sort((a, b) => {
-        const costA = a.costPer1kTokens ?? Infinity;
-        const costB = b.costPer1kTokens ?? Infinity;
+        const costA = a.promptCostPer1k ?? a.costPer1kTokens ?? Number.POSITIVE_INFINITY;
+        const costB = b.promptCostPer1k ?? b.costPer1kTokens ?? Number.POSITIVE_INFINITY;
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
       });
@@ -425,6 +551,20 @@ var Router = class {
       const provider = providersList[index];
       if (previousProvider && previousError) {
         this.hooks?.onFallback?.(previousError, previousProvider, provider);
+      }
+      if (this.storage) {
+        const throttled = await this.storage.get(
+          `rl:req:${provider.id}`
+        );
+        if (throttled !== null && throttled <= 0) {
+          const error = new Error(
+            `Provider ${provider.id} is proactively throttled due to rate limits`
+          );
+          errors.push(error);
+          previousProvider = provider;
+          previousError = error;
+          continue;
+        }
       }
       const isAvailable = await this.circuitBreaker.isAvailable(provider.id);
       if (!isAvailable) {
@@ -451,6 +591,21 @@ var Router = class {
           const latencyMs = Date.now() - startTime;
           await this.circuitBreaker.recordSuccess(provider.id);
           this.hooks?.onEmbeddingSuccess?.(provider, res, latencyMs);
+          const promptTokens = res.usage?.promptTokens ?? 0;
+          let costUsd = 0;
+          if (provider.promptCostPer1k !== void 0) {
+            costUsd = promptTokens / 1e3 * provider.promptCostPer1k;
+          } else if (provider.costPer1kTokens !== void 0) {
+            costUsd = promptTokens / 1e3 * provider.costPer1kTokens;
+          }
+          this.recordMetrics(
+            provider.id,
+            true,
+            latencyMs,
+            promptTokens,
+            0,
+            costUsd
+          );
           if (this.cacheOptions?.enabled && this.storage) {
             try {
               const cacheKey = this.computeEmbeddingCacheKey(request);
@@ -467,6 +622,9 @@ var Router = class {
           const err = error;
           if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
             this.hooks?.onRateLimit?.(provider, err);
+            if (this.storage) {
+              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+            }
           }
           if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
             attempt++;
@@ -480,6 +638,14 @@ var Router = class {
             continue;
           }
           await this.circuitBreaker.recordFailure(provider.id);
+          this.recordMetrics(
+            provider.id,
+            false,
+            Date.now() - startTime,
+            0,
+            0,
+            0
+          );
           errors.push(err);
           previousProvider = provider;
           previousError = err;
@@ -547,7 +713,43 @@ var SinapsClient = class {
       return this.router.executeEmbedding(request);
     }
   };
+  getMetrics() {
+    return this.router.getMetrics();
+  }
 };
+
+// src/utils/rateLimit.ts
+function parseRateLimitHeaders(headers) {
+  if (!headers) return void 0;
+  const reqStr = headers.get("x-ratelimit-remaining-requests") || headers.get("anthropic-ratelimit-requests-remaining") || headers.get("ratelimit-remaining");
+  const tokStr = headers.get("x-ratelimit-remaining-tokens") || headers.get("anthropic-ratelimit-tokens-remaining");
+  const retryAfter = headers.get("retry-after");
+  let remainingRequests;
+  if (reqStr !== null && reqStr !== void 0) {
+    const parsed = Number.parseInt(reqStr, 10);
+    if (!Number.isNaN(parsed)) remainingRequests = parsed;
+  }
+  let remainingTokens;
+  if (tokStr !== null && tokStr !== void 0) {
+    const parsed = Number.parseInt(tokStr, 10);
+    if (!Number.isNaN(parsed)) remainingTokens = parsed;
+  }
+  let resetMs;
+  if (retryAfter) {
+    const parsedSec = Number.parseFloat(retryAfter);
+    if (!Number.isNaN(parsedSec)) {
+      resetMs = Math.round(parsedSec * 1e3);
+    }
+  }
+  if (remainingRequests === void 0 && remainingTokens === void 0 && resetMs === void 0) {
+    return void 0;
+  }
+  return {
+    remainingRequests,
+    remainingTokens,
+    resetMs
+  };
+}
 
 // src/providers/AnthropicProvider.ts
 var AnthropicProvider = class {
@@ -560,6 +762,12 @@ var AnthropicProvider = class {
   }
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
   }
   get retries() {
     return this.config.retries;
@@ -824,7 +1032,12 @@ ${msg.content}`;
         })();
       }
       const data = await response.json();
-      return this.formatResponse(data);
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
@@ -847,6 +1060,12 @@ var DeepSeekProvider = class {
   }
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
   }
   get retries() {
     return this.config.retries;
@@ -988,7 +1207,12 @@ var DeepSeekProvider = class {
         })();
       }
       const data = await response.json();
-      return this.formatResponse(data);
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
@@ -1011,6 +1235,12 @@ var GeminiProvider = class {
   }
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
   }
   get retries() {
     return this.config.retries;
@@ -1259,6 +1489,12 @@ var GroqProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
   get retries() {
     return this.config.retries;
   }
@@ -1396,7 +1632,12 @@ var GroqProvider = class {
         })();
       }
       const data = await response.json();
-      return this.formatResponse(data);
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
@@ -1419,6 +1660,12 @@ var OllamaProvider = class {
   }
   get costPer1kTokens() {
     return this.config.costPer1kTokens ?? 0;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k ?? 0;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k ?? 0;
   }
   get retries() {
     return this.config.retries;
@@ -1651,6 +1898,12 @@ var OpenAiProvider = class {
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
   }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
   get retries() {
     return this.config.retries;
   }
@@ -1788,7 +2041,12 @@ var OpenAiProvider = class {
         })();
       }
       const data = await response.json();
-      return this.formatResponse(data);
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
@@ -1870,6 +2128,12 @@ var OpenRouterProvider = class {
   }
   get costPer1kTokens() {
     return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
   }
   get retries() {
     return this.config.retries;
@@ -2008,7 +2272,12 @@ var OpenRouterProvider = class {
         })();
       }
       const data = await response.json();
-      return this.formatResponse(data);
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;

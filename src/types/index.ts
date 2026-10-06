@@ -87,6 +87,12 @@ export interface UnifiedApiStreamChunk {
   }>;
 }
 
+export interface RateLimitInfo {
+  remainingRequests?: number;
+  remainingTokens?: number;
+  resetMs?: number;
+}
+
 export interface UnifiedApiResponse {
   id: string;
   model: string;
@@ -104,6 +110,7 @@ export interface UnifiedApiResponse {
     completionTokens: number;
     totalTokens: number;
   };
+  rateLimit?: RateLimitInfo;
 }
 
 export interface ProviderConfig {
@@ -112,6 +119,8 @@ export interface ProviderConfig {
   baseUrl?: string;
   timeoutMs?: number;
   costPer1kTokens?: number;
+  promptCostPer1k?: number;
+  completionCostPer1k?: number;
   defaultModel?: string;
   modelMap?: Record<string, string>;
   retries?: number;
@@ -141,6 +150,28 @@ export interface CreateEmbeddingResponse {
   };
 }
 
+export interface ProviderMetricEntry {
+  requests: number;
+  successes: number;
+  failures: number;
+  promptTokens: number;
+  completionTokens: number;
+  latencySumMs: number;
+  averageLatencyMs: number;
+}
+
+export interface SinapsMetrics {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  cachedRequests: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  providerMetrics: Record<string, ProviderMetricEntry>;
+}
+
 import type { Provider } from '../providers/Provider.js';
 
 export interface SinapsEventHooks {
@@ -162,6 +193,7 @@ export interface SinapsEventHooks {
   onCircuitOpen?: (provider: Provider) => void;
   onCircuitClose?: (provider: Provider) => void;
   onRateLimit?: (provider: Provider, error: Error) => void;
+  onRateLimitWarning?: (provider: Provider, rateLimit: RateLimitInfo) => void;
   onRetry?: (
     provider: Provider,
     error: Error,

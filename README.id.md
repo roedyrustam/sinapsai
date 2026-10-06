@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-90%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-98%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -35,7 +35,8 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 | **In-Memory Circuit Breaker** | ✅ **Bawaan** | ❌ Manual coding | ⚠️ Fitur cloud | ⚠️ Retry dasar |
 | **Failover Multi-Provider Otomatis** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
 | **Round-Robin Load Balancing** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
-| **Perutean Biaya Terendah (Lowest Cost)** | ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Paket berbayar | ✅ Ya |
+| **Perutean Biaya Terendah (Lowest Cost)** | ✅ **Bawaan (Dual Token Pricing)** | ❌ Tidak ada | ⚠️ Paket berbayar | ✅ Ya |
+| **Telemetri In-Process (`getMetrics`)** | ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Cloud Dashboard | ⚠️ External DB |
 | **Native TypeScript (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Bervariasi | ❌ Layanan terpisah | ❌ Python |
 
 > 📁 Ingin langsung mencoba kodenya? Kunjungi **[Folder Contoh Kode (`/examples`)](./examples)**!
@@ -52,13 +53,14 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [1. Inisialisasi Klien & Failover Otomatis](#1-inisialisasi-klien--failover-otomatis)
   - [2. Streaming Respons Real-Time (SSE)](#2-streaming-respons-real-time-sse)
   - [3. Round-Robin Load Balancing](#3-round-robin-load-balancing)
-  - [4. Perutean Biaya Terendah (Lowest Cost)](#4-perutean-biaya-terendah-lowest-cost)
-  - [5. Observabilitas via Event Hooks](#5-observabilitas-via-event-hooks)
-  - [6. Retries dengan Exponential Backoff & Jitter](#6-retries-dengan-exponential-backoff--jitter)
-  - [7. In-Memory Prompt Response Caching](#7-in-memory-prompt-response-caching)
-  - [8. Tool Calling & Eksekusi Fungsi](#8-tool-calling--eksekusi-fungsi)
-  - [9. Structured Outputs (JSON Mode)](#9-structured-outputs-json-mode)
-  - [10. Unified Text Embeddings](#10-unified-text-embeddings)
+  - [4. Perutean Biaya Terendah (Dual-Token Pricing)](#4-perutean-biaya-terendah-dual-token-pricing)
+  - [5. Observabilitas via Event Hooks & Rate Limiting](#5-observabilitas-via-event-hooks--rate-limiting)
+  - [6. Telemetri Real-Time In-Process (getMetrics)](#6-telemetri-real-time-in-process-getmetrics)
+  - [7. Retries dengan Exponential Backoff & Jitter](#7-retries-dengan-exponential-backoff--jitter)
+  - [8. In-Memory Prompt Response Caching](#8-in-memory-prompt-response-caching)
+  - [9. Tool Calling & Eksekusi Fungsi](#9-tool-calling--eksekusi-fungsi)
+  - [10. Structured Outputs (JSON Mode)](#10-structured-outputs-json-mode)
+  - [11. Unified Text Embeddings](#11-unified-text-embeddings)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -250,23 +252,25 @@ const client = new SinapsClient({
 
 ---
 
-### 4. Perutean Biaya Terendah (Lowest Cost)
+### 4. Perutean Biaya Terendah (Dual-Token Pricing)
 
-SinapsAI akan secara otomatis memprioritaskan provider dengan konfigurasi `costPer1kTokens` termurah:
+SinapsAI mendukung penetapan harga terpisah untuk input dan output (`promptCostPer1k` dan `completionCostPer1k`), memperkirakan provider termurah secara dinamis berdasarkan panjang prompt dan estimasi token respons:
 
 ```typescript
-import { SinapsClient, OpenAiProvider, GroqProvider } from 'sinapsai';
+import { SinapsClient, OpenAiProvider, DeepSeekProvider } from 'sinapsai';
 
 const client = new SinapsClient({
   strategy: 'lowest-cost',
   providers: [
     new OpenAiProvider({
       apiKey: process.env.OPENAI_API_KEY!,
-      costPer1kTokens: 0.005,
+      promptCostPer1k: 0.0025,    // $2.50 per 1M prompt token
+      completionCostPer1k: 0.010, // $10.00 per 1M completion token
     }),
-    new GroqProvider({
-      apiKey: process.env.GROQ_API_KEY!,
-      costPer1kTokens: 0.0005, // Akan dipanggil pertama kali karena termurah
+    new DeepSeekProvider({
+      apiKey: process.env.DEEPSEEK_API_KEY!,
+      promptCostPer1k: 0.00027,   // $0.27 per 1M prompt token
+      completionCostPer1k: 0.0011,// $1.10 per 1M completion token
     }),
   ],
 });
@@ -274,9 +278,9 @@ const client = new SinapsClient({
 
 ---
 
-### 5. Observabilitas via Event Hooks
+### 5. Observabilitas via Event Hooks & Rate Limiting
 
-Tangkap seluruh aktivitas penting secara terprogram:
+Tangkap seluruh aktivitas penting secara terprogram dan deteksi peringatan sisa kapasitas rate limit sebelum terjadi error 429:
 
 ```typescript
 const client = new SinapsClient({
@@ -285,6 +289,9 @@ const client = new SinapsClient({
     onSuccess: (provider, response, latencyMs) => {
       metrics.recordLatency(provider.name, latencyMs);
       console.log(`[Success] ${provider.name} selesai dalam ${latencyMs}ms`);
+    },
+    onRateLimitWarning: (provider, rateLimit) => {
+      console.warn(`[Peringatan] Provider ${provider.name} mendekati batas kuota! Sisa request: ${rateLimit.remainingRequests}`);
     },
     onFallback: (error, fromProvider, toProvider) => {
       metrics.increment('ai.gateway.fallback', { from: fromProvider.name, to: toProvider.name });
@@ -307,7 +314,24 @@ const client = new SinapsClient({
 
 ---
 
-### 6. Retries Otomatis dengan Exponential Backoff & Jitter
+### 6. Telemetri Real-Time In-Process (`getMetrics`)
+
+Ambil rekapitulasi data metrik eksekusi kapan saja secara langsung tanpa dependensi database eksternal:
+
+```typescript
+const metrics = client.getMetrics();
+
+console.log(`Total Requests: ${metrics.totalRequests}`);
+console.log(`Successes: ${metrics.successfulRequests}`);
+console.log(`Cached: ${metrics.cachedRequests}`);
+console.log(`Total Tokens: ${metrics.totalTokens}`);
+console.log(`Estimasi Biaya: $${metrics.estimatedCostUsd.toFixed(6)} USD`);
+console.table(metrics.providerMetrics);
+```
+
+---
+
+### 7. Retries Otomatis dengan Exponential Backoff & Jitter
 
 Konfigurasikan percobaan ulang otomatis untuk menangani lonjakan error jaringan sesaat (5xx, timeout, 429) sebelum berpindah ke provider cadangan:
 
@@ -324,7 +348,7 @@ const client = new SinapsClient({
 
 ---
 
-### 7. In-Memory Response Caching
+### 8. In-Memory Response Caching
 
 Layani permintaan prompt yang identik secara instan dengan 0ms latensi dan tanpa konsumsi token tambahan:
 
@@ -342,7 +366,7 @@ const client = new SinapsClient({
 
 ---
 
-### 8. Tool Calling & Eksekusi Fungsi
+### 9. Tool Calling & Eksekusi Fungsi
 
 Definisikan format fungsi sekali saja menggunakan format JSON Schema OpenAI standar. SinapsAI secara otomatis mengonversikannya untuk OpenAI, Anthropic Claude, dan Google Gemini:
 
@@ -389,7 +413,7 @@ if (response.choices[0].finishReason === 'tool_calls') {
 
 ---
 
-### 9. Structured Outputs (JSON Mode)
+### 10. Structured Outputs (JSON Mode)
 
 Pastikan model selalu menghasilkan output objek JSON yang valid dan konsisten (`responseFormat: { type: 'json_object' }`):
 
@@ -409,7 +433,7 @@ console.log(data);
 
 ---
 
-### 10. Unified Text Embeddings
+### 11. Unified Text Embeddings
 
 Hasilkan vektor embedding teks dengan failover otomatis antar-provider, perlindungan *Circuit Breaker*, dan *in-memory caching* untuk memangkas biaya duplikasi panggilan:
 

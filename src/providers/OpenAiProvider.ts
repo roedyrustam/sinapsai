@@ -6,6 +6,7 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { parseRateLimitHeaders } from '../utils/rateLimit.js';
 import type { Provider } from './Provider.js';
 
 export class OpenAiProvider implements Provider {
@@ -22,6 +23,14 @@ export class OpenAiProvider implements Provider {
 
   get costPer1kTokens(): number | undefined {
     return this.config.costPer1kTokens;
+  }
+
+  get promptCostPer1k(): number | undefined {
+    return this.config.promptCostPer1k;
+  }
+
+  get completionCostPer1k(): number | undefined {
+    return this.config.completionCostPer1k;
   }
 
   get retries(): number | undefined {
@@ -180,7 +189,12 @@ export class OpenAiProvider implements Provider {
       }
 
       const data = await response.json();
-      return this.formatResponse(data);
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;

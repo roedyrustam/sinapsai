@@ -10,6 +10,8 @@ export interface Provider {
   id: string;
   name: string;
   costPer1kTokens?: number;
+  promptCostPer1k?: number;
+  completionCostPer1k?: number;
   retries?: number;
   retryDelayMs?: number;
   generateContent(

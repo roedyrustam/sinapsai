@@ -1,5 +1,5 @@
 import type { Provider } from '../providers/Provider.js';
-import type { CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
 export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost';
@@ -25,8 +25,12 @@ export declare class Router {
     private retryDelayMs;
     private cacheOptions?;
     private storage?;
+    private metrics;
     constructor(providers: Provider[], circuitBreaker: CircuitBreaker, options?: RouterOptions);
     getProviderById(id: string): Provider | undefined;
+    getMetrics(): SinapsMetrics;
+    private recordMetrics;
+    private estimateRequestCost;
     private computeCacheKey;
     private isRetryableError;
     execute(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;

@@ -22,6 +22,14 @@ export class GeminiProvider implements Provider {
     return this.config.costPer1kTokens;
   }
 
+  get promptCostPer1k(): number | undefined {
+    return this.config.promptCostPer1k;
+  }
+
+  get completionCostPer1k(): number | undefined {
+    return this.config.completionCostPer1k;
+  }
+
   get retries(): number | undefined {
     return this.config.retries;
   }

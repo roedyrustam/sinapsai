@@ -24,6 +24,14 @@ export class OllamaProvider implements Provider {
     return this.config.costPer1kTokens ?? 0;
   }
 
+  get promptCostPer1k(): number | undefined {
+    return this.config.promptCostPer1k ?? 0;
+  }
+
+  get completionCostPer1k(): number | undefined {
+    return this.config.completionCostPer1k ?? 0;
+  }
+
   get retries(): number | undefined {
     return this.config.retries;
   }

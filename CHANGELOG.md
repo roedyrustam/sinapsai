@@ -1,6 +1,13 @@
 # Changelog
 
-## [1.4.0] - 2026-10-06
+## [1.5.0] - 2026-10-06
+### Added
+- **Dual-Token Pricing & Weighted Routing**: Added separate `promptCostPer1k` and `completionCostPer1k` configuration across all providers. The `lowest-cost` strategy now calculates dynamic weighted prompt/completion costs per query.
+- **Adaptive Rate-Limit Headers & Proactive Throttling**: Universal parser `parseRateLimitHeaders` extracting `x-ratelimit-*`, `anthropic-ratelimit-*`, and `retry-after`. Proactively throttles exhausted providers before sending HTTP requests, preventing 429 errors.
+- **In-Process Gateway Telemetry (`client.getMetrics()`)**: Real-time cumulative tracking for total requests, cache hits, token usage (prompt/completion), estimated USD spend, and per-provider latency/success/failure metrics.
+- **Event Hook**: Added `onRateLimitWarning(provider, rateLimit)` to `SinapsEventHooks`.
+- Added comprehensive unit test suite `MetricsAndRateLimit.test.ts` (98/98 tests passing).
+- Added `examples/08-metrics-and-rate-limiting.ts`.
 ### Added
 - **Unified Embeddings Control Plane**: Added `client.embeddings.create({ model, input })` with automatic multi-provider failover, load balancing, circuit breaker protection, and retries.
 - **In-Memory Embedding Caching**: Exact input hash caching for embeddings to eliminate duplicate API costs and achieve sub-millisecond retrieval.
