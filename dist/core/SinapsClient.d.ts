@@ -1,5 +1,5 @@
 import type { Provider } from '../providers/Provider.js';
-import type { CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, SinapsEventHooks, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
@@ -25,6 +25,9 @@ export declare class SinapsClient {
                 (request: CreateChatCompletionRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
             };
         };
+    };
+    readonly embeddings: {
+        create: (request: CreateEmbeddingRequest) => Promise<CreateEmbeddingResponse>;
     };
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

@@ -1,4 +1,4 @@
-import type { UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CreateEmbeddingRequest, CreateEmbeddingResponse, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 export interface Provider {
     id: string;
     name: string;
@@ -6,5 +6,6 @@ export interface Provider {
     retries?: number;
     retryDelayMs?: number;
     generateContent(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+    generateEmbedding?(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;
 }
 //# sourceMappingURL=Provider.d.ts.map

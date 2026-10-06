@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
 import { OpenAiProvider } from './OpenAiProvider.js';
 
@@ -133,6 +133,47 @@ describe('OpenAiProvider', () => {
       expect(result.choices[0].message.content).toBe('Short answer.');
       expect(result.choices[0].finishReason).toBe('stop');
       expect(result.usage).toBeUndefined();
+    });
+  });
+
+  describe('generateEmbedding', () => {
+    it('should call fetch and parse embedding payload', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          object: 'list',
+          data: [
+            {
+              object: 'embedding',
+              index: 0,
+              embedding: [0.1, 0.2, 0.3],
+            },
+          ],
+          model: 'text-embedding-3-small',
+          usage: {
+            prompt_tokens: 4,
+            total_tokens: 4,
+          },
+        }),
+      });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mockFetch;
+
+      try {
+        const response = await provider.generateEmbedding({
+          model: 'text-embedding-3-small',
+          input: 'Embed me',
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(response.object).toBe('list');
+        expect(response.model).toBe('text-embedding-3-small');
+        expect(response.data[0].embedding).toEqual([0.1, 0.2, 0.3]);
+        expect(response.usage?.promptTokens).toBe(4);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

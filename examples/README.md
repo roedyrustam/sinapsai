@@ -24,4 +24,7 @@ npx tsx examples/04-custom-provider-ollama.ts
 
 # 6. DeepSeek & Reasoning models (deepseek-reasoner / R1)
 DEEPSEEK_API_KEY="your-key" npx tsx examples/06-deepseek-reasoner.ts
+
+# 7. Unified Embeddings with Automatic Failover & Caching
+npx tsx examples/07-embeddings-failover.ts
 ```

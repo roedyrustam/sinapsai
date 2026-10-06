@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0] - 2026-10-06
+### Added
+- **Unified Embeddings Control Plane**: Added `client.embeddings.create({ model, input })` with automatic multi-provider failover, load balancing, circuit breaker protection, and retries.
+- **In-Memory Embedding Caching**: Exact input hash caching for embeddings to eliminate duplicate API costs and achieve sub-millisecond retrieval.
+- **Provider Embedding Implementations**: Implemented `generateEmbedding` in `OpenAiProvider` and `OllamaProvider`.
+- **Event Hook**: Added `onEmbeddingSuccess` event hook to `SinapsEventHooks`.
+- Added comprehensive unit test suite `Embeddings.test.ts` (90/90 tests passing).
+- Added `examples/07-embeddings-failover.ts`.
+
 ## [1.3.0] - 2026-10-06
 ### Added
 - **Native DeepSeek Provider**: Added `DeepSeekProvider` supporting `deepseek-chat` (V3) and `deepseek-reasoner` (R1).

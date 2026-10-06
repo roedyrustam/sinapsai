@@ -1,4 +1,6 @@
 import type {
+  CreateEmbeddingRequest,
+  CreateEmbeddingResponse,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
@@ -13,4 +15,7 @@ export interface Provider {
   generateContent(
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+  generateEmbedding?(
+    request: CreateEmbeddingRequest,
+  ): Promise<CreateEmbeddingResponse>;
 }

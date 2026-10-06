@@ -118,12 +118,40 @@ export interface ProviderConfig {
   retryDelayMs?: number;
 }
 
+export interface CreateEmbeddingRequest {
+  model: string;
+  input: string | string[];
+  user?: string;
+  signal?: AbortSignal;
+}
+
+export interface EmbeddingItem {
+  index: number;
+  embedding: number[];
+  object: 'embedding';
+}
+
+export interface CreateEmbeddingResponse {
+  object: 'list';
+  data: EmbeddingItem[];
+  model: string;
+  usage?: {
+    promptTokens: number;
+    totalTokens: number;
+  };
+}
+
 import type { Provider } from '../providers/Provider.js';
 
 export interface SinapsEventHooks {
   onSuccess?: (
     provider: Provider,
     response: UnifiedApiResponse,
+    latencyMs: number,
+  ) => void;
+  onEmbeddingSuccess?: (
+    provider: Provider,
+    response: CreateEmbeddingResponse,
     latencyMs: number,
   ) => void;
   onFallback?: (

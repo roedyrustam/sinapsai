@@ -33,11 +33,19 @@ const client = new SinapsClient({
 });
 
 async function run() {
+  // Chat Completions
   const response = await client.chat.completions.create({
     model: 'gpt-4o',
     messages: [{ role: 'user', content: 'Halo, AI!' }],
   });
   console.log(response.choices[0].message.content);
+
+  // Unified Embeddings (dengan failover & cache)
+  const embedding = await client.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: 'Teks pencarian semantik',
+  });
+  console.log('Embedding dimensions:', embedding.data[0].embedding.length);
 }
 run();
 ```

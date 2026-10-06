@@ -3,6 +3,8 @@ import type {
   CreateChatCompletionRequest,
   CreateChatCompletionRequestNonStreaming,
   CreateChatCompletionRequestStreaming,
+  CreateEmbeddingRequest,
+  CreateEmbeddingResponse,
   SinapsEventHooks,
   UnifiedApiRequest,
   UnifiedApiResponse,
@@ -86,6 +88,14 @@ export class SinapsClient {
           request: CreateChatCompletionRequest,
         ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
       },
+    },
+  };
+
+  public readonly embeddings = {
+    create: async (
+      request: CreateEmbeddingRequest,
+    ): Promise<CreateEmbeddingResponse> => {
+      return this.router.executeEmbedding(request);
     },
   };
 }

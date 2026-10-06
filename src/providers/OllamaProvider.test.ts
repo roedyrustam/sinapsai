@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
 import { OllamaProvider } from './OllamaProvider.js';
 
@@ -121,6 +121,75 @@ describe('OllamaProvider', () => {
         completionTokens: 6,
         totalTokens: 21,
       });
+    });
+  });
+
+  describe('generateEmbedding', () => {
+    it('should query Ollama embeddings endpoint without auth header by default', async () => {
+      let capturedHeaders: Record<string, string> | undefined;
+      const mockFetch = vi.fn().mockImplementation(async (_url, init) => {
+        capturedHeaders = init?.headers;
+        return {
+          ok: true,
+          json: async () => ({
+            object: 'list',
+            data: [{ object: 'embedding', index: 0, embedding: [0.05, -0.02] }],
+            model: 'nomic-embed-text',
+            usage: { prompt_tokens: 3, total_tokens: 3 },
+          }),
+        };
+      });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mockFetch;
+
+      try {
+        const res = await provider.generateEmbedding({
+          model: 'nomic-embed-text',
+          input: 'Vectorize local document',
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(capturedHeaders?.Authorization).toBeUndefined();
+        expect(res.data[0].embedding).toEqual([0.05, -0.02]);
+        expect(res.model).toBe('nomic-embed-text');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('should include Authorization header when apiKey is supplied', async () => {
+      const authOllama = new OllamaProvider({
+        baseUrl: 'http://remote-ollama:11434',
+        apiKey: 'secret-ollama-token',
+      });
+
+      let capturedHeaders: Record<string, string> | undefined;
+      const mockFetch = vi.fn().mockImplementation(async (_url, init) => {
+        capturedHeaders = init?.headers;
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ embedding: [0.1] }],
+          }),
+        };
+      });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mockFetch;
+
+      try {
+        await authOllama.generateEmbedding({
+          model: 'mxbai-embed-large',
+          input: 'Remote query',
+        });
+
+        expect(capturedHeaders?.Authorization).toBe(
+          'Bearer secret-ollama-token',
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

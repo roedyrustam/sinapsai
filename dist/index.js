@@ -370,6 +370,126 @@ var Router = class {
     }
     throw new AggregateError(errors, "All providers failed or are unavailable");
   }
+  computeEmbeddingCacheKey(request) {
+    const raw = JSON.stringify({
+      m: request.model,
+      inp: request.input
+    });
+    let hash = 5381;
+    for (let i = 0; i < raw.length; i++) {
+      hash = hash * 33 ^ raw.charCodeAt(i);
+    }
+    return `cache:emb:${request.model}:${(hash >>> 0).toString(16)}`;
+  }
+  async executeEmbedding(request) {
+    if (this.cacheOptions?.enabled && this.storage) {
+      try {
+        const cacheKey = this.computeEmbeddingCacheKey(request);
+        const cached = await this.storage.get(cacheKey);
+        if (cached) {
+          return cached;
+        }
+      } catch (_e) {
+      }
+    }
+    const eligibleProviders = this.providers.filter(
+      (p) => typeof p.generateEmbedding === "function"
+    );
+    if (eligibleProviders.length === 0) {
+      throw new Error(
+        "No configured provider supports embedding generation (generateEmbedding)"
+      );
+    }
+    let providersList = eligibleProviders;
+    if (this.strategy === "lowest-cost") {
+      providersList = [...eligibleProviders].sort((a, b) => {
+        const costA = a.costPer1kTokens ?? Infinity;
+        const costB = b.costPer1kTokens ?? Infinity;
+        if (costA === costB) return 0;
+        return costA < costB ? -1 : 1;
+      });
+    }
+    const maxAttempts = providersList.length;
+    let startIndex = 0;
+    if (this.strategy === "load-balance") {
+      startIndex = this.currentProviderIndex % providersList.length;
+      this.currentProviderIndex = (this.currentProviderIndex + 1) % providersList.length;
+    }
+    const errors = [];
+    let previousProvider = null;
+    let previousError = null;
+    for (let i = 0; i < maxAttempts; i++) {
+      const index = (startIndex + i) % providersList.length;
+      const provider = providersList[index];
+      if (previousProvider && previousError) {
+        this.hooks?.onFallback?.(previousError, previousProvider, provider);
+      }
+      const isAvailable = await this.circuitBreaker.isAvailable(provider.id);
+      if (!isAvailable) {
+        const error = new Error(
+          `Provider ${provider.id} is unavailable (Circuit OPEN)`
+        );
+        errors.push(error);
+        previousProvider = provider;
+        previousError = error;
+        continue;
+      }
+      const maxRetries = provider.retries ?? this.retries;
+      const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+      let attempt = 0;
+      while (true) {
+        const startTime = Date.now();
+        try {
+          if (!provider.generateEmbedding) {
+            throw new Error(
+              `Provider ${provider.id} does not support generateEmbedding`
+            );
+          }
+          const res = await provider.generateEmbedding(request);
+          const latencyMs = Date.now() - startTime;
+          await this.circuitBreaker.recordSuccess(provider.id);
+          this.hooks?.onEmbeddingSuccess?.(provider, res, latencyMs);
+          if (this.cacheOptions?.enabled && this.storage) {
+            try {
+              const cacheKey = this.computeEmbeddingCacheKey(request);
+              await this.storage.set(
+                cacheKey,
+                res,
+                this.cacheOptions.ttlSeconds ?? 300
+              );
+            } catch (_e) {
+            }
+          }
+          return res;
+        } catch (error) {
+          const err = error;
+          if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
+            this.hooks?.onRateLimit?.(provider, err);
+          }
+          if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
+            attempt++;
+            const jitter = Math.random() * 50;
+            const delay = Math.min(
+              baseDelay * 2 ** (attempt - 1) + jitter,
+              1e4
+            );
+            this.hooks?.onRetry?.(provider, err, attempt, delay);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          await this.circuitBreaker.recordFailure(provider.id);
+          errors.push(err);
+          previousProvider = provider;
+          previousError = err;
+          break;
+        }
+      }
+    }
+    throw new AggregateError(
+      errors,
+      "All eligible embedding providers failed or are unavailable"
+    );
+  }
 };
 
 // src/core/SinapsClient.ts
@@ -418,6 +538,11 @@ var SinapsClient = class {
         };
         return this.router.execute(fullReq);
       })
+    }
+  };
+  embeddings = {
+    create: async (request) => {
+      return this.router.executeEmbedding(request);
     }
   };
 };
@@ -1447,6 +1572,69 @@ var OllamaProvider = class {
       }
     }
   }
+  async generateEmbedding(request) {
+    const targetModel = this.resolveModel(request.model);
+    const rawBaseUrl = (this.config.baseUrl || "http://localhost:11434").replace(/\/+$/, "");
+    const baseUrl = rawBaseUrl.endsWith("/v1") ? rawBaseUrl : `${rawBaseUrl}/v1`;
+    const url = `${baseUrl}/embeddings`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (this.config.apiKey) {
+      headers.Authorization = `Bearer ${this.config.apiKey}`;
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: targetModel,
+          input: request.input,
+          ...request.user ? { user: request.user } : {}
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Ollama Embeddings API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      return {
+        object: "list",
+        model: data.model || targetModel,
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        data: (data.data || []).map((item, idx) => ({
+          object: "embedding",
+          index: item.index ?? idx,
+          embedding: item.embedding
+        })),
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0
+        } : void 0
+      };
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
 };
 
 // src/providers/OpenAiProvider.ts
@@ -1606,6 +1794,65 @@ var OpenAiProvider = class {
       if (!request.stream && timeoutId) {
         clearTimeout(timeoutId);
       }
+    }
+  }
+  async generateEmbedding(request) {
+    const targetModel = this.resolveModel(request.model);
+    const baseUrl = this.config.baseUrl || "https://api.openai.com/v1";
+    const url = `${baseUrl}/embeddings`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          input: request.input,
+          ...request.user ? { user: request.user } : {}
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `OpenAI API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      return {
+        object: "list",
+        model: data.model || targetModel,
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        data: (data.data || []).map((item, idx) => ({
+          object: "embedding",
+          index: item.index ?? idx,
+          embedding: item.embedding
+        })),
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0
+        } : void 0
+      };
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 };

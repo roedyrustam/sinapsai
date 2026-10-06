@@ -1,4 +1,6 @@
 import type {
+  CreateEmbeddingRequest,
+  CreateEmbeddingResponse,
   ProviderConfig,
   UnifiedApiRequest,
   UnifiedApiResponse,
@@ -203,6 +205,84 @@ export class OllamaProvider implements Provider {
       if (!request.stream && timeoutId) {
         clearTimeout(timeoutId);
       }
+    }
+  }
+
+  async generateEmbedding(
+    request: CreateEmbeddingRequest,
+  ): Promise<CreateEmbeddingResponse> {
+    const targetModel = this.resolveModel(request.model);
+    const rawBaseUrl = (
+      this.config.baseUrl || 'http://localhost:11434'
+    ).replace(/\/+$/, '');
+    const baseUrl = rawBaseUrl.endsWith('/v1')
+      ? rawBaseUrl
+      : `${rawBaseUrl}/v1`;
+    const url = `${baseUrl}/embeddings`;
+
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(), {
+          once: true,
+        });
+      }
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.config.apiKey) {
+      headers.Authorization = `Bearer ${this.config.apiKey}`;
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: targetModel,
+          input: request.input,
+          ...(request.user ? { user: request.user } : {}),
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Ollama Embeddings API Error (${response.status}): ${errorText}`,
+        ) as Error & { status?: number };
+        err.status = response.status;
+        throw err;
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: Ollama embeddings response
+      const data: any = await response.json();
+      return {
+        object: 'list',
+        model: data.model || targetModel,
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        data: (data.data || []).map((item: any, idx: number) => ({
+          object: 'embedding',
+          index: item.index ?? idx,
+          embedding: item.embedding,
+        })),
+        usage: data.usage
+          ? {
+              promptTokens: data.usage.prompt_tokens || 0,
+              totalTokens: data.usage.total_tokens || 0,
+            }
+          : undefined,
+      };
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 }

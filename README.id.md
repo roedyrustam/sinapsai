@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-81%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-90%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -58,6 +58,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [7. In-Memory Prompt Response Caching](#7-in-memory-prompt-response-caching)
   - [8. Tool Calling & Eksekusi Fungsi](#8-tool-calling--eksekusi-fungsi)
   - [9. Structured Outputs (JSON Mode)](#9-structured-outputs-json-mode)
+  - [10. Unified Text Embeddings](#10-unified-text-embeddings)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -404,6 +405,22 @@ const response = await client.chat.completions.create({
 
 const data = JSON.parse(response.choices[0].message.content || '{}');
 console.log(data);
+```
+
+---
+
+### 10. Unified Text Embeddings
+
+Hasilkan vektor embedding teks dengan failover otomatis antar-provider, perlindungan *Circuit Breaker*, dan *in-memory caching* untuk memangkas biaya duplikasi panggilan:
+
+```typescript
+const embeddings = await client.embeddings.create({
+  model: 'text-embedding-3-small',
+  input: 'Control plane AI lokal untuk pencarian semantik',
+});
+
+console.log(embeddings.data[0].embedding); // Array angka float vektor
+console.log(embeddings.usage?.totalTokens); // Total token yang dipakai
 ```
 
 ---
