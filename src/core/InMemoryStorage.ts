@@ -5,18 +5,31 @@ interface StorageItem<T> {
   expiresAt: number | null;
 }
 
+export interface InMemoryStorageOptions {
+  sweepIntervalMs?: number;
+  autoSweep?: boolean;
+}
+
 export class InMemoryStorage implements StateStorage {
   private store: Map<string, StorageItem<unknown>> = new Map();
   private sweepInterval?: ReturnType<typeof setInterval>;
 
-  constructor(sweepIntervalMs: number = 60000) {
-    if (typeof setInterval !== 'undefined') {
+  constructor(options?: number | InMemoryStorageOptions) {
+    const sweepIntervalMs =
+      typeof options === 'number'
+        ? options
+        : (options?.sweepIntervalMs ?? 60000);
+    const autoSweep =
+      typeof options === 'object' ? (options?.autoSweep ?? true) : true;
+
+    if (autoSweep && typeof setInterval !== 'undefined') {
       this.sweepInterval = setInterval(() => this.sweep(), sweepIntervalMs);
       if (
         this.sweepInterval &&
-        typeof (this.sweepInterval as NodeJS.Timeout).unref === 'function'
+        typeof (this.sweepInterval as { unref?: () => void }).unref ===
+          'function'
       ) {
-        (this.sweepInterval as NodeJS.Timeout).unref();
+        (this.sweepInterval as { unref?: () => void }).unref?.();
       }
     }
   }

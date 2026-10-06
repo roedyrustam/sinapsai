@@ -218,7 +218,7 @@ export class GeminiProvider implements Provider {
     const finalUrl = `${baseUrl}/models/${targetModel}:${request.stream ? 'streamGenerateContent?alt=sse&key=' : 'generateContent?key='}${this.config.apiKey}`;
 
     const controller = new AbortController();
-    let timeoutId: NodeJS.Timeout | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }

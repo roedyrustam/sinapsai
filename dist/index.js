@@ -161,11 +161,13 @@ var CircuitBreaker = class {
 var InMemoryStorage = class {
   store = /* @__PURE__ */ new Map();
   sweepInterval;
-  constructor(sweepIntervalMs = 6e4) {
-    if (typeof setInterval !== "undefined") {
+  constructor(options) {
+    const sweepIntervalMs = typeof options === "number" ? options : options?.sweepIntervalMs ?? 6e4;
+    const autoSweep = typeof options === "object" ? options?.autoSweep ?? true : true;
+    if (autoSweep && typeof setInterval !== "undefined") {
       this.sweepInterval = setInterval(() => this.sweep(), sweepIntervalMs);
       if (this.sweepInterval && typeof this.sweepInterval.unref === "function") {
-        this.sweepInterval.unref();
+        this.sweepInterval.unref?.();
       }
     }
   }

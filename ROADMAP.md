@@ -22,5 +22,5 @@
 - [x] *Cost-Based Routing* (`lowest-cost` sorting provider via `costPer1kTokens`).
 - [x] Tool Calling / Function Calling schema mapping (`tools`, `tool_choice`).
 - [x] Structured Output JSON schema enforcement (`responseFormat: { type: 'json_object' }`).
-- [ ] Dukungan eksekusi dan sertifikasi di Edge Runtime (Cloudflare Workers, Bun, Deno).
+- [x] Dukungan eksekusi dan sertifikasi di Edge Runtime (Cloudflare Workers, Bun, Deno).
 

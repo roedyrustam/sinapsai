@@ -18,4 +18,7 @@ npx tsx examples/03-load-balancing.ts
 
 # 4. Custom local provider (Ollama)
 npx tsx examples/04-custom-provider-ollama.ts
+
+# 5. Cloudflare Workers / Edge Runtime
+# See examples/05-edge-cloudflare-worker.ts
 ```

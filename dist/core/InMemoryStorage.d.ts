@@ -1,8 +1,12 @@
 import type { StateStorage } from './StateStorage.js';
+export interface InMemoryStorageOptions {
+    sweepIntervalMs?: number;
+    autoSweep?: boolean;
+}
 export declare class InMemoryStorage implements StateStorage {
     private store;
     private sweepInterval?;
-    constructor(sweepIntervalMs?: number);
+    constructor(options?: number | InMemoryStorageOptions);
     private sweep;
     get<T>(key: string): Promise<T | null>;
     set<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;

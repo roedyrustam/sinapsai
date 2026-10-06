@@ -29,6 +29,51 @@ describe('GroqProvider', () => {
         max_tokens: 500,
       });
     });
+
+    it('should format tools, toolChoice, and responseFormat correctly', () => {
+      const request: UnifiedApiRequest = {
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'user', content: 'Get stock' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_2',
+                type: 'function',
+                function: { name: 'get_stock', arguments: '{"ticker":"NVDA"}' },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            name: 'get_stock',
+            tool_call_id: 'call_2',
+            content: '$130',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_stock',
+              description: 'Get stock price',
+            },
+          },
+        ],
+        toolChoice: 'auto',
+        responseFormat: { type: 'json_object' },
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.tools).toHaveLength(1);
+      expect(result.tool_choice).toBe('auto');
+      expect(result.response_format).toEqual({ type: 'json_object' });
+      expect(result.messages[1].tool_calls).toHaveLength(1);
+      expect(result.messages[2].tool_call_id).toBe('call_2');
+    });
   });
 
   describe('formatResponse', () => {

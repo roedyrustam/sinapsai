@@ -84,4 +84,65 @@ describe('SinapsClient', () => {
 
     expect(Symbol.asyncIterator in stream).toBe(true);
   });
+
+  it('should forward tools, toolChoice, and responseFormat to the router', async () => {
+    const mockResponse: UnifiedApiResponse = {
+      id: 'resp-tools',
+      model: 'gpt-4o',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_abc',
+                type: 'function',
+                function: { name: 'get_user', arguments: '{"id":1}' },
+              },
+            ],
+          },
+          finishReason: 'tool_calls',
+        },
+      ],
+    };
+
+    const mockProvider: Provider = {
+      name: 'mock',
+      id: 'mock-tools',
+      generateContent: vi.fn().mockResolvedValue(mockResponse),
+    };
+
+    const client = new SinapsClient({
+      providers: [mockProvider],
+    });
+
+    const tools = [
+      {
+        type: 'function' as const,
+        function: { name: 'get_user', description: 'Get user info' },
+      },
+    ];
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Find user 1' }],
+      tools,
+      toolChoice: 'auto',
+      responseFormat: { type: 'json_object' },
+    });
+
+    expect(response).toBe(mockResponse);
+    expect(mockProvider.generateContent).toHaveBeenCalledWith({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Find user 1' }],
+      temperature: undefined,
+      maxTokens: undefined,
+      stream: undefined,
+      signal: undefined,
+      tools,
+      toolChoice: 'auto',
+      responseFormat: { type: 'json_object' },
+    });
+  });
 });

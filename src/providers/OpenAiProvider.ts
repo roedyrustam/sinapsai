@@ -111,7 +111,7 @@ export class OpenAiProvider implements Provider {
     const url = `${baseUrl}/chat/completions`;
 
     const controller = new AbortController();
-    let timeoutId: NodeJS.Timeout | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }

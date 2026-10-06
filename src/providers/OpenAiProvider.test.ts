@@ -29,6 +29,54 @@ describe('OpenAiProvider', () => {
         max_tokens: 500,
       });
     });
+
+    it('should format tools, toolChoice, and responseFormat correctly', () => {
+      const request: UnifiedApiRequest = {
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: 'Check weather' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: {
+                  name: 'get_weather',
+                  arguments: '{"city":"Jakarta"}',
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            name: 'get_weather',
+            tool_call_id: 'call_1',
+            content: 'Sunny, 30C',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              description: 'Get weather for city',
+            },
+          },
+        ],
+        toolChoice: 'auto',
+        responseFormat: { type: 'json_object' },
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.tools).toHaveLength(1);
+      expect(result.tool_choice).toBe('auto');
+      expect(result.response_format).toEqual({ type: 'json_object' });
+      expect(result.messages[1].tool_calls).toHaveLength(1);
+      expect(result.messages[2].tool_call_id).toBe('call_1');
+    });
   });
 
   describe('formatResponse', () => {

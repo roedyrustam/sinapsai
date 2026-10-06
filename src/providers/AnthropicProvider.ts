@@ -216,7 +216,7 @@ export class AnthropicProvider implements Provider {
     const url = `${baseUrl}/messages`;
 
     const controller = new AbortController();
-    let timeoutId: NodeJS.Timeout | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }

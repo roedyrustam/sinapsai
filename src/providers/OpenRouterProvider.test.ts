@@ -29,6 +29,51 @@ describe('OpenRouterProvider', () => {
         max_tokens: 500,
       });
     });
+
+    it('should format tools, toolChoice, and responseFormat correctly', () => {
+      const request: UnifiedApiRequest = {
+        model: 'anthropic/claude-3.5-sonnet',
+        messages: [
+          { role: 'user', content: 'Calculate math' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_3',
+                type: 'function',
+                function: { name: 'calculate', arguments: '{"expr":"2+2"}' },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            name: 'calculate',
+            tool_call_id: 'call_3',
+            content: '4',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'calculate',
+              description: 'Evaluate math expr',
+            },
+          },
+        ],
+        toolChoice: 'auto',
+        responseFormat: { type: 'json_object' },
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.tools).toHaveLength(1);
+      expect(result.tool_choice).toBe('auto');
+      expect(result.response_format).toEqual({ type: 'json_object' });
+      expect(result.messages[1].tool_calls).toHaveLength(1);
+      expect(result.messages[2].tool_call_id).toBe('call_3');
+    });
   });
 
   describe('formatResponse', () => {

@@ -1,6 +1,6 @@
 {
   "name": "sinapsai",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Blazing-fast in-process AI Gateway & Control Plane with Circuit Breaker, Failover, and Unified LLM API for Node.js & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -9,6 +9,8 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "workerd": "./dist/index.js",
+      "edge-light": "./dist/index.js",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     }
@@ -41,6 +43,10 @@
     "gemini",
     "groq",
     "openrouter",
+    "edge",
+    "cloudflare-workers",
+    "bun",
+    "deno",
     "fault-tolerance",
     "in-memory",
     "control-plane",
