@@ -1,4 +1,6 @@
 import type {
+  CreateEmbeddingRequest,
+  CreateEmbeddingResponse,
   ProviderConfig,
   UnifiedApiRequest,
   UnifiedApiResponse,
@@ -305,4 +307,116 @@ export class GeminiProvider implements Provider {
       }
     }
   }
+
+  async generateEmbedding(
+    request: CreateEmbeddingRequest,
+  ): Promise<CreateEmbeddingResponse> {
+    const targetModel = this.resolveModel(request.model);
+    const baseUrl =
+      this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+
+    const isBatch = Array.isArray(request.input);
+    const inputs = Array.isArray(request.input)
+      ? request.input
+      : [request.input];
+
+    const finalUrl = isBatch
+      ? `${baseUrl}/models/${targetModel}:batchEmbedContents?key=${this.config.apiKey}`
+      : `${baseUrl}/models/${targetModel}:embedContent?key=${this.config.apiKey}`;
+
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(), {
+          once: true,
+        });
+      }
+    }
+
+    const payload = isBatch
+      ? {
+          requests: inputs.map((text) => ({
+            model: `models/${targetModel}`,
+            content: { parts: [{ text }] },
+          })),
+        }
+      : {
+          content: { parts: [{ text: inputs[0] }] },
+        };
+
+    try {
+      const response = await fetch(finalUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Gemini API Error (${response.status}): ${errorText}`,
+        ) as Error & { status?: number };
+        err.status = response.status;
+        throw err;
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: Gemini embeddings response
+      const data: any = await response.json();
+
+      if (isBatch) {
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        const embeddingsList = (data.embeddings || []).map(
+          // biome-ignore lint/suspicious/noExplicitAny: embedding item
+          (item: any, idx: number) => ({
+            object: 'embedding' as const,
+            index: idx,
+            embedding: item.values || [],
+          }),
+        );
+        return {
+          object: 'list',
+          model: targetModel,
+          data: embeddingsList,
+          usage: data.usageMetadata
+            ? {
+                promptTokens: data.usageMetadata.promptTokenCount || 0,
+                totalTokens: data.usageMetadata.totalTokenCount || 0,
+              }
+            : undefined,
+        };
+      }
+
+      return {
+        object: 'list',
+        model: targetModel,
+        data: [
+          {
+            object: 'embedding',
+            index: 0,
+            embedding: data.embedding?.values || [],
+          },
+        ],
+        usage: data.usageMetadata
+          ? {
+              promptTokens: data.usageMetadata.promptTokenCount || 0,
+              totalTokens: data.usageMetadata.totalTokenCount || 0,
+            }
+          : undefined,
+      };
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
 }
+
