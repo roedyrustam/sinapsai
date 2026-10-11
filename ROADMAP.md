@@ -18,9 +18,21 @@
 - [x] Event Hooks lengkap (`onSuccess`, `onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`).
 - [x] Downstream `AbortSignal` propagation.
 
-## Phase 3: Optimizations & Enterprise (v1.2 - v2.0) - *Completed*
-- [x] *Cost-Based Routing* (`lowest-cost` sorting provider via `costPer1kTokens`).
+## Phase 3: Optimizations & Enterprise (v1.2 - v1.5) - *Completed*
+- [x] *Cost-Based Routing* (`lowest-cost` sorting provider via `costPer1kTokens` & Dual-Pricing `promptCostPer1k`/`completionCostPer1k`).
 - [x] Tool Calling / Function Calling schema mapping (`tools`, `tool_choice`).
 - [x] Structured Output JSON schema enforcement (`responseFormat: { type: 'json_object' }`).
 - [x] Dukungan eksekusi dan sertifikasi di Edge Runtime (Cloudflare Workers, Bun, Deno).
+- [x] Vector Embeddings Unified API dengan Multi-Provider Failover & Caching.
+- [x] Adaptive Rate-Limiting & Proactive Throttling (`x-ratelimit-*`, `retry-after`).
+- [x] In-Process Telemetry Cumulative Tracker (`client.getMetrics()`).
+
+## Phase 4: Extended Ecosystem & Enterprise Control Plane (v1.6.0) - *Completed*
+- [x] Integrasi native Mistral AI (`MistralProvider`: Chat, Embeddings, Tools, JSON, Rate Limits).
+- [x] Integrasi Google Gemini Embeddings (`GeminiProvider.generateEmbedding`: Single & Batch text-embedding-004).
+- [x] In-process Circuit Breaker Inspection (`client.getCircuitBreakerStatus()`).
+- [x] Manual Circuit Breaker Recovery (`client.resetCircuitBreaker()`).
+- [x] In-process Cache Purge API (`client.clearCache()`).
+- [x] 100% Biome Clean & 108/108 Tests Passed.
+
 

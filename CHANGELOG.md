@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.6.0] - 2026-10-12
+### Added
+- **Native Mistral AI Provider (`MistralProvider`)**: First-class support for Mistral AI models (`mistral-large-latest`, `codestral-latest`, `mistral-embed`) including chat completions, SSE streaming, tool calling, JSON schema enforcement, and rate limit extraction.
+- **Gemini Embeddings (`GeminiProvider.generateEmbedding`)**: Direct support for Google Gemini embedding models (`text-embedding-004`) for single strings and batch string arrays (`embedContent` & `batchEmbedContents`).
+- **Circuit Breaker Inspection & Reset APIs**: Added `client.getCircuitBreakerStatus()` returning detailed state (`CLOSED`, `OPEN`, `HALF_OPEN`), failure counts, and successes for each configured provider. Added `client.resetCircuitBreaker(providerId?)` for manual/programmatic circuit recovery.
+- **In-Process Cache Control (`client.clearCache()`)**: Added `clearCache()` to programmatically purge all in-memory completion and embedding cached entries on demand.
+- **Root `.gitignore`**: Standardized exclusion for `node_modules`, `dist`, `.env*`, and coverage artifacts.
+- Added comprehensive unit test suites for MistralProvider, Gemini embeddings, and Circuit Breaker status APIs (108/108 tests passing).
+- Added runnable example `examples/09-circuit-breaker-and-mistral.ts`.
+
 ## [1.5.0] - 2026-10-06
 ### Added
 - **Dual-Token Pricing & Weighted Routing**: Added separate `promptCostPer1k` and `completionCostPer1k` configuration across all providers. The `lowest-cost` strategy now calculates dynamic weighted prompt/completion costs per query.

@@ -1,7 +1,7 @@
 # Dokumentasi SinapsAI
 
 ## Ikhtisar
-SinapsAI adalah paket NPM Node.js/TypeScript lokal yang berfungsi sebagai *Control Plane / AI Gateway*. Paket ini menghubungkan aplikasi Anda ke berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Ollama, Groq, OpenRouter) melalui antarmuka API yang bersatu (*Unified API*).
+SinapsAI adalah paket NPM Node.js/TypeScript lokal yang berfungsi sebagai *Control Plane / AI Gateway*. Paket ini menghubungkan aplikasi Anda ke berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter) melalui antarmuka API yang bersatu (*Unified API*).
 
 ## Instalasi
 ```bash
@@ -13,7 +13,9 @@ npm install sinapsai
 import { 
   SinapsClient, 
   OpenAiProvider, 
-  AnthropicProvider 
+  AnthropicProvider,
+  MistralProvider,
+  GeminiProvider 
 } from 'sinapsai';
 
 const client = new SinapsClient({
@@ -22,32 +24,41 @@ const client = new SinapsClient({
     new OpenAiProvider({ 
       apiKey: process.env.OPENAI_API_KEY! 
     }),
-    new AnthropicProvider({ 
-      apiKey: process.env.ANTHROPIC_API_KEY!,
-      defaultModel: 'claude-3-5-sonnet-20241022',
-      modelMap: {
-        'gpt-4o': 'claude-3-5-sonnet-20241022',
-      },
+    new MistralProvider({
+      apiKey: process.env.MISTRAL_API_KEY!,
+      defaultModel: 'mistral-large-latest',
+    }),
+    new GeminiProvider({
+      apiKey: process.env.GEMINI_API_KEY!,
+      defaultModel: 'text-embedding-004',
     }),
   ],
 });
 
 async function run() {
-  // Chat Completions
+  // 1. Chat Completions
   const response = await client.chat.completions.create({
     model: 'gpt-4o',
     messages: [{ role: 'user', content: 'Halo, AI!' }],
   });
   console.log(response.choices[0].message.content);
 
-  // Unified Embeddings (dengan failover & cache)
+  // 2. Unified Embeddings (OpenAI, Gemini, Mistral, Ollama)
   const embedding = await client.embeddings.create({
-    model: 'text-embedding-3-small',
+    model: 'text-embedding-004',
     input: 'Teks pencarian semantik',
   });
   console.log('Embedding dimensions:', embedding.data[0].embedding.length);
 
-  // Real-Time In-Process Telemetry
+  // 3. Inspeksi Status Circuit Breaker Waktu-Nyata
+  const cbStatus = await client.getCircuitBreakerStatus();
+  console.log('Circuit Status:', cbStatus);
+
+  // 4. Reset Circuit Breaker & Pembersihan Cache
+  await client.resetCircuitBreaker();
+  await client.clearCache();
+
+  // 5. Telemetri Real-Time In-Process
   const metrics = client.getMetrics();
   console.log('Total Requests:', metrics.totalRequests);
   console.log('Estimated USD Spend:', metrics.estimatedCostUsd);
@@ -55,10 +66,14 @@ async function run() {
 run();
 ```
 
-## Fitur Utama v1.5.0
-1. **Dual-Token Pricing (`promptCostPer1k`, `completionCostPer1k`)**: Perhitungan biaya dinamis dan perutean `lowest-cost` otomatis berdasarkan rasio panjang prompt dan token keluaran.
-2. **Adaptive Rate-Limiting & Proactive Throttling**: Ekstraksi header kuota rate-limit (`x-ratelimit-*`, `retry-after`) secara otomatis. Mencegah error HTTP 429 dengan melewati provider yang kuotanya habis sebelum panggilan jaringan dikirim.
-3. **Telemetri Tanpa Database (`client.getMetrics()`)**: Rekapitulasi waktu-nyata untuk token prompt, token completion, estimasi pengeluaran USD, rasio cache hit, dan latensi per provider.
+## Fitur Utama v1.6.0
+1. **Dukungan Native Mistral AI (`MistralProvider`)**: Eksekusi chat, tools, JSON mode, dan embeddings (`mistral-embed`) dengan penanganan rate-limit otomatis.
+2. **Google Gemini Embeddings (`GeminiProvider.generateEmbedding`)**: Mendukung model `text-embedding-004` baik untuk string tunggal (`embedContent`) maupun batch array (`batchEmbedContents`).
+3. **Inspeksi & Pemulihan Circuit Breaker (`getCircuitBreakerStatus`, `resetCircuitBreaker`)**: Pemantauan status sirkuit (`CLOSED`, `OPEN`, `HALF_OPEN`), jumlah kegagalan/sukses per provider, serta kemampuan reset manual programatik.
+4. **Pembersihan Cache In-Process (`clearCache`)**: Mengosongkan memori cache respon prompt dan embeddings secara instan saat dibutuhkan.
+5. **Dual-Token Pricing (`promptCostPer1k`, `completionCostPer1k`)**: Perhitungan biaya dinamis dan perutean `lowest-cost` otomatis berdasarkan rasio panjang prompt dan token keluaran.
+6. **Adaptive Rate-Limiting & Proactive Throttling**: Ekstraksi header kuota rate-limit (`x-ratelimit-*`, `retry-after`) secara otomatis guna mencegah HTTP 429.
+
 
 ## Keamanan & Performa
 - **100% Lokal:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
