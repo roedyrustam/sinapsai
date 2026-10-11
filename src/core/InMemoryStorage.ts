@@ -87,6 +87,10 @@ export class InMemoryStorage implements StateStorage {
     return newValue;
   }
 
+  async clear(): Promise<void> {
+    this.store.clear();
+  }
+
   destroy() {
     if (this.sweepInterval) {
       clearInterval(this.sweepInterval);

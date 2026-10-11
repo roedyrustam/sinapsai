@@ -27,4 +27,11 @@ DEEPSEEK_API_KEY="your-key" npx tsx examples/06-deepseek-reasoner.ts
 
 # 7. Unified Embeddings with Automatic Failover & Caching
 npx tsx examples/07-embeddings-failover.ts
+
+# 8. Dual-Pricing, Proactive Throttling & In-Process Metrics
+npx tsx examples/08-metrics-and-rate-limiting.ts
+
+# 9. Mistral AI, Gemini Embeddings & Circuit Breaker Control
+npx tsx examples/09-circuit-breaker-and-mistral.ts
 ```
+

@@ -96,7 +96,9 @@ describe('MistralProvider', () => {
       expect(result.model).toBe('mistral-large-latest');
       expect(result.choices).toHaveLength(1);
       expect(result.choices[0].message.role).toBe('assistant');
-      expect(result.choices[0].message.content).toBe('Bonjour! Je suis Mistral.');
+      expect(result.choices[0].message.content).toBe(
+        'Bonjour! Je suis Mistral.',
+      );
       expect(result.choices[0].finishReason).toBe('stop');
       expect(result.usage).toEqual({
         promptTokens: 15,

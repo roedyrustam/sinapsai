@@ -105,7 +105,7 @@ export class Router {
   }
 
   public async clearCache(): Promise<void> {
-    if (this.storage) {
+    if (this.storage && typeof this.storage.clear === 'function') {
       await this.storage.clear();
     }
   }

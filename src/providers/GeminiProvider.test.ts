@@ -281,7 +281,9 @@ describe('GeminiProvider', () => {
       });
 
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/models/text-embedding-004:embedContent?key=test-key'),
+        expect.stringContaining(
+          '/models/text-embedding-004:embedContent?key=test-key',
+        ),
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
@@ -313,13 +315,21 @@ describe('GeminiProvider', () => {
       });
 
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/models/text-embedding-004:batchEmbedContents?key=test-key'),
+        expect.stringContaining(
+          '/models/text-embedding-004:batchEmbedContents?key=test-key',
+        ),
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
             requests: [
-              { model: 'models/text-embedding-004', content: { parts: [{ text: 'Hello' }] } },
-              { model: 'models/text-embedding-004', content: { parts: [{ text: 'World' }] } },
+              {
+                model: 'models/text-embedding-004',
+                content: { parts: [{ text: 'Hello' }] },
+              },
+              {
+                model: 'models/text-embedding-004',
+                content: { parts: [{ text: 'World' }] },
+              },
             ],
           }),
         }),
@@ -331,4 +341,3 @@ describe('GeminiProvider', () => {
     });
   });
 });
-

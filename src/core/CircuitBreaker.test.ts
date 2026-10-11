@@ -237,4 +237,3 @@ describe('CircuitBreaker', () => {
     });
   });
 });
-

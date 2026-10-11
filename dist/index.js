@@ -119,6 +119,39 @@ var CircuitBreaker = class {
     } catch (_error) {
     }
   }
+  async getStatus(providerId) {
+    try {
+      const rawState = await this.storage.get(`cb:state:${providerId}`) || "CLOSED";
+      const failures = await this.storage.get(`cb:failures:${providerId}`) || 0;
+      const successes = await this.storage.get(`cb:successes:${providerId}`) || 0;
+      let state = "CLOSED";
+      if (rawState === "OPEN") {
+        state = "OPEN";
+      } else if (failures >= this.failureThreshold) {
+        state = "HALF_OPEN";
+      }
+      return {
+        state,
+        failures,
+        successes
+      };
+    } catch (_error) {
+      return {
+        state: "CLOSED",
+        failures: 0,
+        successes: 0
+      };
+    }
+  }
+  async reset(providerId) {
+    try {
+      await this.storage.delete(`cb:failures:${providerId}`);
+      await this.storage.delete(`cb:successes:${providerId}`);
+      await this.storage.set(`cb:state:${providerId}`, "CLOSED");
+      this.onCircuitClose?.(providerId);
+    } catch (_error) {
+    }
+  }
   async execute(provider, request) {
     if (!await this.isAvailable(provider.id)) {
       throw new Error(`Circuit breaker is OPEN for provider: ${provider.id}`);
@@ -215,6 +248,9 @@ var InMemoryStorage = class {
     });
     return newValue;
   }
+  async clear() {
+    this.store.clear();
+  }
   destroy() {
     if (this.sweepInterval) {
       clearInterval(this.sweepInterval);
@@ -270,6 +306,27 @@ var Router = class {
         ])
       )
     };
+  }
+  async getCircuitBreakerStatus() {
+    const statuses = {};
+    for (const p of this.providers) {
+      statuses[p.id] = await this.circuitBreaker.getStatus(p.id);
+    }
+    return statuses;
+  }
+  async resetCircuitBreaker(providerId) {
+    if (providerId) {
+      await this.circuitBreaker.reset(providerId);
+    } else {
+      for (const p of this.providers) {
+        await this.circuitBreaker.reset(p.id);
+      }
+    }
+  }
+  async clearCache() {
+    if (this.storage && typeof this.storage.clear === "function") {
+      await this.storage.clear();
+    }
   }
   recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0) {
     if (!this.metrics.providerMetrics[providerId]) {
@@ -713,6 +770,15 @@ var SinapsClient = class {
   };
   getMetrics() {
     return this.router.getMetrics();
+  }
+  async getCircuitBreakerStatus() {
+    return this.router.getCircuitBreakerStatus();
+  }
+  async resetCircuitBreaker(providerId) {
+    return this.router.resetCircuitBreaker(providerId);
+  }
+  async clearCache() {
+    return this.router.clearCache();
   }
 };
 
@@ -1473,6 +1539,92 @@ var GeminiProvider = class {
       }
     }
   }
+  async generateEmbedding(request) {
+    const targetModel = this.resolveModel(request.model);
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const isBatch = Array.isArray(request.input);
+    const inputs = Array.isArray(request.input) ? request.input : [request.input];
+    const finalUrl = isBatch ? `${baseUrl}/models/${targetModel}:batchEmbedContents?key=${this.config.apiKey}` : `${baseUrl}/models/${targetModel}:embedContent?key=${this.config.apiKey}`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    const payload = isBatch ? {
+      requests: inputs.map((text) => ({
+        model: `models/${targetModel}`,
+        content: { parts: [{ text }] }
+      }))
+    } : {
+      content: { parts: [{ text: inputs[0] }] }
+    };
+    try {
+      const response = await fetch(finalUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Gemini API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      if (isBatch) {
+        const embeddingsList = (data.embeddings || []).map(
+          // biome-ignore lint/suspicious/noExplicitAny: embedding item
+          (item, idx) => ({
+            object: "embedding",
+            index: idx,
+            embedding: item.values || []
+          })
+        );
+        return {
+          object: "list",
+          model: targetModel,
+          data: embeddingsList,
+          usage: data.usageMetadata ? {
+            promptTokens: data.usageMetadata.promptTokenCount || 0,
+            totalTokens: data.usageMetadata.totalTokenCount || 0
+          } : void 0
+        };
+      }
+      return {
+        object: "list",
+        model: targetModel,
+        data: [
+          {
+            object: "embedding",
+            index: 0,
+            embedding: data.embedding?.values || []
+          }
+        ],
+        usage: data.usageMetadata ? {
+          promptTokens: data.usageMetadata.promptTokenCount || 0,
+          totalTokens: data.usageMetadata.totalTokenCount || 0
+        } : void 0
+      };
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
 };
 
 // src/providers/GroqProvider.ts
@@ -1641,6 +1793,240 @@ var GroqProvider = class {
       throw error;
     } finally {
       if (!request.stream && timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+};
+
+// src/providers/MistralProvider.ts
+var MistralProvider = class {
+  id;
+  name = "Mistral";
+  config;
+  constructor(config) {
+    this.config = config;
+    this.id = config.id || `mistral-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.stream) {
+      payload.stream = true;
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: response mapping
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    return {
+      id: data.id || `mistral-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: data.usage ? {
+        promptTokens: data.usage.prompt_tokens || 0,
+        completionTokens: data.usage.completion_tokens || 0,
+        totalTokens: data.usage.total_tokens || 0
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://api.mistral.ai/v1";
+    const url = `${baseUrl}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Mistral API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const rateLimit = parseRateLimitHeaders(response.headers);
+      if (request.stream) {
+        return (async function* () {
+          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+          try {
+            for await (const msg of parseSSE2(response)) {
+              if (msg.data.trim() === "[DONE]") break;
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = {
+                  id: parsed.id,
+                  model: parsed.model,
+                  choices: (parsed.choices || []).map(
+                    // biome-ignore lint/suspicious/noExplicitAny: stream chunk mapping
+                    (c) => ({
+                      delta: {
+                        role: c.delta?.role,
+                        content: c.delta?.content ?? null,
+                        tool_calls: c.delta?.tool_calls
+                      },
+                      finishReason: c.finish_reason || null
+                    })
+                  )
+                };
+                yield chunk;
+              } catch (_e) {
+              }
+            }
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+          }
+        })();
+      }
+      const data = await response.json();
+      const formatted = this.formatResponse(data);
+      if (rateLimit) {
+        formatted.rateLimit = rateLimit;
+      }
+      return formatted;
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream && timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+  async generateEmbedding(request) {
+    const targetModel = this.resolveModel(request.model);
+    const baseUrl = this.config.baseUrl || "https://api.mistral.ai/v1";
+    const url = `${baseUrl}/embeddings`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          input: request.input
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Mistral API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      return {
+        object: "list",
+        model: data.model || targetModel,
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        data: (data.data || []).map((item, idx) => ({
+          object: "embedding",
+          index: item.index ?? idx,
+          embedding: item.embedding
+        })),
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0
+        } : void 0
+      };
+    } finally {
+      if (timeoutId) {
         clearTimeout(timeoutId);
       }
     }
@@ -2287,6 +2673,6 @@ var OpenRouterProvider = class {
   }
 };
 
-export { AnthropicProvider, CircuitBreaker, DeepSeekProvider, GeminiProvider, GroqProvider, InMemoryStorage, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient };
+export { AnthropicProvider, CircuitBreaker, DeepSeekProvider, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

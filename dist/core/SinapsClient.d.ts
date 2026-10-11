@@ -1,5 +1,5 @@
 import type { Provider } from '../providers/Provider.js';
-import type { CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
@@ -30,5 +30,8 @@ export declare class SinapsClient {
         create: (request: CreateEmbeddingRequest) => Promise<CreateEmbeddingResponse>;
     };
     getMetrics(): SinapsMetrics;
+    getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
+    resetCircuitBreaker(providerId?: string): Promise<void>;
+    clearCache(): Promise<void>;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

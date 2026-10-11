@@ -373,7 +373,6 @@ export class GeminiProvider implements Provider {
       const data: any = await response.json();
 
       if (isBatch) {
-        // biome-ignore lint/suspicious/noExplicitAny: item mapping
         const embeddingsList = (data.embeddings || []).map(
           // biome-ignore lint/suspicious/noExplicitAny: embedding item
           (item: any, idx: number) => ({
@@ -419,4 +418,3 @@ export class GeminiProvider implements Provider {
     }
   }
 }
-

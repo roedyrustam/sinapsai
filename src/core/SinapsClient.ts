@@ -119,4 +119,3 @@ export class SinapsClient {
     return this.router.clearCache();
   }
 }
-

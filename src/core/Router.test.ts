@@ -483,6 +483,38 @@ describe('Router', () => {
       const res2 = await router.execute(mockRequest);
       expect(res2).toEqual(mockResponse);
       expect(p1.generateContent).toHaveBeenCalledTimes(1); // NOT called again
+
+      // Clear cache
+      await router.clearCache();
+      const res3 = await router.execute(mockRequest);
+      expect(res3).toEqual(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(2); // Called again after cache cleared!
+    });
+
+    it('should query and reset circuit breaker statuses across providers', async () => {
+      const p1 = createMockProvider('p1');
+      const p2 = createMockProvider('p2');
+      const router = new Router([p1, p2], circuitBreaker, { storage });
+
+      const statuses = await router.getCircuitBreakerStatus();
+      expect(statuses.p1.state).toBe('CLOSED');
+      expect(statuses.p2.state).toBe('CLOSED');
+
+      await circuitBreaker.recordFailure('p1');
+      await circuitBreaker.recordFailure('p1');
+      await circuitBreaker.recordFailure('p1');
+
+      const tripped = await router.getCircuitBreakerStatus();
+      expect(tripped.p1.state).toBe('OPEN');
+
+      await router.resetCircuitBreaker('p1');
+      const resetOne = await router.getCircuitBreakerStatus();
+      expect(resetOne.p1.state).toBe('CLOSED');
+
+      await router.resetCircuitBreaker(); // Reset all
+      const resetAll = await router.getCircuitBreakerStatus();
+      expect(resetAll.p1.state).toBe('CLOSED');
+      expect(resetAll.p2.state).toBe('CLOSED');
     });
   });
 });

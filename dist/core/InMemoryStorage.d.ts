@@ -12,6 +12,7 @@ export declare class InMemoryStorage implements StateStorage {
     set<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;
     delete(key: string): Promise<void>;
     increment(key: string): Promise<number>;
+    clear(): Promise<void>;
     destroy(): void;
 }
 //# sourceMappingURL=InMemoryStorage.d.ts.map

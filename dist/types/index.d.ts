@@ -150,6 +150,12 @@ export interface SinapsMetrics {
     estimatedCostUsd: number;
     providerMetrics: Record<string, ProviderMetricEntry>;
 }
+export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+export interface CircuitBreakerStatus {
+    state: CircuitState;
+    failures: number;
+    successes: number;
+}
 import type { Provider } from '../providers/Provider.js';
 export interface SinapsEventHooks {
     onSuccess?: (provider: Provider, response: UnifiedApiResponse, latencyMs: number) => void;

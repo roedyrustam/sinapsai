@@ -3,5 +3,6 @@ export interface StateStorage {
     set<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;
     delete(key: string): Promise<void>;
     increment(key: string): Promise<number>;
+    clear?(): Promise<void>;
 }
 //# sourceMappingURL=StateStorage.d.ts.map

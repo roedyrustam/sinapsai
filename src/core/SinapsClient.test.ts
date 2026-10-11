@@ -154,7 +154,10 @@ describe('SinapsClient', () => {
         id: '1',
         model: 'test',
         choices: [
-          { message: { role: 'assistant', content: 'hi' }, finishReason: 'stop' },
+          {
+            message: { role: 'assistant', content: 'hi' },
+            finishReason: 'stop',
+          },
         ],
       }),
     };
@@ -175,4 +178,3 @@ describe('SinapsClient', () => {
     await expect(client.clearCache()).resolves.toBeUndefined();
   });
 });
-

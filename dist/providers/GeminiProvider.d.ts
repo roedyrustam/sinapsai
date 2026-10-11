@@ -1,4 +1,4 @@
-import type { ProviderConfig, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CreateEmbeddingRequest, CreateEmbeddingResponse, ProviderConfig, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { Provider } from './Provider.js';
 export declare class GeminiProvider implements Provider {
     id: string;
@@ -14,5 +14,6 @@ export declare class GeminiProvider implements Provider {
     formatRequest(request: UnifiedApiRequest): any;
     formatResponse(data: any, model: string): UnifiedApiResponse;
     generateContent(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+    generateEmbedding(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;
 }
 //# sourceMappingURL=GeminiProvider.d.ts.map
