@@ -1,5 +1,6 @@
 import type { Provider } from '../providers/Provider.js';
 import type {
+  CircuitBreakerStatus,
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
   SinapsEventHooks,
@@ -81,6 +82,32 @@ export class Router {
         ]),
       ),
     };
+  }
+
+  public async getCircuitBreakerStatus(): Promise<
+    Record<string, CircuitBreakerStatus>
+  > {
+    const statuses: Record<string, CircuitBreakerStatus> = {};
+    for (const p of this.providers) {
+      statuses[p.id] = await this.circuitBreaker.getStatus(p.id);
+    }
+    return statuses;
+  }
+
+  public async resetCircuitBreaker(providerId?: string): Promise<void> {
+    if (providerId) {
+      await this.circuitBreaker.reset(providerId);
+    } else {
+      for (const p of this.providers) {
+        await this.circuitBreaker.reset(p.id);
+      }
+    }
+  }
+
+  public async clearCache(): Promise<void> {
+    if (this.storage) {
+      await this.storage.clear();
+    }
   }
 
   private recordMetrics(

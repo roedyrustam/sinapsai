@@ -2,6 +2,7 @@ export * from './AnthropicProvider.js';
 export * from './DeepSeekProvider.js';
 export * from './GeminiProvider.js';
 export * from './GroqProvider.js';
+export * from './MistralProvider.js';
 export * from './OllamaProvider.js';
 export * from './OpenAiProvider.js';
 export * from './OpenRouterProvider.js';

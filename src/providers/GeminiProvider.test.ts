@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
 import { GeminiProvider } from './GeminiProvider.js';
 
@@ -263,4 +263,72 @@ describe('GeminiProvider', () => {
       });
     });
   });
+
+  describe('generateEmbedding', () => {
+    it('should generate embeddings for single string input', async () => {
+      const mockValues = [0.12, 0.34, -0.56];
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          embedding: { values: mockValues },
+          usageMetadata: { promptTokenCount: 5, totalTokenCount: 5 },
+        }),
+      });
+
+      const response = await provider.generateEmbedding({
+        model: 'text-embedding-004',
+        input: 'Hello semantic search',
+      });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/models/text-embedding-004:embedContent?key=test-key'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            content: { parts: [{ text: 'Hello semantic search' }] },
+          }),
+        }),
+      );
+
+      expect(response.object).toBe('list');
+      expect(response.model).toBe('text-embedding-004');
+      expect(response.data).toHaveLength(1);
+      expect(response.data[0].embedding).toEqual(mockValues);
+      expect(response.usage?.promptTokens).toBe(5);
+    });
+
+    it('should generate embeddings for batch input array', async () => {
+      const mockBatch = [{ values: [0.1, 0.2] }, { values: [0.3, 0.4] }];
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          embeddings: mockBatch,
+          usageMetadata: { promptTokenCount: 12, totalTokenCount: 12 },
+        }),
+      });
+
+      const response = await provider.generateEmbedding({
+        model: 'text-embedding-004',
+        input: ['Hello', 'World'],
+      });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/models/text-embedding-004:batchEmbedContents?key=test-key'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            requests: [
+              { model: 'models/text-embedding-004', content: { parts: [{ text: 'Hello' }] } },
+              { model: 'models/text-embedding-004', content: { parts: [{ text: 'World' }] } },
+            ],
+          }),
+        }),
+      );
+
+      expect(response.data).toHaveLength(2);
+      expect(response.data[0].embedding).toEqual([0.1, 0.2]);
+      expect(response.data[1].embedding).toEqual([0.3, 0.4]);
+    });
+  });
 });
+

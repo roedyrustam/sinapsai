@@ -172,6 +172,14 @@ export interface SinapsMetrics {
   providerMetrics: Record<string, ProviderMetricEntry>;
 }
 
+export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+export interface CircuitBreakerStatus {
+  state: CircuitState;
+  failures: number;
+  successes: number;
+}
+
 import type { Provider } from '../providers/Provider.js';
 
 export interface SinapsEventHooks {

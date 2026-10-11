@@ -1,5 +1,6 @@
 import type { Provider } from '../providers/Provider.js';
 import type {
+  CircuitBreakerStatus,
   CreateChatCompletionRequest,
   CreateChatCompletionRequestNonStreaming,
   CreateChatCompletionRequestStreaming,
@@ -103,4 +104,19 @@ export class SinapsClient {
   public getMetrics(): SinapsMetrics {
     return this.router.getMetrics();
   }
+
+  public async getCircuitBreakerStatus(): Promise<
+    Record<string, CircuitBreakerStatus>
+  > {
+    return this.router.getCircuitBreakerStatus();
+  }
+
+  public async resetCircuitBreaker(providerId?: string): Promise<void> {
+    return this.router.resetCircuitBreaker(providerId);
+  }
+
+  public async clearCache(): Promise<void> {
+    return this.router.clearCache();
+  }
 }
+

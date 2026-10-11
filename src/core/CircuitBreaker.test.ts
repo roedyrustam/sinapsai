@@ -213,4 +213,28 @@ describe('CircuitBreaker', () => {
       ).rejects.toThrow('Provider test_storage_write_fail failed');
     });
   });
+
+  describe('getStatus & reset', () => {
+    it('should report CLOSED status initially and after manual reset', async () => {
+      const status = await circuitBreaker.getStatus('p-initial');
+      expect(status.state).toBe('CLOSED');
+      expect(status.failures).toBe(0);
+
+      // Record 3 failures to trip it
+      await circuitBreaker.recordFailure('p-initial');
+      await circuitBreaker.recordFailure('p-initial');
+      await circuitBreaker.recordFailure('p-initial');
+
+      const trippedStatus = await circuitBreaker.getStatus('p-initial');
+      expect(trippedStatus.state).toBe('OPEN');
+      expect(trippedStatus.failures).toBe(3);
+
+      // Manually reset
+      await circuitBreaker.reset('p-initial');
+      const resetStatus = await circuitBreaker.getStatus('p-initial');
+      expect(resetStatus.state).toBe('CLOSED');
+      expect(resetStatus.failures).toBe(0);
+    });
+  });
 });
+

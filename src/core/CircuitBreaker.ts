@@ -1,5 +1,7 @@
 import type { Provider } from '../providers/Provider.js';
 import type {
+  CircuitBreakerStatus,
+  CircuitState,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
@@ -92,6 +94,47 @@ export class CircuitBreaker {
       }
     } catch (_error) {
       // Ignore storage errors when recording failures
+    }
+  }
+
+  async getStatus(providerId: string): Promise<CircuitBreakerStatus> {
+    try {
+      const rawState =
+        (await this.storage.get<string>(`cb:state:${providerId}`)) || 'CLOSED';
+      const failures =
+        (await this.storage.get<number>(`cb:failures:${providerId}`)) || 0;
+      const successes =
+        (await this.storage.get<number>(`cb:successes:${providerId}`)) || 0;
+
+      let state: CircuitState = 'CLOSED';
+      if (rawState === 'OPEN') {
+        state = 'OPEN';
+      } else if (failures >= this.failureThreshold) {
+        state = 'HALF_OPEN';
+      }
+
+      return {
+        state,
+        failures,
+        successes,
+      };
+    } catch (_error) {
+      return {
+        state: 'CLOSED',
+        failures: 0,
+        successes: 0,
+      };
+    }
+  }
+
+  async reset(providerId: string): Promise<void> {
+    try {
+      await this.storage.delete(`cb:failures:${providerId}`);
+      await this.storage.delete(`cb:successes:${providerId}`);
+      await this.storage.set(`cb:state:${providerId}`, 'CLOSED');
+      this.onCircuitClose?.(providerId);
+    } catch (_error) {
+      // Ignore storage errors during reset
     }
   }
 

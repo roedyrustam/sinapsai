@@ -145,4 +145,34 @@ describe('SinapsClient', () => {
       responseFormat: { type: 'json_object' },
     });
   });
+
+  it('should expose getCircuitBreakerStatus, resetCircuitBreaker, and clearCache', async () => {
+    const mockProvider: Provider = {
+      name: 'mock-cb',
+      id: 'mock-cb-1',
+      generateContent: vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'test',
+        choices: [
+          { message: { role: 'assistant', content: 'hi' }, finishReason: 'stop' },
+        ],
+      }),
+    };
+
+    const client = new SinapsClient({
+      providers: [mockProvider],
+      cache: { enabled: true },
+    });
+
+    const status = await client.getCircuitBreakerStatus();
+    expect(status['mock-cb-1']).toBeDefined();
+    expect(status['mock-cb-1'].state).toBe('CLOSED');
+
+    await client.resetCircuitBreaker('mock-cb-1');
+    const resetStatus = await client.getCircuitBreakerStatus();
+    expect(resetStatus['mock-cb-1'].state).toBe('CLOSED');
+
+    await expect(client.clearCache()).resolves.toBeUndefined();
+  });
 });
+
