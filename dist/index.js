@@ -328,7 +328,7 @@ var Router = class {
       await this.storage.clear();
     }
   }
-  recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0) {
+  recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0, cachedPromptTokens = 0) {
     if (!this.metrics.providerMetrics[providerId]) {
       this.metrics.providerMetrics[providerId] = {
         requests: 0,
@@ -358,6 +358,10 @@ var Router = class {
     this.metrics.totalPromptTokens += promptTokens;
     this.metrics.totalCompletionTokens += completionTokens;
     this.metrics.totalTokens += promptTokens + completionTokens;
+    if (cachedPromptTokens > 0) {
+      this.metrics.totalCachedPromptTokens = (this.metrics.totalCachedPromptTokens || 0) + cachedPromptTokens;
+      pm.cachedPromptTokens = (pm.cachedPromptTokens || 0) + cachedPromptTokens;
+    }
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6)
     );
@@ -425,6 +429,17 @@ var Router = class {
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
       });
+    } else if (this.strategy === "lowest-latency") {
+      providersList = [...this.providers].sort((a, b) => {
+        const reqA = this.metrics.providerMetrics[a.id]?.requests ?? 0;
+        const reqB = this.metrics.providerMetrics[b.id]?.requests ?? 0;
+        if (reqA === 0 && reqB > 0) return -1;
+        if (reqB === 0 && reqA > 0) return 1;
+        const latA = this.metrics.providerMetrics[a.id]?.averageLatencyMs ?? 0;
+        const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
+        if (latA === latB) return 0;
+        return latA < latB ? -1 : 1;
+      });
     }
     const maxAttempts = providersList.length;
     let startIndex = 0;
@@ -484,13 +499,15 @@ var Router = class {
             } else if (provider.costPer1kTokens !== void 0) {
               costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
             }
+            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
             this.recordMetrics(
               provider.id,
               true,
               latencyMs,
               promptTokens,
               completionTokens,
-              costUsd
+              costUsd,
+              cachedPromptTokens
             );
             if (apiRes.rateLimit) {
               if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
@@ -590,6 +607,17 @@ var Router = class {
         const costB = b.promptCostPer1k ?? b.costPer1kTokens ?? Number.POSITIVE_INFINITY;
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
+      });
+    } else if (this.strategy === "lowest-latency") {
+      providersList = [...eligibleProviders].sort((a, b) => {
+        const reqA = this.metrics.providerMetrics[a.id]?.requests ?? 0;
+        const reqB = this.metrics.providerMetrics[b.id]?.requests ?? 0;
+        if (reqA === 0 && reqB > 0) return -1;
+        if (reqB === 0 && reqA > 0) return 1;
+        const latA = this.metrics.providerMetrics[a.id]?.averageLatencyMs ?? 0;
+        const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
+        if (latA === latB) return 0;
+        return latA < latB ? -1 : 1;
       });
     }
     const maxAttempts = providersList.length;
@@ -759,7 +787,8 @@ var SinapsClient = class {
           toolChoice: request.toolChoice,
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
-          thinkingBudget: request.thinkingBudget
+          thinkingBudget: request.thinkingBudget,
+          reasoningEffort: request.reasoningEffort
         };
         return this.router.execute(fullReq);
       })
@@ -896,7 +925,16 @@ var AnthropicProvider = class {
       max_tokens: request.maxTokens || 4096,
       messages: []
     };
-    if (request.temperature !== void 0) {
+    if (request.thinkingBudget !== void 0 && request.thinkingBudget > 0) {
+      payload.thinking = {
+        type: "enabled",
+        budget_tokens: request.thinkingBudget
+      };
+      if (!request.maxTokens || request.maxTokens <= request.thinkingBudget) {
+        payload.max_tokens = request.thinkingBudget + 4096;
+      }
+      payload.temperature = 1;
+    } else if (request.temperature !== void 0) {
       payload.temperature = request.temperature;
     }
     const systemMessages = [];
@@ -981,11 +1019,14 @@ ${msg.content}`;
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data) {
     let text = "";
+    let reasoningContent = "";
     const toolCalls = [];
     if (Array.isArray(data.content)) {
       for (const block of data.content) {
         if (block.type === "text") {
           text += block.text;
+        } else if (block.type === "thinking") {
+          reasoningContent += block.thinking;
         } else if (block.type === "tool_use") {
           toolCalls.push({
             id: block.id,
@@ -1023,6 +1064,7 @@ ${msg.content}`;
           message: {
             role: "assistant",
             content: text || null,
+            reasoning_content: reasoningContent || null,
             tool_calls: toolCalls.length > 0 ? toolCalls : void 0
           },
           finishReason
@@ -1031,7 +1073,8 @@ ${msg.content}`;
       usage: data.usage ? {
         promptTokens: data.usage.input_tokens || 0,
         completionTokens: data.usage.output_tokens || 0,
-        totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0)
+        totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+        cachedPromptTokens: data.usage.cache_read_input_tokens || void 0
       } : void 0
     };
   }
@@ -1096,6 +1139,20 @@ ${msg.content}`;
                           delta: {
                             role: "assistant",
                             content: parsed.delta.text || ""
+                          },
+                          finishReason: null
+                        }
+                      ]
+                    };
+                  } else if (parsed.delta?.type === "thinking_delta") {
+                    yield {
+                      id: messageId,
+                      model: payload.model,
+                      choices: [
+                        {
+                          delta: {
+                            role: "assistant",
+                            reasoning_content: parsed.delta.thinking || ""
                           },
                           finishReason: null
                         }
@@ -1816,6 +1873,9 @@ var GroqProvider = class {
     if (request.thinkingBudget !== void 0) {
       payload.reasoning_format = "parsed";
     }
+    if (request.reasoningEffort !== void 0) {
+      payload.reasoning_effort = request.reasoningEffort;
+    }
     if (request.stream) {
       payload.stream = true;
     }
@@ -2464,11 +2524,20 @@ var OpenAiProvider = class {
       model: this.resolveModel(request.model),
       messages
     };
-    if (request.temperature !== void 0) {
+    const resolvedModel = this.resolveModel(request.model);
+    const isReasoningModel = resolvedModel.startsWith("o1") || resolvedModel.startsWith("o3") || resolvedModel.startsWith("o4") || resolvedModel.includes("reasoner");
+    if (request.reasoningEffort) {
+      payload.reasoning_effort = request.reasoningEffort;
+    }
+    if (request.temperature !== void 0 && !isReasoningModel) {
       payload.temperature = request.temperature;
     }
     if (request.maxTokens !== void 0) {
-      payload.max_tokens = request.maxTokens;
+      if (isReasoningModel) {
+        payload.max_completion_tokens = request.maxTokens;
+      } else {
+        payload.max_tokens = request.maxTokens;
+      }
     }
     if (request.stream) {
       payload.stream = true;
@@ -2487,6 +2556,7 @@ var OpenAiProvider = class {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data) {
     const choice = data.choices?.[0];
+    const reasoningContent = choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
     return {
       id: data.id || `openai-${Date.now()}`,
       model: data.model,
@@ -2495,6 +2565,7 @@ var OpenAiProvider = class {
           message: {
             role: "assistant",
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
@@ -2503,7 +2574,8 @@ var OpenAiProvider = class {
       usage: data.usage ? {
         promptTokens: data.usage.prompt_tokens || 0,
         completionTokens: data.usage.completion_tokens || 0,
-        totalTokens: data.usage.total_tokens || 0
+        totalTokens: data.usage.total_tokens || 0,
+        cachedPromptTokens: data.usage.prompt_tokens_details?.cached_tokens ?? void 0
       } : void 0
     };
   }
@@ -2559,6 +2631,7 @@ var OpenAiProvider = class {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content: chunk?.delta?.reasoning ?? chunk?.delta?.reasoning_content ?? null,
                         tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null

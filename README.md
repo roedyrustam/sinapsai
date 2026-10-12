@@ -11,13 +11,13 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-119%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-134%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
 **SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, and custom endpoints) through a single, standardized **Unified API**.
 
-Engineered with a **100% in-process / in-memory** architecture, SinapsAI eliminates downtime via automatic failover, load balancing, and a resilient **Circuit Breaker**—without requiring intermediary proxy servers, external Redis dependencies, or adding measurable latency (<10ms overhead).
+Engineered with a **100% in-process / in-memory** architecture, SinapsAI eliminates downtime via automatic failover, load balancing, lowest-latency routing, and a resilient **Circuit Breaker**—without requiring intermediary proxy servers, external Redis dependencies, or adding measurable latency (<10ms overhead).
 
 ---
 
@@ -34,8 +34,10 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 | **Data Privacy** | 🔒 **Zero Data Leakage** | 🔒 Direct | ⚠️ Third-Party Gateway | 🔒 Self-hosted |
 | **In-Memory Circuit Breaker** | ✅ **Built-in** | ❌ Manual code | ⚠️ Cloud feature | ⚠️ Basic retries |
 | **Automatic Multi-Provider Failover** | ✅ **Built-in** | ❌ None | ✅ Yes | ✅ Yes |
-| **Round-Robin Load Balancing** | ✅ **Built-in** | ❌ None | ✅ Yes | ✅ Yes |
+| **Lowest-Latency Auto-Routing** | ✅ **Built-in** | ❌ None | ⚠️ Cloud feature | ⚠️ Custom setup |
 | **Lowest-Cost Auto-Routing** | ✅ **Built-in** | ❌ None | ⚠️ Paid tier | ✅ Yes |
+| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude 3.7/Gemini/Groq** | ⚠️ Fragmented | ⚠️ Inconsistent | ⚠️ Partial |
+| **KV-Cache / Prompt Cache Tracking**| ✅ **Built-in (`cachedPromptTokens`)** | ⚠️ Varies | ⚠️ Paid | ⚠️ Partial |
 | **TypeScript Native (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Varies | ❌ Separate Service | ❌ Python |
 
 > 📁 Looking for ready-to-run code? Check the **[Examples Directory (`/examples`)](./examples)**!
@@ -73,12 +75,16 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 ## ✨ Key Features
 
 - 🌐 **Unified API**: Communicate seamlessly across different LLM providers using standard request/response structures aligned with the OpenAI Chat Completions specification.
+- 🧠 **Universal Frontier Reasoning Engine**: Seamless control for deep thinking and Chain-of-Thought across Claude 3.7 Sonnet (`thinkingBudget`), OpenAI o1/o3/o4 (`reasoningEffort: 'low' | 'medium' | 'high'`), Groq LPU, DeepSeek R1, and Gemini Flash Thinking, automatically surfaced in `message.reasoning_content`.
+- ⚡ **Lowest-Latency Routing (`lowest-latency`)**: Dynamically measures running moving-average latency and dispatches prompts to the fastest available LLM provider with zero cold-start lag.
+- 💰 **KV-Cache & Prompt Caching Analytics**: Real-time tracking of `cachedPromptTokens` in responses and `totalCachedPromptTokens` in metrics to audit and reduce API bills by 70-90%.
 - 🛠️ **Universal Tool Calling & JSON Mode**: Define tools once with standard JSON Schema (`tools`, `toolChoice`). SinapsAI automatically translates function calls to Anthropic's XML/tool syntax, Gemini's function declarations, and OpenAI formats.
 - 🛡️ **In-Memory Circuit Breaker**: Detects provider outages instantaneously and trips (*Open Circuit*) to prevent cascading latencies and application thread blockage.
 - 🔀 **Flexible Routing Strategies**:
   - `failover`: Automatically falls back to secondary providers when primary models fail or time out.
+  - `lowest-latency`: Dynamically sorts and sends requests to the fastest provider based on running average response latency.
   - `load-balance`: Distributes requests in a round-robin rotation across multiple keys or endpoints to avert rate limiting (HTTP 429).
-  - `lowest-cost`: Dynamically sorts and invokes the most cost-effective provider using token pricing (`costPer1kTokens`).
+  - `lowest-cost`: Dynamically sorts and invokes the most cost-effective provider using token pricing (`costPer1kTokens` & dual pricing).
 - ⚡ **Exponential Backoff & Retries**: Automatically retries transient network errors and rate limits (429, 5xx) with random jitter before failing over.
 - 💾 **In-Memory Prompt Hash Caching**: Fast in-memory response caching with configurable TTL to avoid duplicate calls and cut costs.
 - 🌊 **Native SSE Streaming**: Stream completions in real time using native asynchronous generators (`for await...of`).

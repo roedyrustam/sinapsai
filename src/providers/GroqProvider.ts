@@ -91,6 +91,10 @@ export class GroqProvider implements Provider {
       payload.reasoning_format = 'parsed';
     }
 
+    if (request.reasoningEffort !== undefined) {
+      payload.reasoning_effort = request.reasoningEffort;
+    }
+
     if (request.stream) {
       payload.stream = true;
     }

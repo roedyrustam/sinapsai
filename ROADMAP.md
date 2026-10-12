@@ -45,4 +45,16 @@
 - [x] Penemuan Model Live Gemini (`GeminiProvider.fetchAvailableModels()`).
 - [x] 119/119 Tests Passed, 100% Biome Clean, Siap Rilis ke NPM v1.7.0.
 
+## Phase 6: Superintelligence Edition & Latency-Based Control Plane (v2.0.0) - *Completed*
+- [x] **Groq Cloud LPU Hardening**: Penyelarasan penuh dengan dokumentasi resmi Groq Cloud (`llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`), parser durasi rate limit (`parseDurationMs` untuk `7.66s`, `2m59.56s`, `120ms`), sanitasi parameter `messages[].name`, dan clamping `temperature: 0` ke `1e-8`.
+- [x] **Universal Frontier Reasoning Engine**: Standarisasi penalaran mendalam dan Chain-of-Thought di seluruh provider:
+  - Claude 3.7 Sonnet (`thinkingBudget`, `temperature: 1.0`, `max_tokens > budget`, streaming `thinking_delta`).
+  - OpenAI o1, o3, o3-mini, o4 (`reasoningEffort: 'low' | 'medium' | 'high'`, `max_completion_tokens`).
+  - Groq & DeepSeek R1 (`reasoning_content` extraction).
+  - Google Gemini 2.0 / 2.5 / 3.x Flash Thinking (`thinkingBudget`).
+- [x] **Latency-Based Dynamic Routing Strategy (`lowest-latency`)**: Penentuan rute cerdas berbasis moving average latency dengan auto-probe unprobed providers dan failover otomatis.
+- [x] **KV-Cache & Prompt Caching Analytics**: Penjejakan `cachedPromptTokens` per provider dan global (`totalCachedPromptTokens` di `getMetrics()`) untuk mengaudit penghematan biaya token 70-90%.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 12 (`examples/12-groq-lightning-fast-reasoning.ts`) dan contoh 13 (`examples/13-superintelligence-latency-and-reasoning.ts`).
+- [x] 134/134 Tests Passed di 15 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.0.0.
+
 

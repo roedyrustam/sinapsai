@@ -12,7 +12,11 @@ import type {
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
 
-export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost';
+export type RouterStrategy =
+  | 'failover'
+  | 'load-balance'
+  | 'lowest-cost'
+  | 'lowest-latency';
 
 export interface CacheOptions {
   enabled?: boolean;
@@ -117,6 +121,7 @@ export class Router {
     promptTokens = 0,
     completionTokens = 0,
     costUsd = 0,
+    cachedPromptTokens = 0,
   ): void {
     if (!this.metrics.providerMetrics[providerId]) {
       this.metrics.providerMetrics[providerId] = {
@@ -149,6 +154,11 @@ export class Router {
     this.metrics.totalPromptTokens += promptTokens;
     this.metrics.totalCompletionTokens += completionTokens;
     this.metrics.totalTokens += promptTokens + completionTokens;
+    if (cachedPromptTokens > 0) {
+      this.metrics.totalCachedPromptTokens =
+        (this.metrics.totalCachedPromptTokens || 0) + cachedPromptTokens;
+      pm.cachedPromptTokens = (pm.cachedPromptTokens || 0) + cachedPromptTokens;
+    }
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6),
     );
@@ -241,6 +251,17 @@ export class Router {
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
       });
+    } else if (this.strategy === 'lowest-latency') {
+      providersList = [...this.providers].sort((a, b) => {
+        const reqA = this.metrics.providerMetrics[a.id]?.requests ?? 0;
+        const reqB = this.metrics.providerMetrics[b.id]?.requests ?? 0;
+        if (reqA === 0 && reqB > 0) return -1;
+        if (reqB === 0 && reqA > 0) return 1;
+        const latA = this.metrics.providerMetrics[a.id]?.averageLatencyMs ?? 0;
+        const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
+        if (latA === latB) return 0;
+        return latA < latB ? -1 : 1;
+      });
     }
 
     const maxAttempts = providersList.length;
@@ -321,6 +342,7 @@ export class Router {
                 provider.costPer1kTokens;
             }
 
+            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
             this.recordMetrics(
               provider.id,
               true,
@@ -328,6 +350,7 @@ export class Router {
               promptTokens,
               completionTokens,
               costUsd,
+              cachedPromptTokens,
             );
 
             // Adaptive rate-limit handling
@@ -464,6 +487,17 @@ export class Router {
           b.promptCostPer1k ?? b.costPer1kTokens ?? Number.POSITIVE_INFINITY;
         if (costA === costB) return 0;
         return costA < costB ? -1 : 1;
+      });
+    } else if (this.strategy === 'lowest-latency') {
+      providersList = [...eligibleProviders].sort((a, b) => {
+        const reqA = this.metrics.providerMetrics[a.id]?.requests ?? 0;
+        const reqB = this.metrics.providerMetrics[b.id]?.requests ?? 0;
+        if (reqA === 0 && reqB > 0) return -1;
+        if (reqB === 0 && reqA > 0) return 1;
+        const latA = this.metrics.providerMetrics[a.id]?.averageLatencyMs ?? 0;
+        const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
+        if (latA === latB) return 0;
+        return latA < latB ? -1 : 1;
       });
     }
 

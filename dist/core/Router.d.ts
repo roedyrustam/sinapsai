@@ -2,7 +2,7 @@ import type { Provider } from '../providers/Provider.js';
 import type { CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
-export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost';
+export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency';
 export interface CacheOptions {
     enabled?: boolean;
     ttlSeconds?: number;

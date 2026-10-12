@@ -91,6 +91,25 @@ describe('AnthropicProvider', () => {
       });
       expect(req2.model).toBe('claude-3-5-sonnet-20241022');
     });
+
+    it('should configure thinking and adjust temperature and max_tokens when thinkingBudget is provided', () => {
+      const request: UnifiedApiRequest = {
+        model: 'claude-3-7-sonnet-20250219',
+        messages: [{ role: 'user', content: 'Solve this math puzzle' }],
+        thinkingBudget: 2048,
+        temperature: 0.2, // thinking requires temperature: 1.0
+        maxTokens: 1000, // budget is 2048, so maxTokens must be > budget
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.thinking).toEqual({
+        type: 'enabled',
+        budget_tokens: 2048,
+      });
+      expect(result.temperature).toBe(1.0);
+      expect(result.max_tokens).toBe(6144); // maxTokens adjusted to budget_tokens + 4096
+    });
   });
 
   describe('formatResponse', () => {
@@ -258,6 +277,39 @@ describe('AnthropicProvider', () => {
           },
         },
       ]);
+    });
+
+    it('should extract thinking content blocks into reasoning_content and record cachedPromptTokens', () => {
+      const thinkingResponse = {
+        id: 'msg_think_1',
+        model: 'claude-3-7-sonnet-20250219',
+        stop_reason: 'end_turn',
+        usage: {
+          input_tokens: 1500,
+          output_tokens: 800,
+          cache_read_input_tokens: 1200,
+        },
+        content: [
+          {
+            type: 'thinking',
+            thinking: 'Let us analyze the step-by-step logic first...',
+          },
+          {
+            type: 'text',
+            text: 'Here is the final answer: 42.',
+          },
+        ],
+      };
+
+      const result = provider.formatResponse(thinkingResponse);
+      expect(result.choices[0].message.content).toBe(
+        'Here is the final answer: 42.',
+      );
+      expect(result.choices[0].message.reasoning_content).toBe(
+        'Let us analyze the step-by-step logic first...',
+      );
+      expect(result.usage?.cachedPromptTokens).toBe(1200);
+      expect(result.usage?.promptTokens).toBe(1500);
     });
   });
 });

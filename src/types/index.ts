@@ -63,6 +63,7 @@ export interface UnifiedApiRequest {
   responseFormat?: ResponseFormat;
   fallbackModels?: string[];
   thinkingBudget?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
 export interface CreateChatCompletionRequestNonStreaming
@@ -117,6 +118,7 @@ export interface UnifiedApiResponse {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    cachedPromptTokens?: number;
   };
   rateLimit?: RateLimitInfo;
 }
@@ -165,6 +167,7 @@ export interface ProviderMetricEntry {
   failures: number;
   promptTokens: number;
   completionTokens: number;
+  cachedPromptTokens?: number;
   latencySumMs: number;
   averageLatencyMs: number;
 }
@@ -176,6 +179,7 @@ export interface SinapsMetrics {
   cachedRequests: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  totalCachedPromptTokens?: number;
   totalTokens: number;
   estimatedCostUsd: number;
   providerMetrics: Record<string, ProviderMetricEntry>;

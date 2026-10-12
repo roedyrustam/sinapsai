@@ -79,6 +79,7 @@ export class SinapsClient {
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
           thinkingBudget: request.thinkingBudget,
+          reasoningEffort: request.reasoningEffort,
         };
         return this.router.execute(fullReq);
       }) as {

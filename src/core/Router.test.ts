@@ -149,6 +149,117 @@ describe('Router', () => {
     });
   });
 
+  describe('lowest-latency strategy', () => {
+    it('should probe unprobed providers and then select the lowest latency provider', async () => {
+      // p1 takes 50ms, p2 takes 10ms
+      const p1 = {
+        id: 'p1',
+        name: 'p1',
+        generateContent: vi.fn().mockImplementation(async () => {
+          await new Promise((r) => setTimeout(r, 40));
+          return mockResponse;
+        }),
+      } as unknown as Provider;
+
+      const p2 = {
+        id: 'p2',
+        name: 'p2',
+        generateContent: vi.fn().mockImplementation(async () => {
+          await new Promise((r) => setTimeout(r, 5));
+          return mockResponse;
+        }),
+      } as unknown as Provider;
+
+      const router = new Router([p1, p2], circuitBreaker, {
+        strategy: 'lowest-latency',
+      });
+
+      // Request 1: p1 is unprobed, p1 is called
+      await router.execute(mockRequest);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+
+      // Request 2: p2 is still unprobed (req=0), so p2 is probed next
+      await router.execute(mockRequest);
+      expect(p2.generateContent).toHaveBeenCalledTimes(1);
+
+      // Request 3: both probed, but p2 latency (~5ms) < p1 latency (~40ms), so p2 should be chosen
+      await router.execute(mockRequest);
+      expect(p2.generateContent).toHaveBeenCalledTimes(2);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fallback to second lowest latency provider if lowest latency provider fails', async () => {
+      const p1 = {
+        id: 'p1',
+        name: 'p1',
+        generateContent: vi.fn().mockImplementation(async () => {
+          await new Promise((r) => setTimeout(r, 40));
+          return mockResponse;
+        }),
+      } as unknown as Provider;
+
+      let p2Fail = false;
+      const p2 = {
+        id: 'p2',
+        name: 'p2',
+        generateContent: vi.fn().mockImplementation(async () => {
+          await new Promise((r) => setTimeout(r, 5));
+          if (p2Fail) throw new Error('p2 transient failure');
+          return mockResponse;
+        }),
+      } as unknown as Provider;
+
+      const router = new Router([p1, p2], circuitBreaker, {
+        strategy: 'lowest-latency',
+      });
+
+      // Probe both
+      await router.execute(mockRequest);
+      await router.execute(mockRequest);
+
+      // Now p2 is faster. Make p2 fail so it falls back to p1
+      p2Fail = true;
+      const res = await router.execute(mockRequest);
+      expect(res).toBe(mockResponse);
+      expect(p2.generateContent).toHaveBeenCalledTimes(2); // failed
+      expect(p1.generateContent).toHaveBeenCalledTimes(2); // succeeded fallback
+    });
+
+    it('should track cachedPromptTokens in router metrics', async () => {
+      const cachedResponse: UnifiedApiResponse = {
+        id: 'res-cached',
+        model: 'test-model',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'cached response' },
+            finishReason: 'stop',
+          },
+        ],
+        usage: {
+          promptTokens: 100,
+          completionTokens: 20,
+          totalTokens: 120,
+          cachedPromptTokens: 80,
+        },
+      };
+
+      const p1 = {
+        id: 'p1',
+        name: 'p1',
+        generateContent: vi.fn().mockResolvedValue(cachedResponse),
+      } as unknown as Provider;
+
+      const router = new Router([p1], circuitBreaker, {
+        strategy: 'failover',
+      });
+
+      await router.execute(mockRequest);
+      const metrics = router.getMetrics();
+      expect(metrics.totalCachedPromptTokens).toBe(80);
+      expect(metrics.providerMetrics.p1.cachedPromptTokens).toBe(80);
+    });
+  });
+
   describe('load-balance strategy', () => {
     it('should rotate between providers', async () => {
       const p1 = createMockProvider('p1');

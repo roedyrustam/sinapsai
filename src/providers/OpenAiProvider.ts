@@ -67,11 +67,26 @@ export class OpenAiProvider implements Provider {
       messages,
     };
 
-    if (request.temperature !== undefined) {
+    const resolvedModel = this.resolveModel(request.model);
+    const isReasoningModel =
+      resolvedModel.startsWith('o1') ||
+      resolvedModel.startsWith('o3') ||
+      resolvedModel.startsWith('o4') ||
+      resolvedModel.includes('reasoner');
+
+    if (request.reasoningEffort) {
+      payload.reasoning_effort = request.reasoningEffort;
+    }
+
+    if (request.temperature !== undefined && !isReasoningModel) {
       payload.temperature = request.temperature;
     }
     if (request.maxTokens !== undefined) {
-      payload.max_tokens = request.maxTokens;
+      if (isReasoningModel) {
+        payload.max_completion_tokens = request.maxTokens;
+      } else {
+        payload.max_tokens = request.maxTokens;
+      }
     }
     if (request.stream) {
       payload.stream = true;
@@ -91,6 +106,9 @@ export class OpenAiProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any): UnifiedApiResponse {
     const choice = data.choices?.[0];
+    const reasoningContent =
+      choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+
     return {
       id: data.id || `openai-${Date.now()}`,
       model: data.model,
@@ -99,6 +117,7 @@ export class OpenAiProvider implements Provider {
           message: {
             role: 'assistant',
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls,
           },
           finishReason: choice?.finish_reason || 'stop',
@@ -109,6 +128,8 @@ export class OpenAiProvider implements Provider {
             promptTokens: data.usage.prompt_tokens || 0,
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
+            cachedPromptTokens:
+              data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
           }
         : undefined,
     };
@@ -172,6 +193,10 @@ export class OpenAiProvider implements Provider {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content:
+                          chunk?.delta?.reasoning ??
+                          chunk?.delta?.reasoning_content ??
+                          null,
                         tool_calls: chunk?.delta?.tool_calls,
                       },
                       finishReason: chunk?.finish_reason || null,

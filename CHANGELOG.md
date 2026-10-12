@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.0.0] - 2026-10-13 — Superintelligence Edition
+### Added
+- **Groq Cloud LPU Integration Hardening**:
+  - Full alignment with Groq Cloud API specifications (`https://console.groq.com/docs/overview`).
+  - Support for Groq high-speed LPU models: `llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, and `llama-3.1-8b-instant`.
+  - Human-readable duration rate-limit header parsing in `src/utils/rateLimit.ts` (`parseDurationMs`) supporting formats like `7.66s`, `2m59.56s`, `1h20m`, and `150ms` (extracting `x-ratelimit-reset-tokens` and `x-ratelimit-reset-requests`).
+  - Automatic parameter sanitization: stripped unsupported `messages[].name` (preventing Groq 400 Bad Request errors) and clamped `temperature: 0` to `1e-8`.
+  - Reasoning support via `reasoning_format: 'parsed'` and extraction of both `message.reasoning` and `<think>` tags into `message.reasoning_content`.
+  - Added `examples/12-groq-lightning-fast-reasoning.ts` with 12 comprehensive unit tests.
+- **Universal Frontier Reasoning Engine**:
+  - Standardized cross-provider chain-of-thought and thinking budgets across all frontier AI models:
+    - **Anthropic Claude 3.7 Sonnet**: Supported `thinkingBudget`, configuring `thinking = { type: 'enabled', budget_tokens }`, enforcing `temperature: 1.0`, allocating `max_tokens > budget_tokens`, and streaming `thinking_delta` into `delta.reasoning_content`.
+    - **OpenAI o1 / o3 / o3-mini / o4**: Added `reasoningEffort: 'low' | 'medium' | 'high'`, mapping to `reasoning_effort` and `max_completion_tokens` (with automatic temperature omission).
+    - **DeepSeek R1 & Groq**: Unified extraction into `message.reasoning_content`.
+    - **Google Gemini 2.0 / 2.5 / 3.x Flash Thinking**: Mapped to native `thinkingConfig`.
+- **Latency-Based Dynamic Routing Strategy (`lowest-latency`)**:
+  - Added `'lowest-latency'` routing mode to `RouterStrategy`.
+  - Dynamically routes requests to the fastest provider based on running average response latency.
+  - Intelligent probe mechanism prioritizing unprobed providers on startup to discover baseline latencies before routing based on moving averages.
+  - Seamless fallback to second-fastest provider if the fastest provider fails or trips its circuit breaker.
+- **KV-Cache & Prompt Caching Optimization Analytics**:
+  - Tracking of `cachedPromptTokens` across providers: Anthropic (`cache_read_input_tokens`), OpenAI (`prompt_tokens_details.cached_tokens`), and Gemini.
+  - Extended in-process telemetry: `totalCachedPromptTokens` in `SinapsMetrics` and `cachedPromptTokens` in `ProviderMetricEntry`, enabling teams to audit 70-90% cloud token cost savings from prompt caching.
+- **Examples & Test Suite**:
+  - Added `examples/13-superintelligence-latency-and-reasoning.ts` demonstrating multi-provider thinking budgets, lowest-latency routing, and KV-cache analytics.
+  - Expanded test suite to 134 tests across 15 test suites with 100% pass rate.
+  - Clean Biome lint validation and production dual ESM/CJS build.
+
 ## [1.7.0] - 2026-10-12
 ### Added
 - **OpenRouter Free Tier Support (`createOpenRouterFreeProvider`)**:

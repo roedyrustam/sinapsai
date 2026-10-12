@@ -54,7 +54,16 @@ export class AnthropicProvider implements Provider {
       messages: [],
     };
 
-    if (request.temperature !== undefined) {
+    if (request.thinkingBudget !== undefined && request.thinkingBudget > 0) {
+      payload.thinking = {
+        type: 'enabled',
+        budget_tokens: request.thinkingBudget,
+      };
+      if (!request.maxTokens || request.maxTokens <= request.thinkingBudget) {
+        payload.max_tokens = request.thinkingBudget + 4096;
+      }
+      payload.temperature = 1.0;
+    } else if (request.temperature !== undefined) {
       payload.temperature = request.temperature;
     }
 
@@ -155,6 +164,7 @@ export class AnthropicProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any): UnifiedApiResponse {
     let text = '';
+    let reasoningContent = '';
     // biome-ignore lint/suspicious/noExplicitAny: anthropic tool calls
     const toolCalls: any[] = [];
 
@@ -162,6 +172,8 @@ export class AnthropicProvider implements Provider {
       for (const block of data.content) {
         if (block.type === 'text') {
           text += block.text;
+        } else if (block.type === 'thinking') {
+          reasoningContent += block.thinking;
         } else if (block.type === 'tool_use') {
           toolCalls.push({
             id: block.id,
@@ -201,6 +213,7 @@ export class AnthropicProvider implements Provider {
           message: {
             role: 'assistant',
             content: text || null,
+            reasoning_content: reasoningContent || null,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },
           finishReason,
@@ -212,6 +225,7 @@ export class AnthropicProvider implements Provider {
             completionTokens: data.usage.output_tokens || 0,
             totalTokens:
               (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+            cachedPromptTokens: data.usage.cache_read_input_tokens || undefined,
           }
         : undefined,
     };
@@ -283,6 +297,20 @@ export class AnthropicProvider implements Provider {
                           delta: {
                             role: 'assistant',
                             content: parsed.delta.text || '',
+                          },
+                          finishReason: null,
+                        },
+                      ],
+                    };
+                  } else if (parsed.delta?.type === 'thinking_delta') {
+                    yield {
+                      id: messageId,
+                      model: payload.model,
+                      choices: [
+                        {
+                          delta: {
+                            role: 'assistant',
+                            reasoning_content: parsed.delta.thinking || '',
                           },
                           finishReason: null,
                         },

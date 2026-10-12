@@ -11,13 +11,13 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-119%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-134%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
 **SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
 
-Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
+Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, perutean latensi terendah (*lowest-latency*), dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
 
 ---
 
@@ -34,8 +34,11 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 | **Privasi Data & Kunci API** | 🔒 **Zero Data Leakage** | 🔒 Langsung | ⚠️ Melalui Gateway Pihak Ketiga | 🔒 Self-hosted |
 | **In-Memory Circuit Breaker** | ✅ **Bawaan** | ❌ Manual coding | ⚠️ Fitur cloud | ⚠️ Retry dasar |
 | **Failover Multi-Provider Otomatis** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
+| **Perutean Latensi Terendah (Lowest Latency)**| ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Fitur cloud | ⚠️ Kustom |
 | **Round-Robin Load Balancing** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
 | **Perutean Biaya Terendah (Lowest Cost)** | ✅ **Bawaan (Dual Token Pricing)** | ❌ Tidak ada | ⚠️ Paket berbayar | ✅ Ya |
+| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude 3.7/Gemini/Groq** | ⚠️ Terfragmentasi | ⚠️ Tidak konsisten | ⚠️ Sebagian |
+| **Penjejakan KV-Cache / Prompt Cache**| ✅ **Bawaan (`cachedPromptTokens`)** | ⚠️ Bervariasi | ⚠️ Berbayar | ⚠️ Sebagian |
 | **Telemetri In-Process (`getMetrics`)** | ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Cloud Dashboard | ⚠️ External DB |
 | **Native TypeScript (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Bervariasi | ❌ Layanan terpisah | ❌ Python |
 
@@ -74,12 +77,16 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 ## ✨ Fitur Utama
 
 - 🌐 **Unified API**: Berkomunikasi dengan berbagai model LLM menggunakan format request & response standar yang kompatibel dengan format OpenAI Chat Completions.
+- 🧠 **Universal Frontier Reasoning Engine**: Kontrol terpadu penalaran mendalam dan Chain-of-Thought di seluruh model Claude 3.7 Sonnet (`thinkingBudget`), OpenAI o1/o3/o4 (`reasoningEffort: 'low' | 'medium' | 'high'`), Groq LPU, DeepSeek R1, dan Gemini Flash Thinking yang otomatis tersaji di `message.reasoning_content`.
+- ⚡ **Perutean Latensi Terendah (`lowest-latency`)**: Secara dinamis mengukur *moving average latency* dan merutekan prompt ke provider tercepat tanpa *cold-start lag*.
+- 💰 **Optimasi KV-Cache & Prompt Caching**: Penjejakan real-time `cachedPromptTokens` pada respons dan `totalCachedPromptTokens` di metrik untuk mengaudit penghematan biaya token 70-90%.
 - 🛠️ **Universal Tool Calling & JSON Mode**: Definisikan fungsi/tools sekali saja dengan format JSON Schema standar (`tools`, `toolChoice`). SinapsAI secara otomatis mengonversikannya ke format XML/tools Anthropic Claude, fungsi Gemini, dan OpenAI.
 - 🛡️ **In-Memory Circuit Breaker**: Mendeteksi lonjakan error provider secara instan dan membuka sirkuit (*Open Circuit*) guna mencegah *cascading failures* dan waktu tunggu (timeout) yang berlebihan.
 - 🔀 **Strategi Perutean Fleksibel**:
   - `failover`: Otomatis beralih ke provider berikutnya secara instan saat provider utama mengalami error / timeout.
+  - `lowest-latency`: Mengurutkan dan mengirimkan permintaan ke provider dengan respon tercepat berdasarkan riwayat latensi rata-rata.
   - `load-balance`: Membagi lalu lintas permintaan secara rotasi (*Round-Robin*) untuk menghindari pembatasan kuota (*Rate Limit 429*).
-  - `lowest-cost`: Mengurutkan dan merutekan permintaan ke provider termurah berdasarkan konfigurasi `costPer1kTokens`.
+  - `lowest-cost`: Mengurutkan dan merutekan permintaan ke provider termurah berdasarkan konfigurasi `costPer1kTokens` & dual pricing.
 - ⚡ **Exponential Backoff & Retries**: Mencoba ulang kegagalan jaringan sementara (429, 5xx) dengan jitter acak sebelum melakukan failover.
 - 💾 **In-Memory Prompt Hash Caching**: Menyimpan cache respons di memori dengan TTL untuk prompt identik sehingga menghemat token dan waktu respons.
 - 🌊 **Dukungan Streaming SSE**: Streaming respons teks *real-time* menggunakan async generator native (`for await...of`).

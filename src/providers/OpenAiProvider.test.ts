@@ -77,6 +77,23 @@ describe('OpenAiProvider', () => {
       expect(result.messages[1].tool_calls).toHaveLength(1);
       expect(result.messages[2].tool_call_id).toBe('call_1');
     });
+
+    it('should format reasoningEffort and use max_completion_tokens without temperature for reasoning models', () => {
+      const request: UnifiedApiRequest = {
+        model: 'o3-mini',
+        messages: [{ role: 'user', content: 'Prove Fermat theorem' }],
+        reasoningEffort: 'high',
+        temperature: 0.7, // should be omitted for o1/o3/o4
+        maxTokens: 4000, // should map to max_completion_tokens
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.reasoning_effort).toBe('high');
+      expect(result.max_completion_tokens).toBe(4000);
+      expect(result.max_tokens).toBeUndefined();
+      expect(result.temperature).toBeUndefined();
+    });
   });
 
   describe('formatResponse', () => {
@@ -133,6 +150,42 @@ describe('OpenAiProvider', () => {
       expect(result.choices[0].message.content).toBe('Short answer.');
       expect(result.choices[0].finishReason).toBe('stop');
       expect(result.usage).toBeUndefined();
+    });
+
+    it('should extract reasoning_content and record cachedPromptTokens from prompt_tokens_details', () => {
+      const reasoningResponse = {
+        id: 'chatcmpl-o3-789',
+        model: 'o3-mini',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Final theorem proof verified.',
+              reasoning_content:
+                'Step 1: Check lemma A. Step 2: Invert matrix...',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 2000,
+          completion_tokens: 450,
+          total_tokens: 2450,
+          prompt_tokens_details: {
+            cached_tokens: 1536,
+          },
+        },
+      };
+
+      const result = provider.formatResponse(reasoningResponse);
+      expect(result.choices[0].message.content).toBe(
+        'Final theorem proof verified.',
+      );
+      expect(result.choices[0].message.reasoning_content).toBe(
+        'Step 1: Check lemma A. Step 2: Invert matrix...',
+      );
+      expect(result.usage?.cachedPromptTokens).toBe(1536);
+      expect(result.usage?.promptTokens).toBe(2000);
     });
   });
 
