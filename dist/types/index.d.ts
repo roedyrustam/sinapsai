@@ -51,6 +51,7 @@ export interface UnifiedApiRequest {
     };
     responseFormat?: ResponseFormat;
     fallbackModels?: string[];
+    thinkingBudget?: number;
 }
 export interface CreateChatCompletionRequestNonStreaming extends Omit<UnifiedApiRequest, 'model' | 'stream'> {
     model?: string;
@@ -116,6 +117,7 @@ export interface CreateEmbeddingRequest {
     input: string | string[];
     user?: string;
     signal?: AbortSignal;
+    dimensions?: number;
 }
 export interface EmbeddingItem {
     index: number;

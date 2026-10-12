@@ -74,6 +74,7 @@ run();
 5. **Dual-Token Pricing (`promptCostPer1k`, `completionCostPer1k`)**: Perhitungan biaya dinamis dan perutean `lowest-cost` otomatis berdasarkan rasio panjang prompt dan token keluaran.
 6. **Adaptive Rate-Limiting & Proactive Throttling**: Ekstraksi header kuota rate-limit (`x-ratelimit-*`, `retry-after`) secara otomatis guna mencegah HTTP 429.
 7. **OpenRouter Free Tier (`createOpenRouterFreeProvider`)**: Integrasi penuh katalog model gratis [OpenRouter](https://openrouter.ai/models?variant=free) dengan biaya $0 otomatis, meta-router `openrouter/free`, rantai fallback model native (`fallbackModels`), header peringkat (`siteUrl`, `siteName`), serta penemuan model gratis live via `OpenRouterProvider.fetchFreeModels()`.
+8. **Generasi Model Google Gemini 2.5 & 3.x (`GEMINI_MODELS`)**: Integrasi katalog model resmi Google AI ([ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models?hl=id)) mencakup `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro`, dan `gemini-3.8-flash`. Dilengkapi konfigurasi extended thinking (`thinkingBudget`), ekstraksi token penalaran (`reasoning_content`), pengaturan keamanan (`safetySettings`), reduksi dimensi MRL embeddings (`dimensions` / `outputDimensionality`), adaptasi header rate-limit, dan penemuan model live via `GeminiProvider.fetchAvailableModels()`.
 
 
 ## Keamanan & Performa

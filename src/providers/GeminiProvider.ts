@@ -6,14 +6,77 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { parseRateLimitHeaders } from '../utils/rateLimit.js';
 import type { Provider } from './Provider.js';
+
+/**
+ * Canonical Gemini Model identifiers as documented in Google AI developer documentation:
+ * Reference: https://ai.google.dev/gemini-api/docs/models?hl=id
+ */
+export const GEMINI_MODELS = {
+  // Flagship & General Multimodal Models
+  FLASH_2_5: 'gemini-2.5-flash',
+  FLASH_LITE_2_5: 'gemini-2.5-flash-lite',
+  PRO_2_5: 'gemini-2.5-pro',
+  FLASH_3_8: 'gemini-3.8-flash',
+  FLASH_3_6: 'gemini-3.6-flash',
+  FLASH_LITE_3_5: 'gemini-3.5-flash-lite',
+  PRO_3_1_PREVIEW: 'gemini-3.1-pro-preview',
+
+  // Auto-updating Managed Aliases
+  FLASH_LATEST: 'gemini-flash-latest',
+  PRO_LATEST: 'gemini-pro-latest',
+
+  // Embeddings Models
+  EMBEDDING_001: 'gemini-embedding-001',
+  EMBEDDING_2: 'gemini-embedding-2',
+  TEXT_EMBEDDING_004: 'text-embedding-004',
+} as const;
+
+export interface GeminiSafetySetting {
+  category:
+    | 'HARM_CATEGORY_HARASSMENT'
+    | 'HARM_CATEGORY_HATE_SPEECH'
+    | 'HARM_CATEGORY_SEXUALLY_EXPLICIT'
+    | 'HARM_CATEGORY_DANGEROUS_CONTENT'
+    | 'HARM_CATEGORY_CIVIC_INTEGRITY'
+    | string;
+  threshold:
+    | 'BLOCK_NONE'
+    | 'BLOCK_LOW_AND_ABOVE'
+    | 'BLOCK_MEDIUM_AND_ABOVE'
+    | 'BLOCK_ONLY_HIGH'
+    | string;
+}
+
+export interface GeminiModelInfo {
+  id: string;
+  displayName: string;
+  description?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  supportedGenerationMethods: string[];
+}
+
+export interface GeminiProviderConfig extends ProviderConfig {
+  /**
+   * Optional safety settings to enforce content moderation thresholds.
+   */
+  safetySettings?: GeminiSafetySetting[];
+
+  /**
+   * Optional default thinking budget in tokens for extended reasoning models
+   * (e.g. Gemini 2.5 Pro / Flash Thinking). Set to 0 to disable thinking.
+   */
+  thinkingBudget?: number;
+}
 
 export class GeminiProvider implements Provider {
   id: string;
   name = 'Gemini';
-  private config: ProviderConfig;
+  private config: GeminiProviderConfig;
 
-  constructor(config: ProviderConfig) {
+  constructor(config: GeminiProviderConfig) {
     this.config = config;
     this.id =
       config.id ||
@@ -44,7 +107,13 @@ export class GeminiProvider implements Provider {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
     }
-    return this.config.defaultModel || model;
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (!model || model === 'default') {
+      return GEMINI_MODELS.FLASH_2_5;
+    }
+    return model;
   }
 
   // Exposed for testing
@@ -125,6 +194,14 @@ export class GeminiProvider implements Provider {
       generationConfig.responseMimeType = 'application/json';
     }
 
+    // Extended Thinking / Reasoning configuration
+    const thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    if (thinkingBudget !== undefined) {
+      generationConfig.thinkingConfig = {
+        thinkingBudget,
+      };
+    }
+
     // biome-ignore lint/suspicious/noExplicitAny: request format varies by provider
     const payload: any = { contents };
     if (systemParts.length > 0) {
@@ -132,6 +209,9 @@ export class GeminiProvider implements Provider {
     }
     if (Object.keys(generationConfig).length > 0) {
       payload.generationConfig = generationConfig;
+    }
+    if (this.config.safetySettings && this.config.safetySettings.length > 0) {
+      payload.safetySettings = this.config.safetySettings;
     }
     if (request.tools) {
       payload.tools = [
@@ -153,12 +233,15 @@ export class GeminiProvider implements Provider {
   public formatResponse(data: any, model: string): UnifiedApiResponse {
     const candidate = data.candidates?.[0];
     let text = '';
+    let reasoningContent = '';
     // biome-ignore lint/suspicious/noExplicitAny: gemini tool calls
     const toolCalls: any[] = [];
 
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
-        if (part.text) {
+        if (part.thought) {
+          reasoningContent += part.text || '';
+        } else if (part.text) {
           text += part.text;
         }
         if (part.functionCall) {
@@ -202,6 +285,7 @@ export class GeminiProvider implements Provider {
           message: {
             role: 'assistant',
             content: text || null,
+            reasoning_content: reasoningContent || undefined,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },
           finishReason,
@@ -277,6 +361,8 @@ export class GeminiProvider implements Provider {
                       delta: {
                         role: 'assistant',
                         content: chunk.choices[0].message.content,
+                        reasoning_content:
+                          chunk.choices[0].message.reasoning_content,
                       },
                       finishReason:
                         chunk.choices[0].finishReason === 'stop' &&
@@ -297,7 +383,12 @@ export class GeminiProvider implements Provider {
       }
 
       const data = await response.json();
-      return this.formatResponse(data, targetModel);
+      const res = this.formatResponse(data, targetModel);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
@@ -339,16 +430,28 @@ export class GeminiProvider implements Provider {
       }
     }
 
-    const payload = isBatch
+    // biome-ignore lint/suspicious/noExplicitAny: Gemini embedding payload
+    const payload: any = isBatch
       ? {
-          requests: inputs.map((text) => ({
-            model: `models/${targetModel}`,
-            content: { parts: [{ text }] },
-          })),
+          requests: inputs.map((text) => {
+            // biome-ignore lint/suspicious/noExplicitAny: request item
+            const reqObj: any = {
+              model: `models/${targetModel}`,
+              content: { parts: [{ text }] },
+            };
+            if (request.dimensions !== undefined) {
+              reqObj.outputDimensionality = request.dimensions;
+            }
+            return reqObj;
+          }),
         }
       : {
           content: { parts: [{ text: inputs[0] }] },
         };
+
+    if (!isBatch && request.dimensions !== undefined) {
+      payload.outputDimensionality = request.dimensions;
+    }
 
     try {
       const response = await fetch(finalUrl, {
@@ -416,5 +519,56 @@ export class GeminiProvider implements Provider {
         clearTimeout(timeoutId);
       }
     }
+  }
+
+  /**
+   * Fetches all available Gemini models directly from Google Generative Language API.
+   * Corresponds to models listed on https://ai.google.dev/gemini-api/docs/models?hl=id
+   */
+  static async fetchAvailableModels(options: {
+    apiKey: string;
+    baseUrl?: string;
+    signal?: AbortSignal;
+  }): Promise<GeminiModelInfo[]> {
+    const baseUrl =
+      options.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+    const response = await fetch(`${baseUrl}/models?key=${options.apiKey}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: options.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Failed to fetch Gemini models (${response.status}): ${errorText}`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      models?: Array<{
+        name: string;
+        baseModelId?: string;
+        version?: string;
+        displayName?: string;
+        description?: string;
+        inputTokenLimit?: number;
+        outputTokenLimit?: number;
+        supportedGenerationMethods?: string[];
+        temperature?: number;
+      }>;
+    };
+
+    return (data.models || []).map((m) => {
+      const id = m.name.replace(/^models\//, '');
+      return {
+        id,
+        displayName: m.displayName || id,
+        description: m.description,
+        inputTokenLimit: m.inputTokenLimit,
+        outputTokenLimit: m.outputTokenLimit,
+        supportedGenerationMethods: m.supportedGenerationMethods || [],
+      };
+    });
   }
 }

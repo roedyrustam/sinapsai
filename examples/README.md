@@ -36,5 +36,8 @@ npx tsx examples/09-circuit-breaker-and-mistral.ts
 
 # 10. OpenRouter Free Tier & Zero-Cost Routing (variant=free)
 OPENROUTER_API_KEY="your-key" npx tsx examples/10-openrouter-free-tier.ts
+
+# 11. Google Gemini 2.5 / 3.x Models, Extended Thinking & MRL Embeddings
+GEMINI_API_KEY="your-key" npx tsx examples/11-gemini-models-and-thinking.ts
 ```
 

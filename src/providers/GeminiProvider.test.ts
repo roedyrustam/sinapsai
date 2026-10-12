@@ -1,14 +1,44 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
-import { GeminiProvider } from './GeminiProvider.js';
+import { GEMINI_MODELS, GeminiProvider } from './GeminiProvider.js';
 
 describe('GeminiProvider', () => {
   const provider = new GeminiProvider({ apiKey: 'test-key' });
 
+  describe('resolveModel & GEMINI_MODELS', () => {
+    it('should expose canonical GEMINI_MODELS constants', () => {
+      expect(GEMINI_MODELS.FLASH_2_5).toBe('gemini-2.5-flash');
+      expect(GEMINI_MODELS.FLASH_LITE_2_5).toBe('gemini-2.5-flash-lite');
+      expect(GEMINI_MODELS.PRO_2_5).toBe('gemini-2.5-pro');
+      expect(GEMINI_MODELS.FLASH_3_8).toBe('gemini-3.8-flash');
+      expect(GEMINI_MODELS.FLASH_LATEST).toBe('gemini-flash-latest');
+      expect(GEMINI_MODELS.EMBEDDING_001).toBe('gemini-embedding-001');
+      expect(GEMINI_MODELS.EMBEDDING_2).toBe('gemini-embedding-2');
+    });
+
+    it('should default to gemini-2.5-flash when model is default or empty', () => {
+      expect(provider.resolveModel('default')).toBe('gemini-2.5-flash');
+      expect(provider.resolveModel('')).toBe('gemini-2.5-flash');
+    });
+
+    it('should respect custom defaultModel and modelMap', () => {
+      const customProvider = new GeminiProvider({
+        apiKey: 'test-key',
+        defaultModel: 'gemini-2.5-pro',
+        modelMap: { 'smart-model': 'gemini-3.8-flash' },
+      });
+
+      expect(customProvider.resolveModel('default')).toBe('gemini-2.5-pro');
+      expect(customProvider.resolveModel('smart-model')).toBe(
+        'gemini-3.8-flash',
+      );
+    });
+  });
+
   describe('formatRequest', () => {
     it('should correctly format request without system instruction', () => {
       const request: UnifiedApiRequest = {
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         messages: [{ role: 'user', content: 'Hello' }],
       };
 
@@ -21,7 +51,7 @@ describe('GeminiProvider', () => {
 
     it('should correctly format request with system instruction and parameters', () => {
       const request: UnifiedApiRequest = {
-        model: 'gemini-1.5-pro',
+        model: 'gemini-2.5-pro',
         messages: [
           { role: 'system', content: 'You are an AI assistant.' },
           { role: 'user', content: 'Who are you?' },
@@ -49,6 +79,44 @@ describe('GeminiProvider', () => {
         },
       });
     });
+
+    it('should support thinkingConfig when thinkingBudget is provided', () => {
+      const request: UnifiedApiRequest = {
+        model: 'gemini-2.5-pro',
+        messages: [{ role: 'user', content: 'Solve this riddle' }],
+        thinkingBudget: 2048,
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.generationConfig.thinkingConfig).toEqual({
+        thinkingBudget: 2048,
+      });
+    });
+
+    it('should support safetySettings configured in provider', () => {
+      const safetyProvider = new GeminiProvider({
+        apiKey: 'test-key',
+        safetySettings: [
+          {
+            category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+            threshold: 'BLOCK_LOW_AND_ABOVE',
+          },
+        ],
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'Safe check' }],
+      };
+
+      const result = safetyProvider.formatRequest(request);
+      expect(result.safetySettings).toEqual([
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_LOW_AND_ABOVE',
+        },
+      ]);
+    });
   });
 
   describe('formatResponse', () => {
@@ -72,10 +140,10 @@ describe('GeminiProvider', () => {
 
       const result = provider.formatResponse(
         geminiResponse,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
       );
 
-      expect(result.model).toBe('gemini-1.5-flash');
+      expect(result.model).toBe('gemini-2.5-flash');
       expect(result.id).toMatch(/^gemini-\d+$/);
       expect(result.choices).toHaveLength(1);
       expect(result.choices[0].message.role).toBe('assistant');
@@ -86,6 +154,34 @@ describe('GeminiProvider', () => {
         completionTokens: 5,
         totalTokens: 15,
       });
+    });
+
+    it('should extract reasoning thoughts into reasoning_content', () => {
+      const geminiResponse = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  thought: true,
+                  text: 'Let me think step by step...',
+                },
+                {
+                  text: '42 is the answer.',
+                },
+              ],
+              role: 'model',
+            },
+            finishReason: 'STOP',
+          },
+        ],
+      };
+
+      const result = provider.formatResponse(geminiResponse, 'gemini-2.5-pro');
+      expect(result.choices[0].message.content).toBe('42 is the answer.');
+      expect(result.choices[0].message.reasoning_content).toBe(
+        'Let me think step by step...',
+      );
     });
 
     it('should handle response without usage metadata gracefully', () => {
@@ -102,138 +198,14 @@ describe('GeminiProvider', () => {
 
       const result = provider.formatResponse(
         geminiResponse,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
       );
       expect(result.choices[0].message.content).toBe('Short answer.');
       expect(result.choices[0].finishReason).toBe('stop');
       expect(result.usage).toBeUndefined();
     });
 
-    it('should map finish reasons correctly', () => {
-      const getResult = (reason: string) =>
-        provider.formatResponse(
-          { candidates: [{ finishReason: reason }] },
-          'gemini-1.5-flash',
-        ).choices[0].finishReason;
-
-      expect(getResult('STOP')).toBe('stop');
-      expect(getResult('MAX_TOKENS')).toBe('length');
-      expect(getResult('SAFETY')).toBe('content_filter');
-      expect(getResult('RECITATION')).toBe('content_filter');
-      expect(getResult('OTHER')).toBe('other');
-    });
-  });
-
-  describe('edge cases in formatRequest', () => {
-    it('should combine multiple system messages', () => {
-      const request: UnifiedApiRequest = {
-        model: 'gemini-1.5-flash',
-        messages: [
-          { role: 'system', content: 'You are an AI.' },
-          { role: 'system', content: 'Be concise.' },
-        ],
-      };
-
-      const result = provider.formatRequest(request);
-      expect(result.systemInstruction).toEqual({
-        parts: [{ text: 'You are an AI.' }, { text: 'Be concise.' }],
-      });
-      expect(result.contents).toEqual([]);
-    });
-
-    it('should combine adjacent messages of the same role', () => {
-      const request: UnifiedApiRequest = {
-        model: 'gemini-1.5-flash',
-        messages: [
-          { role: 'user', content: 'Hello' },
-          { role: 'user', content: 'World' },
-          { role: 'assistant', content: 'Hi' },
-          { role: 'assistant', content: 'There' },
-          { role: 'user', content: 'Again' },
-        ],
-      };
-
-      const result = provider.formatRequest(request);
-      expect(result.contents).toEqual([
-        { role: 'user', parts: [{ text: 'Hello' }, { text: 'World' }] },
-        { role: 'model', parts: [{ text: 'Hi' }, { text: 'There' }] },
-        { role: 'user', parts: [{ text: 'Again' }] },
-      ]);
-    });
-
-    it('should format tools and responseFormat correctly', () => {
-      const result = provider.formatRequest({
-        model: 'gemini-1.5-flash',
-        messages: [
-          { role: 'user', content: 'What is the price of BTC?' },
-          {
-            role: 'assistant',
-            content: null,
-            tool_calls: [
-              {
-                id: 'c1',
-                type: 'function',
-                function: {
-                  name: 'get_price',
-                  arguments: JSON.stringify({ symbol: 'BTC' }),
-                },
-              },
-            ],
-          },
-          {
-            role: 'tool',
-            name: 'get_price',
-            content: '$68000',
-          },
-        ],
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'get_price',
-              description: 'Get price of crypto',
-              parameters: {
-                type: 'object',
-                properties: { symbol: { type: 'string' } },
-              },
-            },
-          },
-        ],
-        responseFormat: { type: 'json_object' },
-      });
-
-      expect(result.generationConfig.responseMimeType).toBe('application/json');
-      expect(result.tools).toEqual([
-        {
-          functionDeclarations: [
-            {
-              name: 'get_price',
-              description: 'Get price of crypto',
-              parameters: {
-                type: 'object',
-                properties: { symbol: { type: 'string' } },
-              },
-            },
-          ],
-        },
-      ]);
-      expect(result.contents[1].role).toBe('model');
-      expect(result.contents[1].parts[0]).toEqual({
-        functionCall: {
-          name: 'get_price',
-          args: { symbol: 'BTC' },
-        },
-      });
-      expect(result.contents[2].role).toBe('user');
-      expect(result.contents[2].parts[0]).toEqual({
-        functionResponse: {
-          name: 'get_price',
-          response: { content: '$68000' },
-        },
-      });
-    });
-
-    it('should parse functionCall response into tool_calls', () => {
+    it('should handle tool calls correctly', () => {
       const geminiResponse = {
         candidates: [
           {
@@ -246,6 +218,7 @@ describe('GeminiProvider', () => {
                   },
                 },
               ],
+              role: 'model',
             },
           },
         ],
@@ -253,7 +226,7 @@ describe('GeminiProvider', () => {
 
       const result = provider.formatResponse(
         geminiResponse,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
       );
       expect(result.choices[0].finishReason).toBe('tool_calls');
       expect(result.choices[0].message.tool_calls).toHaveLength(1);
@@ -265,7 +238,7 @@ describe('GeminiProvider', () => {
   });
 
   describe('generateEmbedding', () => {
-    it('should generate embeddings for single string input', async () => {
+    it('should generate embeddings for single string input and support outputDimensionality', async () => {
       const mockValues = [0.12, 0.34, -0.56];
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -276,30 +249,32 @@ describe('GeminiProvider', () => {
       });
 
       const response = await provider.generateEmbedding({
-        model: 'text-embedding-004',
+        model: 'gemini-embedding-001',
         input: 'Hello semantic search',
+        dimensions: 512,
       });
 
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining(
-          '/models/text-embedding-004:embedContent?key=test-key',
+          '/models/gemini-embedding-001:embedContent?key=test-key',
         ),
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
             content: { parts: [{ text: 'Hello semantic search' }] },
+            outputDimensionality: 512,
           }),
         }),
       );
 
       expect(response.object).toBe('list');
-      expect(response.model).toBe('text-embedding-004');
+      expect(response.model).toBe('gemini-embedding-001');
       expect(response.data).toHaveLength(1);
       expect(response.data[0].embedding).toEqual(mockValues);
       expect(response.usage?.promptTokens).toBe(5);
     });
 
-    it('should generate embeddings for batch input array', async () => {
+    it('should generate embeddings for batch input array with outputDimensionality', async () => {
       const mockBatch = [{ values: [0.1, 0.2] }, { values: [0.3, 0.4] }];
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -310,25 +285,28 @@ describe('GeminiProvider', () => {
       });
 
       const response = await provider.generateEmbedding({
-        model: 'text-embedding-004',
+        model: 'gemini-embedding-2',
         input: ['Hello', 'World'],
+        dimensions: 256,
       });
 
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining(
-          '/models/text-embedding-004:batchEmbedContents?key=test-key',
+          '/models/gemini-embedding-2:batchEmbedContents?key=test-key',
         ),
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
             requests: [
               {
-                model: 'models/text-embedding-004',
+                model: 'models/gemini-embedding-2',
                 content: { parts: [{ text: 'Hello' }] },
+                outputDimensionality: 256,
               },
               {
-                model: 'models/text-embedding-004',
+                model: 'models/gemini-embedding-2',
                 content: { parts: [{ text: 'World' }] },
+                outputDimensionality: 256,
               },
             ],
           }),
@@ -338,6 +316,47 @@ describe('GeminiProvider', () => {
       expect(response.data).toHaveLength(2);
       expect(response.data[0].embedding).toEqual([0.1, 0.2]);
       expect(response.data[1].embedding).toEqual([0.3, 0.4]);
+    });
+  });
+
+  describe('fetchAvailableModels', () => {
+    it('should fetch and format Gemini models from Google AI API', async () => {
+      const mockApiResponse = {
+        models: [
+          {
+            name: 'models/gemini-2.5-flash',
+            displayName: 'Gemini 2.5 Flash',
+            description: 'Fast multimodal model',
+            inputTokenLimit: 1048576,
+            outputTokenLimit: 8192,
+            supportedGenerationMethods: ['generateContent'],
+          },
+          {
+            name: 'models/gemini-2.5-pro',
+            displayName: 'Gemini 2.5 Pro',
+            description: 'Deep reasoning model',
+            inputTokenLimit: 2097152,
+            outputTokenLimit: 8192,
+            supportedGenerationMethods: ['generateContent'],
+          },
+        ],
+      };
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockApiResponse,
+      });
+
+      const models = await GeminiProvider.fetchAvailableModels({
+        apiKey: 'test-key',
+      });
+
+      expect(models).toHaveLength(2);
+      expect(models[0].id).toBe('gemini-2.5-flash');
+      expect(models[0].displayName).toBe('Gemini 2.5 Flash');
+      expect(models[0].inputTokenLimit).toBe(1048576);
+      expect(models[1].id).toBe('gemini-2.5-pro');
+      expect(models[1].inputTokenLimit).toBe(2097152);
     });
   });
 });

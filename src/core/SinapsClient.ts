@@ -78,6 +78,7 @@ export class SinapsClient {
           toolChoice: request.toolChoice,
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
+          thinkingBudget: request.thinkingBudget,
         };
         return this.router.execute(fullReq);
       }) as {
