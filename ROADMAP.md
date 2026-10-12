@@ -35,4 +35,14 @@
 - [x] In-process Cache Purge API (`client.clearCache()`).
 - [x] 100% Biome Clean & 108/108 Tests Passed.
 
+## Phase 5: Frontier Model Expansion & Zero-Cost Routing (v1.7.0) - *Completed*
+- [x] Integrasi OpenRouter Free Models Tier (`createOpenRouterFreeProvider`, penjejakan biaya $0 otomatis, rantai fallback models native, header peringkat leaderboard OpenRouter, live discovery model).
+- [x] Integrasi Resmi Model Google Gemini 2.5 & 3.x (`GEMINI_MODELS`: `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro`, `gemini-3.8-flash`, `gemini-flash-latest`, `gemini-embedding-001`, `gemini-embedding-2`).
+- [x] Extended Thinking & Reasoning Budget Gemini (`thinkingBudget` -> `thinkingConfig`, ekstraksi token penalaran ke `message.reasoning_content`).
+- [x] Pengaturan Keamanan Gemini (`safetySettings` / `GeminiSafetySetting[]`).
+- [x] MRL Embeddings dengan reduksi dimensi vektor (`dimensions` -> `outputDimensionality`).
+- [x] Ekstraksi Header Rate-Limit Gemini untuk proactive throttling.
+- [x] Penemuan Model Live Gemini (`GeminiProvider.fetchAvailableModels()`).
+- [x] 119/119 Tests Passed, 100% Biome Clean, Siap Rilis ke NPM v1.7.0.
+
 

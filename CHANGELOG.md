@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.7.0] - 2026-10-12
+### Added
+- **OpenRouter Free Tier Support (`createOpenRouterFreeProvider`)**:
+  - Full integration with OpenRouter's Free Models catalog (`https://openrouter.ai/models?variant=free`).
+  - Automatic zero-cost token accounting (`costPer1kTokens: 0`, `promptCostPer1k: 0`, `completionCostPer1k: 0`).
+  - Meta-router default model `openrouter/free` and native fallback model chains via `fallbackModels` payload array parameter.
+  - Attribution headers for OpenRouter leaderboard ranking (`siteUrl` mapped to `HTTP-Referer`, `siteName` mapped to `X-Title`).
+  - Dynamic model discovery method `OpenRouterProvider.fetchFreeModels()` directly querying `/models` API.
+  - Helper functions and constants: `createOpenRouterFreeProvider()`, `isOpenRouterFreeModel()`, `OPENROUTER_FREE_MODELS`.
+  - Added runnable example `examples/10-openrouter-free-tier.ts`.
+- **Google Gemini 2.5 & 3.x Models Integration (`GEMINI_MODELS`)**:
+  - Official model catalog alignment with Google AI Developer documentation (`https://ai.google.dev/gemini-api/docs/models?hl=id`): `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro`, `gemini-3.8-flash`, `gemini-flash-latest`, `gemini-pro-latest`, `gemini-embedding-001`, `gemini-embedding-2`.
+  - Intelligent default model resolution upgraded to `gemini-2.5-flash`.
+  - Extended thinking / reasoning support (`thinkingBudget`) mapped to Gemini's `generationConfig.thinkingConfig`.
+  - Automatic candidate thought extraction (`thought: true`) mapped directly into `message.reasoning_content`.
+  - Custom safety threshold filtering (`safetySettings` / `GeminiSafetySetting[]`).
+  - Matryoshka Representation Learning (MRL) embeddings support with dynamic dimensionality reduction (`dimensions` mapped to `outputDimensionality`).
+  - Rate limit header extraction (`parseRateLimitHeaders`) for proactive throttling.
+  - Live model discovery method `GeminiProvider.fetchAvailableModels()`.
+  - Added runnable example `examples/11-gemini-models-and-thinking.ts`.
+- **Test Suite Expansion**: Total tests increased from 108 to 119 across 15 test suites with 100% pass rate.
+
 ## [1.6.0] - 2026-10-12
 ### Added
 - **Native Mistral AI Provider (`MistralProvider`)**: First-class support for Mistral AI models (`mistral-large-latest`, `codestral-latest`, `mistral-embed`) including chat completions, SSE streaming, tool calling, JSON schema enforcement, and rate limit extraction.
