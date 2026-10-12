@@ -1,0 +1,53 @@
+name: Auto Publish to NPM
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Check & Publish to NPM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Tests
+        run: npm test
+
+      - name: Build Distribution Bundle
+        run: npm run build
+
+      - name: Publish to NPM if Version Bumped
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view sinapsai version 2>/dev/null || echo "0.0.0")
+          echo "Current package.json version: $CURRENT_VERSION"
+          echo "Published npm registry version: $PUBLISHED_VERSION"
+
+          if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
+            echo "🚀 New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
+            npm publish --access public --provenance
+            echo "✅ Successfully published sinapsai@$CURRENT_VERSION to NPM!"
+          else
+            echo "ℹ️ Version $CURRENT_VERSION is already published on NPM. Skipping publish."
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
