@@ -25,6 +25,8 @@ jobs:
           node-version: 20.x
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install Dependencies
         run: npm ci
@@ -37,6 +39,16 @@ jobs:
 
       - name: Publish to NPM if Version Bumped
         run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "❌ ERROR: Secret NPM_TOKEN tidak ditemukan atau bernilai kosong di GitHub Secrets!"
+            echo "Silakan buka: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "Dan tambahkan secret bernama NPM_TOKEN berisi token Automation dari npmjs.com"
+            exit 1
+          fi
+
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm whoami --registry=https://registry.npmjs.org/ || true
+
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PUBLISHED_VERSION=$(npm view sinapsai version 2>/dev/null || echo "0.0.0")
           echo "Current package.json version: $CURRENT_VERSION"
@@ -51,3 +63,4 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
