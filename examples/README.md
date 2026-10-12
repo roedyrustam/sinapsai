@@ -39,5 +39,8 @@ OPENROUTER_API_KEY="your-key" npx tsx examples/10-openrouter-free-tier.ts
 
 # 11. Google Gemini 2.5 / 3.x Models, Extended Thinking & MRL Embeddings
 GEMINI_API_KEY="your-key" npx tsx examples/11-gemini-models-and-thinking.ts
+
+# 12. Groq LPU Ultra-Fast Inference, Reasoning Models & Duration Rate Limits
+GROQ_API_KEY="your-key" npx tsx examples/12-groq-lightning-fast-reasoning.ts
 ```
 

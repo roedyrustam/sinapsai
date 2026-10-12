@@ -33,7 +33,13 @@ export interface ChatMessage {
     tool_calls?: ToolCall[];
 }
 export interface ResponseFormat {
-    type: 'text' | 'json_object';
+    type: 'text' | 'json_object' | 'json_schema';
+    json_schema?: {
+        name: string;
+        schema: Record<string, unknown>;
+        strict?: boolean;
+        description?: string;
+    };
 }
 export interface UnifiedApiRequest {
     model: string;

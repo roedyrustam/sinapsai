@@ -497,6 +497,67 @@ console.log(response.choices[0].message.content);
 
 ---
 
+### 13. Groq LPU Ultra-Fast Inference & Reasoning Integration
+
+Harness the raw inference speed of [GroqCloud LPUs](https://console.groq.com/docs/overview) (~500+ tokens/sec) with built-in reasoning support, JSON schema structured outputs, and automatic duration rate-limit header tracking:
+
+- **Ultra-Fast Production Models**: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`.
+- **Reasoning Tokens Extraction**: Automatically sets `reasoning_format: 'parsed'` and surfaces the thought chain in `choice.message.reasoning_content` (and streaming `delta.reasoning_content`). Supports raw `<think>...</think>` fallback parsing.
+- **Groq Duration Rate Limit Parsing**: Handles Groq's distinctive duration headers (`x-ratelimit-reset-tokens: 7.66s`, `x-ratelimit-reset-requests: 2m59.56s`) to give exact millisecond precision for proactive throttling and `onRateLimitWarning` hooks.
+- **Strict Compatibility**: Automatically strips unsupported fields (`messages[].name`) that cause Groq 400 errors and safely clamps `temperature: 0` to `1e-8` per Groq documentation.
+
+```typescript
+import { SinapsClient, GroqProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  strategy: 'failover',
+  providers: [
+    new GroqProvider({
+      apiKey: process.env.GROQ_API_KEY!,
+      defaultModel: 'llama-3.3-70b-versatile',
+      modelMap: {
+        'fast-llm': 'llama-3.1-8b-instant',
+        'reasoner': 'openai/gpt-oss-20b',
+      },
+    }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+
+// 1. Complex reasoning with explicit thought chain extraction
+const reasoningResponse = await client.chat.completions.create({
+  model: 'reasoner',
+  messages: [{ role: 'user', content: 'Which is larger: 9.11 or 9.9?' }],
+  thinkingBudget: 1024,
+});
+
+console.log('Reasoning:', reasoningResponse.choices[0].message.reasoning_content);
+console.log('Answer:', reasoningResponse.choices[0].message.content);
+
+// 2. Structured Outputs with JSON Schema
+const schemaResponse = await client.chat.completions.create({
+  model: 'llama-3.3-70b-versatile',
+  messages: [{ role: 'user', content: 'Extract name and role for Alice, Tech Lead' }],
+  responseFormat: {
+    type: 'json_schema',
+    json_schema: {
+      name: 'user_profile',
+      strict: true,
+      schema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          role: { type: 'string' },
+        },
+        required: ['name', 'role'],
+      },
+    },
+  },
+});
+```
+
+---
+
 ## 🧩 Supported Providers
 
 | Provider | Exported Class | Options Supported |
@@ -506,7 +567,7 @@ console.log(response.choices[0].message.content);
 | **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, reasoning tokens (`reasoning_content`) |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0) |
-| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
+| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Custom / On-Prem** | `Provider` (Interface) | Custom implementations for vLLM, LocalAI, TGI, etc. |
 

@@ -785,6 +785,41 @@ var SinapsClient = class {
 };
 
 // src/utils/rateLimit.ts
+function parseDurationMs(durationStr) {
+  const trimmed = durationStr.trim();
+  if (!trimmed) return void 0;
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const val = Number.parseFloat(trimmed);
+    return Number.isNaN(val) ? void 0 : Math.round(val * 1e3);
+  }
+  let totalMs = 0;
+  let matched = false;
+  const regex = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
+  let match;
+  while ((match = regex.exec(trimmed)) !== null) {
+    matched = true;
+    const value = Number.parseFloat(match[1]);
+    const unit = match[2];
+    switch (unit) {
+      case "ms":
+        totalMs += value;
+        break;
+      case "s":
+        totalMs += value * 1e3;
+        break;
+      case "m":
+        totalMs += value * 60 * 1e3;
+        break;
+      case "h":
+        totalMs += value * 3600 * 1e3;
+        break;
+      case "d":
+        totalMs += value * 86400 * 1e3;
+        break;
+    }
+  }
+  return matched ? Math.round(totalMs) : void 0;
+}
 function parseRateLimitHeaders(headers) {
   if (!headers) return void 0;
   const reqStr = headers.get("x-ratelimit-remaining-requests") || headers.get("anthropic-ratelimit-requests-remaining") || headers.get("ratelimit-remaining");
@@ -805,6 +840,14 @@ function parseRateLimitHeaders(headers) {
     const parsedSec = Number.parseFloat(retryAfter);
     if (!Number.isNaN(parsedSec)) {
       resetMs = Math.round(parsedSec * 1e3);
+    }
+  } else {
+    const resetTokensHeader = headers.get("x-ratelimit-reset-tokens");
+    const resetRequestsHeader = headers.get("x-ratelimit-reset-requests");
+    if (resetTokensHeader) {
+      resetMs = parseDurationMs(resetTokensHeader);
+    } else if (resetRequestsHeader) {
+      resetMs = parseDurationMs(resetRequestsHeader);
     }
   }
   if (remainingRequests === void 0 && remainingTokens === void 0 && resetMs === void 0) {
@@ -1738,7 +1781,13 @@ var GroqProvider = class {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
     }
-    return this.config.defaultModel || model;
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (!model || model === "default") {
+      return "llama-3.3-70b-versatile";
+    }
+    return model;
   }
   formatRequest(request) {
     const messages = request.messages.map((m) => {
@@ -1746,7 +1795,9 @@ var GroqProvider = class {
         role: m.role,
         content: m.content
       };
-      if (m.name) msg.name = m.name;
+      if (m.reasoning_content) {
+        msg.reasoning_content = m.reasoning_content;
+      }
       if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
       return msg;
@@ -1756,10 +1807,14 @@ var GroqProvider = class {
       messages
     };
     if (request.temperature !== void 0) {
-      payload.temperature = request.temperature;
+      payload.temperature = request.temperature === 0 ? 1e-8 : request.temperature;
     }
     if (request.maxTokens !== void 0) {
       payload.max_tokens = request.maxTokens;
+      payload.max_completion_tokens = request.maxTokens;
+    }
+    if (request.thinkingBudget !== void 0) {
+      payload.reasoning_format = "parsed";
     }
     if (request.stream) {
       payload.stream = true;
@@ -1778,6 +1833,15 @@ var GroqProvider = class {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data) {
     const choice = data.choices?.[0];
+    let content = choice?.message?.content ?? null;
+    let reasoningContent = choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+    if (!reasoningContent && typeof content === "string" && content.includes("<think>")) {
+      const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
+      if (thinkMatch) {
+        reasoningContent = thinkMatch[1].trim();
+        content = content.replace(/<think>[\s\S]*?<\/think>/, "").trim();
+      }
+    }
     return {
       id: data.id || `groq-${Date.now()}`,
       model: data.model,
@@ -1785,7 +1849,8 @@ var GroqProvider = class {
         {
           message: {
             role: "assistant",
-            content: choice?.message?.content ?? null,
+            content,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
@@ -1850,6 +1915,7 @@ var GroqProvider = class {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content: chunk?.delta?.reasoning ?? chunk?.delta?.reasoning_content ?? null,
                         tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null

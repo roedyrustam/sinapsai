@@ -499,6 +499,67 @@ console.log(response.choices[0].message.content);
 
 ---
 
+### 13. Integrasi Inferensi Kilat & Reasoning Groq LPU
+
+Manfaatkan kecepatan inferensi ekstrem dari [GroqCloud LPU](https://console.groq.com/docs/overview) (~500+ token/detik) dengan dukungan penalaran bawaan, output terstruktur JSON schema, dan pelacakan header batas laju durasi otomatis:
+
+- **Model Produksi Berkecepatan Tinggi**: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`.
+- **Ekstraksi Token Penalaran (Reasoning)**: Mengatur `reasoning_format: 'parsed'` secara otomatis dan menyajikan rantai pemikiran ke `choice.message.reasoning_content` (serta chunk streaming `delta.reasoning_content`). Mendukung fallback parsing tag `<think>...</think>`.
+- **Parsing Header Rate Limit Durasi Groq**: Membaca header durasi khas Groq (`x-ratelimit-reset-tokens: 7.66s`, `x-ratelimit-reset-requests: 2m59.56s`) dengan presisi milidetik untuk throttling proaktif dan hook `onRateLimitWarning`.
+- **Kompatibilitas Ketat**: Menghapus otomatis parameter yang tidak didukung (`messages[].name`) yang memicu error 400 di Groq, serta membatasi nilai `temperature: 0` menjadi `1e-8` sesuai pedoman resmi dokumentasi Groq.
+
+```typescript
+import { SinapsClient, GroqProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  strategy: 'failover',
+  providers: [
+    new GroqProvider({
+      apiKey: process.env.GROQ_API_KEY!,
+      defaultModel: 'llama-3.3-70b-versatile',
+      modelMap: {
+        'fast-llm': 'llama-3.1-8b-instant',
+        'reasoner': 'openai/gpt-oss-20b',
+      },
+    }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+
+// 1. Penalaran mendalam dengan ekstraksi rantai pemikiran eksplisit
+const reasoningResponse = await client.chat.completions.create({
+  model: 'reasoner',
+  messages: [{ role: 'user', content: 'Manakah yang lebih besar: 9.11 atau 9.9?' }],
+  thinkingBudget: 1024,
+});
+
+console.log('Penalaran:', reasoningResponse.choices[0].message.reasoning_content);
+console.log('Jawaban:', reasoningResponse.choices[0].message.content);
+
+// 2. Structured Outputs dengan JSON Schema
+const schemaResponse = await client.chat.completions.create({
+  model: 'llama-3.3-70b-versatile',
+  messages: [{ role: 'user', content: 'Ekstrak nama dan jabatan: Alice, Tech Lead' }],
+  responseFormat: {
+    type: 'json_schema',
+    json_schema: {
+      name: 'user_profile',
+      strict: true,
+      schema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          role: { type: 'string' },
+        },
+        required: ['name', 'role'],
+      },
+    },
+  },
+});
+```
+
+---
+
 ## 🧩 Penyedia yang Didukung (Providers)
 
 | Provider | Kelas Ekspor | Parameter Tambahan |
@@ -508,7 +569,7 @@ console.log(response.choices[0].message.content);
 | **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, token penalaran (`reasoning_content`) |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0) |
-| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
+| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, ekstraksi reasoning (`reasoning_format: 'parsed'`, `reasoning_content`), durasi rate limit (`7.66s`, `2m59.56s`), penyesuaian suhu, sanitasi nama pesan |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Custom / On-Prem** | `Provider` (Interface) | Implementasi mandiri untuk vLLM, LocalAI, TGI, dll. |
 

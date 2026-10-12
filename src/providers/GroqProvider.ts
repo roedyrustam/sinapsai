@@ -43,7 +43,13 @@ export class GroqProvider implements Provider {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
     }
-    return this.config.defaultModel || model;
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (!model || model === 'default') {
+      return 'llama-3.3-70b-versatile';
+    }
+    return model;
   }
 
   public formatRequest(request: UnifiedApiRequest) {
@@ -53,7 +59,11 @@ export class GroqProvider implements Provider {
         role: m.role,
         content: m.content,
       };
-      if (m.name) msg.name = m.name;
+      if (m.reasoning_content) {
+        msg.reasoning_content = m.reasoning_content;
+      }
+      // Note: Groq official documentation explicitly states messages[].name
+      // is unsupported and causes a 400 error. Name must be omitted.
       if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
       return msg;
@@ -65,12 +75,22 @@ export class GroqProvider implements Provider {
       messages,
     };
 
+    // Groq temperature clamp: 0 is converted to 1e-8 per documentation to avoid edge case errors
     if (request.temperature !== undefined) {
-      payload.temperature = request.temperature;
+      payload.temperature =
+        request.temperature === 0 ? 1e-8 : request.temperature;
     }
+
     if (request.maxTokens !== undefined) {
       payload.max_tokens = request.maxTokens;
+      // Some Groq reasoning models recommend max_completion_tokens
+      payload.max_completion_tokens = request.maxTokens;
     }
+
+    if (request.thinkingBudget !== undefined) {
+      payload.reasoning_format = 'parsed';
+    }
+
     if (request.stream) {
       payload.stream = true;
     }
@@ -89,6 +109,23 @@ export class GroqProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any): UnifiedApiResponse {
     const choice = data.choices?.[0];
+    let content = choice?.message?.content ?? null;
+    let reasoningContent =
+      choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+
+    // Handle models outputting raw <think>...</think> in content if not pre-parsed
+    if (
+      !reasoningContent &&
+      typeof content === 'string' &&
+      content.includes('<think>')
+    ) {
+      const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
+      if (thinkMatch) {
+        reasoningContent = thinkMatch[1].trim();
+        content = content.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+      }
+    }
+
     return {
       id: data.id || `groq-${Date.now()}`,
       model: data.model,
@@ -96,7 +133,8 @@ export class GroqProvider implements Provider {
         {
           message: {
             role: 'assistant',
-            content: choice?.message?.content ?? null,
+            content,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls,
           },
           finishReason: choice?.finish_reason || 'stop',
@@ -170,6 +208,10 @@ export class GroqProvider implements Provider {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content:
+                          chunk?.delta?.reasoning ??
+                          chunk?.delta?.reasoning_content ??
+                          null,
                         tool_calls: chunk?.delta?.tool_calls,
                       },
                       finishReason: chunk?.finish_reason || null,
