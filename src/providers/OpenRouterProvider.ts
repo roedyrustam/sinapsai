@@ -7,28 +7,133 @@ import type {
 import { parseRateLimitHeaders } from '../utils/rateLimit.js';
 import type { Provider } from './Provider.js';
 
+export interface OpenRouterProviderConfig extends ProviderConfig {
+  /**
+   * Optional site URL sent in the `HTTP-Referer` header for rankings on openrouter.ai.
+   */
+  siteUrl?: string;
+
+  /**
+   * Optional site/app title sent in the `X-Title` header for rankings on openrouter.ai.
+   */
+  siteName?: string;
+
+  /**
+   * Optional ordered list of fallback models sent in OpenRouter's native `models` parameter.
+   * If the primary model fails (e.g. rate limit 429, downtime), OpenRouter iterates through these models in order.
+   * Ideal for chaining free models (e.g. ['openrouter/free', 'google/gemma-4-31b-it:free']).
+   */
+  fallbackModels?: string[];
+
+  /**
+   * When true, explicitly configures OpenRouter for Free Tier usage:
+   * - Sets provider name to 'OpenRouter (Free)' (if name not customized)
+   * - Defaults model to 'openrouter/free'
+   * - Defaults costPer1kTokens, promptCostPer1k, and completionCostPer1k to 0
+   */
+  isFreeTier?: boolean;
+}
+
+export interface OpenRouterFreeProviderConfig
+  extends Omit<
+    OpenRouterProviderConfig,
+    'costPer1kTokens' | 'promptCostPer1k' | 'completionCostPer1k'
+  > {
+  /**
+   * Optional preferred free model (defaults to 'openrouter/free').
+   * Any model ending in ':free' or 'openrouter/free'.
+   */
+  model?: string;
+}
+
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  description?: string;
+  contextLength?: number;
+  pricing?: {
+    prompt: string | number;
+    completion: string | number;
+  };
+  supportedParameters?: string[];
+  isFree: boolean;
+}
+
+/**
+ * Curated list of verified OpenRouter free models ($0 pricing / :free variant).
+ * Reference: https://openrouter.ai/models?variant=free
+ */
+export const OPENROUTER_FREE_MODELS = [
+  'openrouter/free',
+  'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'thinkingmachines/inkling:free',
+  'thinkingmachines/inkling-small:free',
+  'cohere/north-mini-code:free',
+  'liquid/lfm-2.5-2.6b:free',
+  'apodex/apodex-1.1-mini:free',
+] as const;
+
+/**
+ * Checks whether a given model identifier belongs to OpenRouter's free tier.
+ */
+export function isOpenRouterFreeModel(model: string): boolean {
+  if (!model) return false;
+  return model === 'openrouter/free' || model.endsWith(':free');
+}
+
 export class OpenRouterProvider implements Provider {
   id: string;
   name = 'OpenRouter';
-  private config: ProviderConfig;
+  private config: OpenRouterProviderConfig;
 
-  constructor(config: ProviderConfig) {
+  constructor(config: OpenRouterProviderConfig) {
     this.config = config;
     this.id =
       config.id ||
       `openrouter-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    if (config.isFreeTier) {
+      this.name = 'OpenRouter (Free)';
+    }
+  }
+
+  private isConfiguredModelFree(): boolean {
+    const model = this.config.defaultModel;
+    return !!model && isOpenRouterFreeModel(model);
   }
 
   get costPer1kTokens(): number | undefined {
-    return this.config.costPer1kTokens;
+    if (this.config.costPer1kTokens !== undefined) {
+      return this.config.costPer1kTokens;
+    }
+    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+      return 0;
+    }
+    return undefined;
   }
 
   get promptCostPer1k(): number | undefined {
-    return this.config.promptCostPer1k;
+    if (this.config.promptCostPer1k !== undefined) {
+      return this.config.promptCostPer1k;
+    }
+    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+      return 0;
+    }
+    return undefined;
   }
 
   get completionCostPer1k(): number | undefined {
-    return this.config.completionCostPer1k;
+    if (this.config.completionCostPer1k !== undefined) {
+      return this.config.completionCostPer1k;
+    }
+    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+      return 0;
+    }
+    return undefined;
   }
 
   get retries(): number | undefined {
@@ -43,7 +148,13 @@ export class OpenRouterProvider implements Provider {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
     }
-    return this.config.defaultModel || model;
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (this.config.isFreeTier) {
+      return 'openrouter/free';
+    }
+    return model;
   }
 
   public formatRequest(request: UnifiedApiRequest) {
@@ -59,11 +170,23 @@ export class OpenRouterProvider implements Provider {
       return msg;
     });
 
+    const primaryModel = this.resolveModel(request.model);
+
     // biome-ignore lint/suspicious/noExplicitAny: request format varies by provider
     const payload: any = {
-      model: this.resolveModel(request.model),
+      model: primaryModel,
       messages,
     };
+
+    // Native OpenRouter fallback models array
+    const fallbackModels = request.fallbackModels ?? this.config.fallbackModels;
+    if (fallbackModels && fallbackModels.length > 0) {
+      const distinct = [
+        primaryModel,
+        ...fallbackModels.filter((m) => m !== primaryModel),
+      ];
+      payload.models = distinct;
+    }
 
     if (request.temperature !== undefined) {
       payload.temperature = request.temperature;
@@ -135,12 +258,20 @@ export class OpenRouterProvider implements Provider {
     }
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.config.apiKey}`,
+      };
+      if (this.config.siteUrl) {
+        headers['HTTP-Referer'] = this.config.siteUrl;
+      }
+      if (this.config.siteName) {
+        headers['X-Title'] = this.config.siteName;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.config.apiKey}`,
-        },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
@@ -202,4 +333,101 @@ export class OpenRouterProvider implements Provider {
       }
     }
   }
+
+  /**
+   * Fetches the dynamic list of free models directly from the OpenRouter API.
+   * Matches models listed on https://openrouter.ai/models?variant=free ($0 prompt/completion pricing or :free suffix).
+   */
+  static async fetchFreeModels(options?: {
+    apiKey?: string;
+    baseUrl?: string;
+    signal?: AbortSignal;
+  }): Promise<OpenRouterModelInfo[]> {
+    const baseUrl = options?.baseUrl || 'https://openrouter.ai/api/v1';
+    const headers: Record<string, string> = {};
+    if (options?.apiKey) {
+      headers.Authorization = `Bearer ${options.apiKey}`;
+    }
+
+    const response = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Failed to fetch OpenRouter models (${response.status}): ${errorText}`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      data?: Array<{
+        id: string;
+        name: string;
+        description?: string;
+        context_length?: number;
+        pricing?: { prompt?: string | number; completion?: string | number };
+        supported_parameters?: string[];
+      }>;
+    };
+
+    const allModels = data.data || [];
+    const freeModels: OpenRouterModelInfo[] = [];
+
+    for (const m of allModels) {
+      const isFreePricing =
+        m.pricing?.prompt === '0' && m.pricing?.completion === '0';
+      const isFreeSuffix = isOpenRouterFreeModel(m.id);
+
+      if (isFreePricing || isFreeSuffix) {
+        freeModels.push({
+          id: m.id,
+          name: m.name,
+          description: m.description,
+          contextLength: m.context_length,
+          pricing: {
+            prompt: m.pricing?.prompt ?? '0',
+            completion: m.pricing?.completion ?? '0',
+          },
+          supportedParameters: m.supported_parameters,
+          isFree: true,
+        });
+      }
+    }
+
+    return freeModels;
+  }
+}
+
+/**
+ * Factory to create a pre-configured OpenRouter provider optimized for Free Tier models.
+ * Automatically defaults model to 'openrouter/free', sets zero token cost, and configures free fallback models.
+ */
+export function createOpenRouterFreeProvider(
+  config?: OpenRouterFreeProviderConfig,
+): OpenRouterProvider {
+  const model = config?.model || config?.defaultModel || 'openrouter/free';
+  const fallbackModels = config?.fallbackModels || [
+    'openrouter/free',
+    'google/gemma-4-31b-it:free',
+    'nvidia/nemotron-3.5-lightning:free',
+  ];
+
+  const envKey =
+    typeof process !== 'undefined' && process.env?.OPENROUTER_API_KEY
+      ? process.env.OPENROUTER_API_KEY
+      : '';
+
+  return new OpenRouterProvider({
+    ...config,
+    apiKey: config?.apiKey || envKey,
+    defaultModel: model,
+    fallbackModels,
+    isFreeTier: true,
+    costPer1kTokens: 0,
+    promptCostPer1k: 0,
+    completionCostPer1k: 0,
+  });
 }

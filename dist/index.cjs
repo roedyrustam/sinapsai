@@ -759,7 +759,8 @@ var SinapsClient = class {
           signal: request.signal,
           tools: request.tools,
           toolChoice: request.toolChoice,
-          responseFormat: request.responseFormat
+          responseFormat: request.responseFormat,
+          fallbackModels: request.fallbackModels
         };
         return this.router.execute(fullReq);
       })
@@ -2504,6 +2505,24 @@ var OpenAiProvider = class {
 };
 
 // src/providers/OpenRouterProvider.ts
+var OPENROUTER_FREE_MODELS = [
+  "openrouter/free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "nvidia/nemotron-3.5-lightning:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "thinkingmachines/inkling:free",
+  "thinkingmachines/inkling-small:free",
+  "cohere/north-mini-code:free",
+  "liquid/lfm-2.5-2.6b:free",
+  "apodex/apodex-1.1-mini:free"
+];
+function isOpenRouterFreeModel(model) {
+  if (!model) return false;
+  return model === "openrouter/free" || model.endsWith(":free");
+}
 var OpenRouterProvider = class {
   id;
   name = "OpenRouter";
@@ -2511,15 +2530,40 @@ var OpenRouterProvider = class {
   constructor(config) {
     this.config = config;
     this.id = config.id || `openrouter-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    if (config.isFreeTier) {
+      this.name = "OpenRouter (Free)";
+    }
+  }
+  isConfiguredModelFree() {
+    const model = this.config.defaultModel;
+    return !!model && isOpenRouterFreeModel(model);
   }
   get costPer1kTokens() {
-    return this.config.costPer1kTokens;
+    if (this.config.costPer1kTokens !== void 0) {
+      return this.config.costPer1kTokens;
+    }
+    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+      return 0;
+    }
+    return void 0;
   }
   get promptCostPer1k() {
-    return this.config.promptCostPer1k;
+    if (this.config.promptCostPer1k !== void 0) {
+      return this.config.promptCostPer1k;
+    }
+    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+      return 0;
+    }
+    return void 0;
   }
   get completionCostPer1k() {
-    return this.config.completionCostPer1k;
+    if (this.config.completionCostPer1k !== void 0) {
+      return this.config.completionCostPer1k;
+    }
+    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+      return 0;
+    }
+    return void 0;
   }
   get retries() {
     return this.config.retries;
@@ -2531,7 +2575,13 @@ var OpenRouterProvider = class {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
     }
-    return this.config.defaultModel || model;
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (this.config.isFreeTier) {
+      return "openrouter/free";
+    }
+    return model;
   }
   formatRequest(request) {
     const messages = request.messages.map((m) => {
@@ -2544,10 +2594,19 @@ var OpenRouterProvider = class {
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
       return msg;
     });
+    const primaryModel = this.resolveModel(request.model);
     const payload = {
-      model: this.resolveModel(request.model),
+      model: primaryModel,
       messages
     };
+    const fallbackModels = request.fallbackModels ?? this.config.fallbackModels;
+    if (fallbackModels && fallbackModels.length > 0) {
+      const distinct = [
+        primaryModel,
+        ...fallbackModels.filter((m) => m !== primaryModel)
+      ];
+      payload.models = distinct;
+    }
     if (request.temperature !== void 0) {
       payload.temperature = request.temperature;
     }
@@ -2610,12 +2669,19 @@ var OpenRouterProvider = class {
       }
     }
     try {
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`
+      };
+      if (this.config.siteUrl) {
+        headers["HTTP-Referer"] = this.config.siteUrl;
+      }
+      if (this.config.siteName) {
+        headers["X-Title"] = this.config.siteName;
+      }
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.config.apiKey}`
-        },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal
       });
@@ -2673,7 +2739,70 @@ var OpenRouterProvider = class {
       }
     }
   }
+  /**
+   * Fetches the dynamic list of free models directly from the OpenRouter API.
+   * Matches models listed on https://openrouter.ai/models?variant=free ($0 prompt/completion pricing or :free suffix).
+   */
+  static async fetchFreeModels(options) {
+    const baseUrl = options?.baseUrl || "https://openrouter.ai/api/v1";
+    const headers = {};
+    if (options?.apiKey) {
+      headers.Authorization = `Bearer ${options.apiKey}`;
+    }
+    const response = await fetch(`${baseUrl}/models`, {
+      method: "GET",
+      headers,
+      signal: options?.signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Failed to fetch OpenRouter models (${response.status}): ${errorText}`
+      );
+    }
+    const data = await response.json();
+    const allModels = data.data || [];
+    const freeModels = [];
+    for (const m of allModels) {
+      const isFreePricing = m.pricing?.prompt === "0" && m.pricing?.completion === "0";
+      const isFreeSuffix = isOpenRouterFreeModel(m.id);
+      if (isFreePricing || isFreeSuffix) {
+        freeModels.push({
+          id: m.id,
+          name: m.name,
+          description: m.description,
+          contextLength: m.context_length,
+          pricing: {
+            prompt: m.pricing?.prompt ?? "0",
+            completion: m.pricing?.completion ?? "0"
+          },
+          supportedParameters: m.supported_parameters,
+          isFree: true
+        });
+      }
+    }
+    return freeModels;
+  }
 };
+function createOpenRouterFreeProvider(config) {
+  const model = config?.model || config?.defaultModel || "openrouter/free";
+  const fallbackModels = config?.fallbackModels || [
+    "openrouter/free",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3.5-lightning:free"
+  ];
+  const envKey = typeof process !== "undefined" && process.env?.OPENROUTER_API_KEY ? process.env.OPENROUTER_API_KEY : "";
+  return new OpenRouterProvider({
+    ...config,
+    apiKey: config?.apiKey || envKey,
+    defaultModel: model,
+    fallbackModels,
+    isFreeTier: true,
+    costPer1kTokens: 0,
+    promptCostPer1k: 0,
+    completionCostPer1k: 0
+  });
+}
 
 exports.AnthropicProvider = AnthropicProvider;
 exports.CircuitBreaker = CircuitBreaker;
@@ -2682,10 +2811,13 @@ exports.GeminiProvider = GeminiProvider;
 exports.GroqProvider = GroqProvider;
 exports.InMemoryStorage = InMemoryStorage;
 exports.MistralProvider = MistralProvider;
+exports.OPENROUTER_FREE_MODELS = OPENROUTER_FREE_MODELS;
 exports.OllamaProvider = OllamaProvider;
 exports.OpenAiProvider = OpenAiProvider;
 exports.OpenRouterProvider = OpenRouterProvider;
 exports.Router = Router;
 exports.SinapsClient = SinapsClient;
+exports.createOpenRouterFreeProvider = createOpenRouterFreeProvider;
+exports.isOpenRouterFreeModel = isOpenRouterFreeModel;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

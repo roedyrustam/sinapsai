@@ -33,5 +33,8 @@ npx tsx examples/08-metrics-and-rate-limiting.ts
 
 # 9. Mistral AI, Gemini Embeddings & Circuit Breaker Control
 npx tsx examples/09-circuit-breaker-and-mistral.ts
+
+# 10. OpenRouter Free Tier & Zero-Cost Routing (variant=free)
+OPENROUTER_API_KEY="your-key" npx tsx examples/10-openrouter-free-tier.ts
 ```
 

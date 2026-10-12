@@ -50,6 +50,7 @@ export interface UnifiedApiRequest {
         };
     };
     responseFormat?: ResponseFormat;
+    fallbackModels?: string[];
 }
 export interface CreateChatCompletionRequestNonStreaming extends Omit<UnifiedApiRequest, 'model' | 'stream'> {
     model?: string;

@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-108%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-116%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -61,6 +61,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [9. Tool Calling & Eksekusi Fungsi](#9-tool-calling--eksekusi-fungsi)
   - [10. Structured Outputs (JSON Mode)](#10-structured-outputs-json-mode)
   - [11. Unified Text Embeddings](#11-unified-text-embeddings)
+  - [12. OpenRouter Free Tier & Perutean Nol-Biaya](#12-openrouter-free-tier--perutean-nol-biaya)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -449,6 +450,55 @@ console.log(embeddings.usage?.totalTokens); // Total token yang dipakai
 
 ---
 
+### 12. OpenRouter Free Tier & Perutean Nol-Biaya
+
+Manfaatkan katalog model gratis dari [OpenRouter Free Models](https://openrouter.ai/models?variant=free) tanpa biaya inferensi token ($0 prompt & completion). SinapsAI menyediakan pembukuan biaya nol dolar otomatis, perutean cerdas dengan meta-model `openrouter/free`, header pemeringkatan aplikasi, penemuan model live, dan rantai failover model native:
+
+```typescript
+import { 
+  SinapsClient, 
+  OpenRouterProvider, 
+  createOpenRouterFreeProvider,
+  OpenAiProvider 
+} from 'sinapsai';
+
+// 1. Dapatkan daftar model gratis yang sedang aktif langsung dari OpenRouter API
+const freeModels = await OpenRouterProvider.fetchFreeModels();
+console.log(`Model Gratis Aktif: ${freeModels.length}`);
+
+// 2. Buat provider gratis siap pakai ($0 per 1k token)
+const openRouterFree = createOpenRouterFreeProvider({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  siteUrl: 'https://aplikasiku.com', // Dikirim sebagai HTTP-Referer untuk peringkat OpenRouter
+  siteName: 'Aplikasi AI Saya',       // Dikirim sebagai X-Title
+  model: 'openrouter/free',          // Meta-router memilih model gratis aktif secara dinamis
+  fallbackModels: [
+    'openrouter/free',
+    'google/gemma-4-31b-it:free',
+    'nvidia/nemotron-3.5-lightning:free',
+  ],
+});
+
+// 3. Gabungkan dengan provider cadangan berbayar via strategi 'lowest-cost'
+const client = new SinapsClient({
+  strategy: 'lowest-cost', // Memprioritaskan model gratis $0, otomatis beralih jika limit tercapai!
+  providers: [
+    openRouterFree,
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+
+const response = await client.chat.completions.create({
+  model: 'openrouter/free',
+  messages: [{ role: 'user', content: 'Jelaskan manfaat model AI open-weights.' }],
+  fallbackModels: ['google/gemma-4-31b-it:free'],
+});
+
+console.log(response.choices[0].message.content);
+```
+
+---
+
 ## 🧩 Penyedia yang Didukung (Providers)
 
 | Provider | Kelas Ekspor | Parameter Tambahan |
@@ -459,7 +509,7 @@ console.log(embeddings.usage?.totalTokens); // Total token yang dipakai
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, token penalaran (`reasoning_content`) |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0) |
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
-| **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
+| **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Custom / On-Prem** | `Provider` (Interface) | Implementasi mandiri untuk vLLM, LocalAI, TGI, dll. |
 
 ### Membuat Provider Kustom (Contoh: Ollama)

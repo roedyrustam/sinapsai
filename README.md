@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-108%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-116%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -60,6 +60,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [9. Tool Calling & Function Execution](#9-tool-calling--function-execution)
   - [10. Structured Outputs (JSON Mode)](#10-structured-outputs-json-mode)
   - [11. Unified Text Embeddings](#11-unified-text-embeddings)
+  - [12. OpenRouter Free Tier & Zero-Cost Routing](#12-openrouter-free-tier--zero-cost-routing)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -447,6 +448,55 @@ console.log(embeddings.usage?.totalTokens); // Token count
 
 ---
 
+### 12. OpenRouter Free Tier & Zero-Cost Routing
+
+Leverage [OpenRouter's Free Models catalog](https://openrouter.ai/models?variant=free) without paying for inference tokens. SinapsAI provides pre-configured zero-cost accounting, `openrouter/free` meta-routing, attribution headers, dynamic model discovery, and native fallback model chains:
+
+```typescript
+import { 
+  SinapsClient, 
+  OpenRouterProvider, 
+  createOpenRouterFreeProvider,
+  OpenAiProvider 
+} from 'sinapsai';
+
+// 1. Inspect live free models dynamically from OpenRouter API
+const freeModels = await OpenRouterProvider.fetchFreeModels();
+console.log(`Live Free Models: ${freeModels.length}`);
+
+// 2. Instantiate pre-configured Free Provider ($0 cost per 1k tokens)
+const openRouterFree = createOpenRouterFreeProvider({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  siteUrl: 'https://myapp.com', // Sent as HTTP-Referer for OpenRouter leaderboard ranking
+  siteName: 'My App',           // Sent as X-Title
+  model: 'openrouter/free',      // Meta-router selecting active free models
+  fallbackModels: [
+    'openrouter/free',
+    'google/gemma-4-31b-it:free',
+    'nvidia/nemotron-3.5-lightning:free',
+  ],
+});
+
+// 3. Combine with paid backup provider under 'lowest-cost' strategy
+const client = new SinapsClient({
+  strategy: 'lowest-cost', // Prioritizes $0 free models first, fails over to paid if rate-limited!
+  providers: [
+    openRouterFree,
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+
+const response = await client.chat.completions.create({
+  model: 'openrouter/free',
+  messages: [{ role: 'user', content: 'What makes open weights AI impactful?' }],
+  fallbackModels: ['google/gemma-4-31b-it:free'],
+});
+
+console.log(response.choices[0].message.content);
+```
+
+---
+
 ## 🧩 Supported Providers
 
 | Provider | Exported Class | Options Supported |
@@ -457,7 +507,7 @@ console.log(embeddings.usage?.totalTokens); // Token count
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, reasoning tokens (`reasoning_content`) |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0) |
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
-| **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
+| **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Custom / On-Prem** | `Provider` (Interface) | Custom implementations for vLLM, LocalAI, TGI, etc. |
 
 ### Creating a Custom Provider (e.g. Ollama)

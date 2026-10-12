@@ -55,6 +55,7 @@ export interface UnifiedApiRequest {
     | 'required'
     | { type: 'function'; function: { name: string } };
   responseFormat?: ResponseFormat;
+  fallbackModels?: string[];
 }
 
 export interface CreateChatCompletionRequestNonStreaming

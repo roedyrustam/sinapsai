@@ -73,6 +73,7 @@ run();
 4. **Pembersihan Cache In-Process (`clearCache`)**: Mengosongkan memori cache respon prompt dan embeddings secara instan saat dibutuhkan.
 5. **Dual-Token Pricing (`promptCostPer1k`, `completionCostPer1k`)**: Perhitungan biaya dinamis dan perutean `lowest-cost` otomatis berdasarkan rasio panjang prompt dan token keluaran.
 6. **Adaptive Rate-Limiting & Proactive Throttling**: Ekstraksi header kuota rate-limit (`x-ratelimit-*`, `retry-after`) secara otomatis guna mencegah HTTP 429.
+7. **OpenRouter Free Tier (`createOpenRouterFreeProvider`)**: Integrasi penuh katalog model gratis [OpenRouter](https://openrouter.ai/models?variant=free) dengan biaya $0 otomatis, meta-router `openrouter/free`, rantai fallback model native (`fallbackModels`), header peringkat (`siteUrl`, `siteName`), serta penemuan model gratis live via `OpenRouterProvider.fetchFreeModels()`.
 
 
 ## Keamanan & Performa

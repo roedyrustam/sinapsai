@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
-import { OpenRouterProvider } from './OpenRouterProvider.js';
+import {
+  createOpenRouterFreeProvider,
+  isOpenRouterFreeModel,
+  OPENROUTER_FREE_MODELS,
+  OpenRouterProvider,
+} from './OpenRouterProvider.js';
 
 describe('OpenRouterProvider', () => {
   const provider = new OpenRouterProvider({ apiKey: 'test-key' });
@@ -73,6 +78,179 @@ describe('OpenRouterProvider', () => {
       expect(result.response_format).toEqual({ type: 'json_object' });
       expect(result.messages[1].tool_calls).toHaveLength(1);
       expect(result.messages[2].tool_call_id).toBe('call_3');
+    });
+
+    it('should include native models fallback array when fallbackModels is specified', () => {
+      const freeProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        fallbackModels: [
+          'openrouter/free',
+          'google/gemma-4-31b-it:free',
+          'nvidia/nemotron-3.5-lightning:free',
+        ],
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hello' }],
+        fallbackModels: [
+          'google/gemma-4-31b-it:free',
+          'nvidia/nemotron-3.5-lightning:free',
+        ],
+      };
+
+      const result = freeProvider.formatRequest(request);
+      expect(result.models).toEqual([
+        'openrouter/free',
+        'google/gemma-4-31b-it:free',
+        'nvidia/nemotron-3.5-lightning:free',
+      ]);
+    });
+  });
+
+  describe('Free Tier & Cost Optimization', () => {
+    it('should correctly identify free models', () => {
+      expect(isOpenRouterFreeModel('openrouter/free')).toBe(true);
+      expect(isOpenRouterFreeModel('google/gemma-4-31b-it:free')).toBe(true);
+      expect(isOpenRouterFreeModel('nvidia/nemotron-3.5-lightning:free')).toBe(
+        true,
+      );
+      expect(isOpenRouterFreeModel('anthropic/claude-3.5-sonnet')).toBe(false);
+      expect(isOpenRouterFreeModel('openai/gpt-4o')).toBe(false);
+      expect(OPENROUTER_FREE_MODELS).toContain('openrouter/free');
+    });
+
+    it('should default token costs to 0 for free models', () => {
+      const freeModelProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        defaultModel: 'google/gemma-4-31b-it:free',
+      });
+
+      expect(freeModelProvider.costPer1kTokens).toBe(0);
+      expect(freeModelProvider.promptCostPer1k).toBe(0);
+      expect(freeModelProvider.completionCostPer1k).toBe(0);
+    });
+
+    it('should default costs to 0 and name to OpenRouter (Free) when isFreeTier is true', () => {
+      const freeTierProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        isFreeTier: true,
+      });
+
+      expect(freeTierProvider.name).toBe('OpenRouter (Free)');
+      expect(freeTierProvider.costPer1kTokens).toBe(0);
+      expect(freeTierProvider.promptCostPer1k).toBe(0);
+      expect(freeTierProvider.completionCostPer1k).toBe(0);
+      expect(freeTierProvider.resolveModel('default')).toBe('openrouter/free');
+    });
+
+    it('should preserve explicit custom costs if provided', () => {
+      const customCostProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        isFreeTier: true,
+        costPer1kTokens: 0.005,
+      });
+
+      expect(customCostProvider.costPer1kTokens).toBe(0.005);
+    });
+
+    it('should create pre-configured free provider using factory', () => {
+      const provider = createOpenRouterFreeProvider({
+        apiKey: 'free-key',
+        siteUrl: 'https://myapp.com',
+        siteName: 'My App',
+      });
+
+      expect(provider.name).toBe('OpenRouter (Free)');
+      expect(provider.costPer1kTokens).toBe(0);
+      expect(provider.resolveModel('anything')).toBe('openrouter/free');
+    });
+  });
+
+  describe('Headers and Rankings', () => {
+    it('should include HTTP-Referer and X-Title headers in requests', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'gen-test',
+          model: 'openrouter/free',
+          choices: [
+            { message: { role: 'assistant', content: 'Free response' } },
+          ],
+        }),
+        headers: new Headers(),
+      });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock;
+
+      try {
+        const rankedProvider = new OpenRouterProvider({
+          apiKey: 'test-api-key',
+          siteUrl: 'https://github.com/roedyrustam/sinapsai',
+          siteName: 'SinapsAI Gateway',
+        });
+
+        await rankedProvider.generateContent({
+          model: 'openrouter/free',
+          messages: [{ role: 'user', content: 'Test' }],
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const callArgs = fetchMock.mock.calls[0];
+        const headers = callArgs[1].headers;
+        expect(headers['HTTP-Referer']).toBe(
+          'https://github.com/roedyrustam/sinapsai',
+        );
+        expect(headers['X-Title']).toBe('SinapsAI Gateway');
+        expect(headers.Authorization).toBe('Bearer test-api-key');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('fetchFreeModels', () => {
+    it('should fetch and filter free models from OpenRouter API', async () => {
+      const mockApiResponse = {
+        data: [
+          {
+            id: 'openai/gpt-4o',
+            name: 'GPT-4o',
+            pricing: { prompt: '0.000005', completion: '0.000015' },
+          },
+          {
+            id: 'openrouter/free',
+            name: 'Free Models Router',
+            pricing: { prompt: '0', completion: '0' },
+          },
+          {
+            id: 'google/gemma-4-31b-it:free',
+            name: 'Google Gemma 4 31B (free)',
+            pricing: { prompt: '0', completion: '0' },
+          },
+        ],
+      };
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockApiResponse,
+      });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock;
+
+      try {
+        const freeModels = await OpenRouterProvider.fetchFreeModels();
+        expect(freeModels).toHaveLength(2);
+        expect(freeModels.map((m) => m.id)).toEqual([
+          'openrouter/free',
+          'google/gemma-4-31b-it:free',
+        ]);
+        expect(freeModels[0].isFree).toBe(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 
