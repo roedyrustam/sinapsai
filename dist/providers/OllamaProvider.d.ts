@@ -1,3 +1,10 @@
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 import type { CreateEmbeddingRequest, CreateEmbeddingResponse, ProviderConfig, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { Provider } from './Provider.js';
 export declare class OllamaProvider implements Provider {

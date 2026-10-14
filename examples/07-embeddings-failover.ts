@@ -1,4 +1,12 @@
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+
+/**
  * Example 07: Unified Embeddings Control Plane with Automatic Failover & Caching
  *
  * Demonstrates text embeddings generation with automatic fallback from OpenAI to local Ollama.

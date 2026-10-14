@@ -1,3 +1,10 @@
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __esm = (fn, res) => function __init() {
@@ -3641,6 +3648,13 @@ function createOpenRouterFreeProvider(config) {
     completionCostPer1k: 0
   });
 }
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 
 export { AnthropicProvider, BatchExecutionError, CircuitBreaker, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient, cosineSimilarity, createOpenRouterFreeProvider, executeBatch, extractPromptText, isOpenRouterFreeModel };
 //# sourceMappingURL=index.js.map

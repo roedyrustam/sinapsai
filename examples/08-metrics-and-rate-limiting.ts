@@ -1,4 +1,12 @@
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+
+/**
  * Example 08: In-Process Metrics, Dual-Token Pricing & Adaptive Rate Limiting
  *
  * Demonstrates:

@@ -1,3 +1,10 @@
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 import type { Provider } from '../providers/Provider.js';
 import type { CircuitBreakerStatus, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { StateStorage } from './StateStorage.js';

@@ -1,4 +1,12 @@
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+
+/**
  * Example 06: DeepSeek Provider with Chain-of-Thought (deepseek-reasoner / R1)
  *
  * Demonstrates native DeepSeekProvider integration with reasoning_content support.

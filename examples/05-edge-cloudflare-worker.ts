@@ -1,4 +1,12 @@
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+
+/**
  * Example 05: Running SinapsAI on Edge Runtimes (Cloudflare Workers, Bun, Deno, Vercel Edge)
  *
  * SinapsAI is 100% compliant with standard Web APIs (fetch, ReadableStream, TextDecoder, AbortController)
