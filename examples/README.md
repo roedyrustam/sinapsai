@@ -45,5 +45,12 @@ GROQ_API_KEY="your-key" npx tsx examples/12-groq-lightning-fast-reasoning.ts
 
 # 13. Superintelligence Edition: Latency-Based Routing, Extended Thinking & KV-Cache
 OPENAI_API_KEY="your-key" ANTHROPIC_API_KEY="your-key" npx tsx examples/13-superintelligence-latency-and-reasoning.ts
+
+# 14. Semantic In-Process Response Caching & Hierarchical Fallbacks
+npx tsx examples/14-semantic-caching-and-fallbacks.ts
+
+# 15. Concurrent In-Process Batch Processing (client.batch)
+npx tsx examples/15-concurrent-batch-processing.ts
 ```
+
 

@@ -195,6 +195,34 @@ export interface CircuitBreakerStatus {
     failures: number;
     successes: number;
 }
+export interface SemanticCacheOptions {
+    enabled?: boolean;
+    /**
+     * Similarity threshold between 0 and 1 (default: 0.90).
+     * If cosine similarity is >= similarityThreshold, the cached response is returned.
+     */
+    similarityThreshold?: number;
+    /**
+     * Optional model to use for generating embeddings (e.g., 'text-embedding-3-small').
+     */
+    embeddingModel?: string;
+    /**
+     * Maximum number of semantic cache entries kept in-memory (default: 1000).
+     */
+    maxEntries?: number;
+    /**
+     * Optional custom embedding function: (text: string) => Promise<number[]>
+     */
+    customEmbed?: (text: string) => Promise<number[]>;
+}
+export interface CacheOptions {
+    enabled?: boolean;
+    ttlSeconds?: number;
+    /**
+     * Optional semantic caching configuration.
+     */
+    semantic?: SemanticCacheOptions | boolean;
+}
 import type { Provider } from '../providers/Provider.js';
 export interface SinapsEventHooks {
     onSuccess?: (provider: Provider, response: UnifiedApiResponse, latencyMs: number) => void;
@@ -202,10 +230,94 @@ export interface SinapsEventHooks {
     onEmbeddingSuccess?: (provider: Provider, response: CreateEmbeddingResponse, latencyMs: number) => void;
     onFallback?: (error: Error, fromProvider: Provider, toProvider: Provider) => void;
     onModelFallback?: (error: Error, provider: Provider, fromModel: string, toModel: string) => void;
+    onSemanticCacheHit?: (request: UnifiedApiRequest, cachedResponse: UnifiedApiResponse, similarity: number) => void;
     onCircuitOpen?: (provider: Provider) => void;
     onCircuitClose?: (provider: Provider) => void;
     onRateLimit?: (provider: Provider, error: Error) => void;
     onRateLimitWarning?: (provider: Provider, rateLimit: RateLimitInfo) => void;
     onRetry?: (provider: Provider, error: Error, attempt: number, delayMs: number) => void;
+}
+export interface BatchProgress {
+    /**
+     * Number of items completed (succeeded or failed).
+     */
+    completed: number;
+    /**
+     * Total number of items in the batch.
+     */
+    total: number;
+    /**
+     * Completion percentage (0 to 100).
+     */
+    percentage: number;
+    /**
+     * Number of successfully fulfilled items so far.
+     */
+    successful: number;
+    /**
+     * Number of failed/rejected items so far.
+     */
+    failed: number;
+}
+export interface BatchOptions {
+    /**
+     * Maximum number of concurrent in-flight requests (default: 4).
+     */
+    concurrency?: number;
+    /**
+     * If true, execution halts immediately when any item errors,
+     * throwing a BatchExecutionError with partial results.
+     * If false, all items are processed to completion (like Promise.allSettled).
+     * Default: false
+     */
+    stopOnError?: boolean;
+    /**
+     * Optional callback triggered whenever an item in the batch completes.
+     */
+    onProgress?: (progress: BatchProgress) => void;
+    /**
+     * Optional AbortSignal to cancel remaining unprocessed items in the batch.
+     */
+    signal?: AbortSignal;
+}
+export interface BatchItemResult<T> {
+    /**
+     * 0-based index corresponding to the original request position.
+     */
+    index: number;
+    /**
+     * Result status: 'fulfilled' on success, 'rejected' on failure.
+     */
+    status: 'fulfilled' | 'rejected';
+    /**
+     * Fulfilled response value when status is 'fulfilled'.
+     */
+    value?: T;
+    /**
+     * Error object when status is 'rejected'.
+     */
+    error?: Error;
+}
+export interface BatchResult<T> {
+    /**
+     * Array of settled item results in the same order as input requests.
+     */
+    results: BatchItemResult<T>[];
+    /**
+     * Total number of requests in the batch.
+     */
+    total: number;
+    /**
+     * Total successful requests.
+     */
+    successful: number;
+    /**
+     * Total failed requests.
+     */
+    failed: number;
+    /**
+     * Total execution time in milliseconds.
+     */
+    durationMs: number;
 }
 //# sourceMappingURL=index.d.ts.map

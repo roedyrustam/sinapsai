@@ -79,6 +79,10 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 - 🌐 **Unified API**: Berkomunikasi dengan berbagai model LLM menggunakan format request & response standar yang kompatibel dengan format OpenAI Chat Completions.
 - 🧠 **Universal Frontier Reasoning Engine**: Kontrol terpadu penalaran mendalam dan Chain-of-Thought di seluruh model Claude 3.7 Sonnet (`thinkingBudget`), OpenAI o1/o3/o4 (`reasoningEffort: 'low' | 'medium' | 'high'`), Groq LPU, DeepSeek R1, dan Gemini Flash Thinking yang otomatis tersaji di `message.reasoning_content`.
 - ⚡ **Perutean Latensi Terendah (`lowest-latency`)**: Secara dinamis mengukur *moving average latency* dan merutekan prompt ke provider tercepat tanpa *cold-start lag*.
+- 🎯 **Hierarchical Model-Level Fallbacks**: Otomatis mencoba model cadangan sekunder (misal: `gpt-4o` -> `gpt-4o-mini`) pada provider yang sama sebelum beralih (*failover*) ke provider lain, lengkap dengan pemutusan cepat (*fast-failover*) saat HTTP 401 Unauthorized.
+- 👁️ **Universal Multi-Modal Content (`ContentPart[]`)**: Format terpadu untuk payload teks, gambar (URL / base64), dan audio yang otomatis dikonversi untuk OpenAI, Anthropic Claude, dan Google Gemini.
+- ⚡ **Zero-Dependency Semantic Caching**: Pencocokan kemiripan kosinus (*cosine similarity*) in-process murni menggunakan embedding lokal maupun provider dengan ambang batas yang dapat dikonfigurasi (0.0 hingga 1.0) tanpa dependensi native eksternal.
+- 📊 **Telemetri Streaming TTFT & Proteksi Circuit Breaker**: Pengukuran Time-To-First-Token presisi milidetik (`onStreamSuccess`) serta penanganan kegagalan jika koneksi streaming terputus di tengah jalan dengan tetap mengamankan *client abort*.
 - 💰 **Optimasi KV-Cache & Prompt Caching**: Penjejakan real-time `cachedPromptTokens` pada respons dan `totalCachedPromptTokens` di metrik untuk mengaudit penghematan biaya token 70-90%.
 - 🛠️ **Universal Tool Calling & JSON Mode**: Definisikan fungsi/tools sekali saja dengan format JSON Schema standar (`tools`, `toolChoice`). SinapsAI secara otomatis mengonversikannya ke format XML/tools Anthropic Claude, fungsi Gemini, dan OpenAI.
 - 🛡️ **In-Memory Circuit Breaker**: Mendeteksi lonjakan error provider secara instan dan membuka sirkuit (*Open Circuit*) guna mencegah *cascading failures* dan waktu tunggu (timeout) yang berlebihan.
@@ -88,10 +92,11 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - `load-balance`: Membagi lalu lintas permintaan secara rotasi (*Round-Robin*) untuk menghindari pembatasan kuota (*Rate Limit 429*).
   - `lowest-cost`: Mengurutkan dan merutekan permintaan ke provider termurah berdasarkan konfigurasi `costPer1kTokens` & dual pricing.
 - ⚡ **Exponential Backoff & Retries**: Mencoba ulang kegagalan jaringan sementara (429, 5xx) dengan jitter acak sebelum melakukan failover.
-- 💾 **In-Memory Prompt Hash Caching**: Menyimpan cache respons di memori dengan TTL untuk prompt identik sehingga menghemat token dan waktu respons.
+- 💾 **In-Memory Prompt Hash & Semantic Caching**: Menyimpan cache respons di memori dengan TTL untuk prompt identik maupun semantik serupa guna menghemat biaya inferensi.
+- 🚀 **Engine Batch Konkuren In-Process (`client.batch`)**: Pool pekerja tanpa dependensi untuk pemrosesan paralel chat completion dan embedding dalam skala besar dengan pembatasan konkurensi dan penjejakan progres langsung.
 - 🌊 **Dukungan Streaming SSE**: Streaming respons teks *real-time* menggunakan async generator native (`for await...of`).
 - 🔒 **Privasi & Keamanan Penuh**: 100% berjalan lokal di memori proses aplikasi Anda. Kunci API dan konten prompt tidak pernah dikirimkan ke server pihak ketiga.
-- 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) untuk integrasi ke sistem APM, Prometheus, atau logging.
+- 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) untuk integrasi ke sistem APM, Prometheus, atau logging.
 
 ---
 
@@ -356,19 +361,31 @@ const client = new SinapsClient({
 
 ---
 
-### 8. In-Memory Response Caching
+### 8. Caching Respons In-Process: Exact & Semantik
 
-Layani permintaan prompt yang identik secara instan dengan 0ms latensi dan tanpa konsumsi token tambahan:
+Layani permintaan prompt yang berulang secara instan dengan 0ms latensi jaringan dan nol konsumsi token. SinapsAI mendukung caching pencocokan hash identik (*exact match*) maupun **caching semantik tanpa dependensi eksternal (*zero-dependency semantic caching*)** berbasis kemiripan kosinus (*cosine similarity*):
 
 ```typescript
 const client = new SinapsClient({
   cache: {
-    enabled: true,       // Aktifkan in-memory cache
+    enabled: true,       // Aktifkan cache in-process
     ttlSeconds: 300,     // Masa aktif cache (default: 5 menit)
+    semantic: {
+      enabled: true,
+      similarityThreshold: 0.90, // Ambang kemiripan kosinus (0.0 hingga 1.0)
+      embeddingModel: 'text-embedding-3-small', // Menggunakan provider yang tersedia
+      // Opsional: fungsi custom embedder lokal
+      // customEmbed: async (text) => [0.1, 0.2, ...]
+    },
   },
   providers: [
     new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
   ],
+  hooks: {
+    onSemanticCacheHit: (req, cachedRes, similarity) => {
+      console.log(`[Semantic Hit] Kecocokan ${(similarity * 100).toFixed(1)}% untuk: ${cachedRes.model}`);
+    },
+  },
 });
 ```
 
@@ -567,17 +584,116 @@ const schemaResponse = await client.chat.completions.create({
 
 ---
 
+### 13. Hierarchical Model-Level Fallbacks
+
+Konfigurasikan daftar kandidat model cadangan pada tingkat client, per-provider, maupun per-request. Jika sebuah model terkena limit atau error 5xx, SinapsAI secara cerdas mencoba model alternatif pada provider yang sama terlebih dahulu sebelum memicu failover lintas provider:
+
+```typescript
+const client = new SinapsClient({
+  providers: [
+    new OpenAiProvider({
+      apiKey: process.env.OPENAI_API_KEY!,
+      defaultModel: 'gpt-4o',
+      fallbackModels: ['gpt-4o-mini'], // Model cadangan di tingkat provider
+    }),
+    new AnthropicProvider({
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+      defaultModel: 'claude-3-7-sonnet-20250219',
+      fallbackModels: ['claude-3-5-haiku-20241022'],
+    }),
+  ],
+  hooks: {
+    onModelFallback: (error, provider, fromModel, toModel) => {
+      console.warn(`[Model Fallback] ${provider.name} gagal pada ${fromModel}: ${error.message}. Berpindah ke model ${toModel}...`);
+    },
+    onFallback: (error, fromProvider, toProvider) => {
+      console.warn(`[Provider Failover] Seluruh model di ${fromProvider.name} habis. Berpindah ke provider ${toProvider.name}...`);
+    },
+  },
+});
+
+// Anda juga dapat mengganti fallbackModels secara spesifik per request:
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  fallbackModels: ['gpt-4o-mini'],
+  messages: [{ role: 'user', content: 'Ringkas teks ini.' }],
+});
+```
+
+---
+
+### 14. Dukungan Multi-Modal Terpadu Vision & Audio (`ContentPart[]`)
+
+Kirimkan payload teks, gambar (URL remote maupun base64), dan audio menggunakan format standar OpenAI yang konsisten. SinapsAI secara otomatis mengonversikannya untuk OpenAI, Anthropic Claude, dan Google Gemini:
+
+```typescript
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Jelaskan isi grafik ini dan transkrip rekaman audionya.' },
+        {
+          type: 'image_url',
+          image_url: { url: 'https://example.com/grafik.png', detail: 'high' },
+        },
+        {
+          type: 'input_audio',
+          input_audio: { data: '<base64-audio>', format: 'wav' },
+        },
+      ],
+    },
+  ],
+});
+```
+
+---
+
+### 15. Pemrosesan Batch Konkuren In-Process (`client.batch`)
+
+Eksekusi banyak chat completion maupun embedding teks secara paralel tanpa dependensi eksternal (tidak memerlukan `p-limit`). Dilengkapi pembatasan konkurensi, callback progres real-time, dan eksekusi bertoleransi kegagalan (*fail-soft settled execution*):
+
+```typescript
+const batchResult = await client.batch.chat(
+  [
+    { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Klasifikasikan sentimen: Produk luar biasa!' }] },
+    { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Klasifikasikan sentimen: Pelayanan buruk sekali.' }] },
+    { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Klasifikasikan sentimen: Paket sampai tepat waktu.' }] },
+  ],
+  {
+    concurrency: 2,       // Maksimal 2 request berjalan bersamaan
+    stopOnError: false,   // Lanjutkan request lainnya jika salah satu item gagal
+    onProgress: (p) => {
+      console.log(`[Progres Batch] ${p.completed}/${p.total} (${p.percentage}%)`);
+    },
+  },
+);
+
+console.log(`Selesai ${batchResult.successful}/${batchResult.total} dalam ${batchResult.durationMs}ms`);
+for (const item of batchResult.results) {
+  if (item.status === 'fulfilled') {
+    console.log(`[Item #${item.index}] Jawaban:`, item.value?.choices[0].message.content);
+  } else {
+    console.error(`[Item #${item.index}] Gagal:`, item.error?.message);
+  }
+}
+```
+
+---
+
 ## 🧩 Penyedia yang Didukung (Providers)
 
 | Provider | Kelas Ekspor | Parameter Tambahan |
 | :--- | :--- | :--- |
-| **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
-| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
-| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
-| **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, token penalaran (`reasoning_content`) |
-| **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0) |
-| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, ekstraksi reasoning (`reasoning_format: 'parsed'`, `reasoning_content`), durasi rate limit (`7.66s`, `2m59.56s`), penyesuaian suhu, sanitasi nama pesan |
+| **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
+| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
+| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
+| **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, token penalaran (`reasoning_content`) |
+| **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0), `fallbackModels` |
+| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, ekstraksi reasoning (`reasoning_format: 'parsed'`, `reasoning_content`), durasi rate limit (`7.66s`, `2m59.56s`), penyesuaian suhu, sanitasi nama pesan |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
+| **Mistral** | `MistralProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **Custom / On-Prem** | `Provider` (Interface) | Implementasi mandiri untuk vLLM, LocalAI, TGI, dll. |
 
 ### Membuat Provider Kustom (Contoh: Ollama)
@@ -624,9 +740,13 @@ export class OllamaProvider implements Provider {
 | Properti | Tipe | Nilai Default | Keterangan |
 | :--- | :--- | :--- | :--- |
 | `providers` | `Provider[]` | *(Wajib)* | Daftar instance provider yang digunakan |
-| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost'` | `'failover'` | Algoritma perutean request |
+| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency'` | `'failover'` | Algoritma perutean request |
 | `storage` | `StateStorage` | `InMemoryStorage` | Tempat penyimpanan state sirkuit breaker |
 | `circuitBreaker` | `CircuitBreakerOptions` | `{}` | Konfigurasi toleransi kegagalan sirkuit |
+| `cache` | `CacheOptions` | `{}` | Konfigurasi caching respons in-process (exact & semantik) |
+| `retries` | `number` | `0` | Jumlah pengulangan (retry) otomatis dengan exponential backoff |
+| `retryDelayMs` | `number` | `200` | Jeda awal (delay) percobaan ulang dalam milidetik |
+| `fallbackModels` | `string[]` | `undefined` | Daftar global model cadangan sekunder |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
 
 ### `CircuitBreakerOptions`

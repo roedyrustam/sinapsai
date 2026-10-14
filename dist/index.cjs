@@ -51,6 +51,118 @@ var init_stream = __esm({
   }
 });
 
+// src/core/BatchExecutor.ts
+var BatchExecutionError = class extends Error {
+  results;
+  cause;
+  constructor(message, results, cause) {
+    super(message);
+    this.name = "BatchExecutionError";
+    this.results = results;
+    this.cause = cause;
+  }
+};
+async function executeBatch(items, handler, options) {
+  const startTime = Date.now();
+  const total = items.length;
+  if (total === 0) {
+    return {
+      results: [],
+      total: 0,
+      successful: 0,
+      failed: 0,
+      durationMs: 0
+    };
+  }
+  const concurrency = Math.max(1, Math.min(options?.concurrency ?? 4, total));
+  const stopOnError = options?.stopOnError ?? false;
+  const signal = options?.signal;
+  const results = new Array(total);
+  let nextIndex = 0;
+  let completed = 0;
+  let successful = 0;
+  let failed = 0;
+  let shouldStop = false;
+  let firstError;
+  const updateProgress = () => {
+    if (options?.onProgress) {
+      const progress = {
+        completed,
+        total,
+        percentage: Math.min(100, Math.round(completed / total * 100)),
+        successful,
+        failed
+      };
+      options.onProgress(progress);
+    }
+  };
+  const worker = async () => {
+    while (nextIndex < total && !shouldStop) {
+      if (signal?.aborted) {
+        shouldStop = true;
+        break;
+      }
+      const currentIndex = nextIndex++;
+      const item = items[currentIndex];
+      try {
+        const value = await handler(item, currentIndex);
+        results[currentIndex] = {
+          index: currentIndex,
+          status: "fulfilled",
+          value
+        };
+        successful++;
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        results[currentIndex] = {
+          index: currentIndex,
+          status: "rejected",
+          error
+        };
+        failed++;
+        if (stopOnError) {
+          shouldStop = true;
+          firstError = error;
+          break;
+        }
+      } finally {
+        completed++;
+        updateProgress();
+      }
+    }
+  };
+  const workers = Array.from({ length: concurrency }, () => worker());
+  await Promise.all(workers);
+  if (shouldStop) {
+    for (let i = 0; i < total; i++) {
+      if (!results[i]) {
+        results[i] = {
+          index: i,
+          status: "rejected",
+          error: signal?.aborted ? new Error("Batch execution aborted by caller") : firstError ?? new Error("Batch execution stopped due to previous error")
+        };
+        failed++;
+        completed++;
+      }
+    }
+  }
+  const durationMs = Date.now() - startTime;
+  if (stopOnError && firstError) {
+    throw new BatchExecutionError(
+      `Batch execution failed at index ${results.findIndex((r) => r.status === "rejected")}: ${firstError.message}`,
+      results,
+      firstError
+    );
+  }
+  return {
+    results,
+    total,
+    successful,
+    failed,
+    durationMs
+  };
+}
+
 // src/core/CircuitBreaker.ts
 var CircuitBreaker = class {
   storage;
@@ -275,6 +387,43 @@ var InMemoryStorage = class {
   }
 };
 
+// src/utils/similarity.ts
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
+    return 0;
+  }
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) {
+    return 0;
+  }
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) {
+    return 0;
+  }
+  return Math.min(1, Math.max(-1, dotProduct / denominator));
+}
+function extractPromptText(messages) {
+  if (!messages || messages.length === 0) {
+    return "";
+  }
+  return messages.map((m) => {
+    let contentStr = "";
+    if (typeof m.content === "string") {
+      contentStr = m.content;
+    } else if (Array.isArray(m.content)) {
+      contentStr = m.content.filter((p) => p.type === "text").map((p) => p.text).join(" ");
+    }
+    return `${m.role}: ${contentStr.trim()}`;
+  }).join("\n");
+}
+
 // src/core/Router.ts
 var Router = class {
   providers;
@@ -287,6 +436,7 @@ var Router = class {
   retryDelayMs;
   cacheOptions;
   storage;
+  semanticEntries = [];
   metrics = {
     totalRequests: 0,
     successfulRequests: 0,
@@ -346,6 +496,7 @@ var Router = class {
     if (this.storage && typeof this.storage.clear === "function") {
       await this.storage.clear();
     }
+    this.semanticEntries = [];
   }
   recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0, cachedPromptTokens = 0) {
     if (!this.metrics.providerMetrics[providerId]) {
@@ -458,6 +609,38 @@ var Router = class {
     }
     return list.length > 0 ? list : ["default"];
   }
+  getSemanticCacheConfig() {
+    if (!this.cacheOptions?.semantic) {
+      return null;
+    }
+    if (typeof this.cacheOptions.semantic === "boolean") {
+      return this.cacheOptions.semantic ? { enabled: true } : null;
+    }
+    return {
+      enabled: this.cacheOptions.semantic.enabled !== false,
+      ...this.cacheOptions.semantic
+    };
+  }
+  async getEmbeddingForText(text, config) {
+    try {
+      if (typeof config.customEmbed === "function") {
+        return await config.customEmbed(text);
+      }
+      const hasEmbeddingProvider = this.providers.some(
+        (p) => typeof p.generateEmbedding === "function"
+      );
+      if (!hasEmbeddingProvider) {
+        return null;
+      }
+      const res = await this.executeEmbedding({
+        model: config.embeddingModel || "default",
+        input: text
+      });
+      return res.data[0]?.embedding ?? null;
+    } catch (_error) {
+      return null;
+    }
+  }
   async execute(request) {
     this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
@@ -470,6 +653,43 @@ var Router = class {
           return cached;
         }
       } catch (_e) {
+      }
+    }
+    let queryEmbedding = null;
+    const semanticConfig = this.getSemanticCacheConfig();
+    if (this.cacheOptions?.enabled && semanticConfig?.enabled && !request.stream) {
+      const promptText = extractPromptText(request.messages);
+      queryEmbedding = await this.getEmbeddingForText(
+        promptText,
+        semanticConfig
+      );
+      if (queryEmbedding && queryEmbedding.length > 0) {
+        const now = Date.now();
+        this.semanticEntries = this.semanticEntries.filter(
+          (e) => e.expiresAt > now
+        );
+        let bestMatch = null;
+        let bestSim = -1;
+        for (const entry of this.semanticEntries) {
+          if (entry.model === request.model) {
+            const sim = cosineSimilarity(queryEmbedding, entry.embedding);
+            if (sim > bestSim) {
+              bestSim = sim;
+              bestMatch = entry;
+            }
+          }
+        }
+        const threshold = semanticConfig.similarityThreshold ?? 0.9;
+        if (bestMatch && bestSim >= threshold) {
+          this.metrics.cachedRequests++;
+          this.metrics.successfulRequests++;
+          this.hooks?.onSemanticCacheHit?.(
+            request,
+            bestMatch.response,
+            bestSim
+          );
+          return bestMatch.response;
+        }
       }
     }
     let providersList = this.providers;
@@ -649,6 +869,32 @@ var Router = class {
                     apiRes,
                     this.cacheOptions.ttlSeconds ?? 300
                   );
+                } catch (_e) {
+                }
+              }
+              if (this.cacheOptions?.enabled && semanticConfig?.enabled && !currentRequest.stream) {
+                try {
+                  const promptText = extractPromptText(request.messages);
+                  if (!queryEmbedding) {
+                    queryEmbedding = await this.getEmbeddingForText(
+                      promptText,
+                      semanticConfig
+                    );
+                  }
+                  if (queryEmbedding && queryEmbedding.length > 0) {
+                    const maxEntries = semanticConfig.maxEntries ?? 1e3;
+                    const ttlMs = (this.cacheOptions.ttlSeconds ?? 300) * 1e3;
+                    if (this.semanticEntries.length >= maxEntries) {
+                      this.semanticEntries.shift();
+                    }
+                    this.semanticEntries.push({
+                      model: request.model,
+                      prompt: promptText,
+                      embedding: queryEmbedding,
+                      response: apiRes,
+                      expiresAt: Date.now() + ttlMs
+                    });
+                  }
                 } catch (_e) {
                 }
               }
@@ -945,6 +1191,39 @@ var SinapsClient = class {
   embeddings = {
     create: async (request) => {
       return this.router.executeEmbedding(request);
+    }
+  };
+  batch = {
+    /**
+     * Executes multiple non-streaming chat completion requests concurrently with
+     * built-in concurrency control, fail-soft resilience, and progress reporting.
+     */
+    chat: async (requests, options) => {
+      return executeBatch(
+        requests,
+        async (req) => {
+          const res = await this.chat.completions.create(req);
+          return res;
+        },
+        options
+      );
+    },
+    /**
+     * Executes multiple text embedding requests concurrently with
+     * built-in concurrency control, fail-soft resilience, and progress reporting.
+     */
+    embeddings: async (requests, options) => {
+      return executeBatch(
+        requests,
+        async (req) => this.embeddings.create(req),
+        options
+      );
+    },
+    /**
+     * General concurrency executor for running any custom async task over an array of items.
+     */
+    create: async (items, handler, options) => {
+      return executeBatch(items, handler, options);
     }
   };
   getMetrics() {
@@ -3366,6 +3645,7 @@ function createOpenRouterFreeProvider(config) {
 }
 
 exports.AnthropicProvider = AnthropicProvider;
+exports.BatchExecutionError = BatchExecutionError;
 exports.CircuitBreaker = CircuitBreaker;
 exports.DeepSeekProvider = DeepSeekProvider;
 exports.GEMINI_MODELS = GEMINI_MODELS;
@@ -3379,7 +3659,10 @@ exports.OpenAiProvider = OpenAiProvider;
 exports.OpenRouterProvider = OpenRouterProvider;
 exports.Router = Router;
 exports.SinapsClient = SinapsClient;
+exports.cosineSimilarity = cosineSimilarity;
 exports.createOpenRouterFreeProvider = createOpenRouterFreeProvider;
+exports.executeBatch = executeBatch;
+exports.extractPromptText = extractPromptText;
 exports.isOpenRouterFreeModel = isOpenRouterFreeModel;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

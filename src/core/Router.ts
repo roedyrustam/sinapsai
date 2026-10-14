@@ -1,27 +1,27 @@
 import type { Provider } from '../providers/Provider.js';
 import type {
+  CacheOptions,
   CircuitBreakerStatus,
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
+  SemanticCacheOptions,
   SinapsEventHooks,
   SinapsMetrics,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
+
+export type { CacheOptions, SemanticCacheOptions };
 
 export type RouterStrategy =
   | 'failover'
   | 'load-balance'
   | 'lowest-cost'
   | 'lowest-latency';
-
-export interface CacheOptions {
-  enabled?: boolean;
-  ttlSeconds?: number;
-}
 
 export interface RouterOptions {
   strategy?: RouterStrategy;
@@ -31,6 +31,14 @@ export interface RouterOptions {
   retryDelayMs?: number;
   cache?: CacheOptions;
   storage?: StateStorage;
+}
+
+interface SemanticCacheEntry {
+  model: string;
+  prompt: string;
+  embedding: number[];
+  response: UnifiedApiResponse;
+  expiresAt: number;
 }
 
 export class Router {
@@ -44,6 +52,7 @@ export class Router {
   private retryDelayMs: number;
   private cacheOptions?: CacheOptions;
   private storage?: StateStorage;
+  private semanticEntries: SemanticCacheEntry[] = [];
   private metrics: SinapsMetrics = {
     totalRequests: 0,
     successfulRequests: 0,
@@ -115,6 +124,7 @@ export class Router {
     if (this.storage && typeof this.storage.clear === 'function') {
       await this.storage.clear();
     }
+    this.semanticEntries = [];
   }
 
   private recordMetrics(
@@ -265,12 +275,52 @@ export class Router {
     return list.length > 0 ? list : ['default'];
   }
 
+  private getSemanticCacheConfig(): SemanticCacheOptions | null {
+    if (!this.cacheOptions?.semantic) {
+      return null;
+    }
+    if (typeof this.cacheOptions.semantic === 'boolean') {
+      return this.cacheOptions.semantic ? { enabled: true } : null;
+    }
+    return {
+      enabled: this.cacheOptions.semantic.enabled !== false,
+      ...this.cacheOptions.semantic,
+    };
+  }
+
+  private async getEmbeddingForText(
+    text: string,
+    config: SemanticCacheOptions,
+  ): Promise<number[] | null> {
+    try {
+      if (typeof config.customEmbed === 'function') {
+        return await config.customEmbed(text);
+      }
+
+      const hasEmbeddingProvider = this.providers.some(
+        (p) => typeof p.generateEmbedding === 'function',
+      );
+      if (!hasEmbeddingProvider) {
+        return null;
+      }
+
+      const res = await this.executeEmbedding({
+        model: config.embeddingModel || 'default',
+        input: text,
+      });
+
+      return res.data[0]?.embedding ?? null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async execute(
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> {
     this.metrics.totalRequests++;
 
-    // Check Cache if enabled and not streaming
+    // 1. Check exact Cache if enabled and not streaming
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
       try {
         const cacheKey = this.computeCacheKey(request);
@@ -282,6 +332,53 @@ export class Router {
         }
       } catch (_e) {
         // Ignore cache lookup errors and proceed
+      }
+    }
+
+    // 2. Check semantic Cache if enabled and not streaming
+    let queryEmbedding: number[] | null = null;
+    const semanticConfig = this.getSemanticCacheConfig();
+    if (
+      this.cacheOptions?.enabled &&
+      semanticConfig?.enabled &&
+      !request.stream
+    ) {
+      const promptText = extractPromptText(request.messages);
+      queryEmbedding = await this.getEmbeddingForText(
+        promptText,
+        semanticConfig,
+      );
+
+      if (queryEmbedding && queryEmbedding.length > 0) {
+        const now = Date.now();
+        this.semanticEntries = this.semanticEntries.filter(
+          (e) => e.expiresAt > now,
+        );
+
+        let bestMatch: SemanticCacheEntry | null = null;
+        let bestSim = -1;
+
+        for (const entry of this.semanticEntries) {
+          if (entry.model === request.model) {
+            const sim = cosineSimilarity(queryEmbedding, entry.embedding);
+            if (sim > bestSim) {
+              bestSim = sim;
+              bestMatch = entry;
+            }
+          }
+        }
+
+        const threshold = semanticConfig.similarityThreshold ?? 0.9;
+        if (bestMatch && bestSim >= threshold) {
+          this.metrics.cachedRequests++;
+          this.metrics.successfulRequests++;
+          this.hooks?.onSemanticCacheHit?.(
+            request,
+            bestMatch.response,
+            bestSim,
+          );
+          return bestMatch.response;
+        }
       }
     }
 
@@ -536,6 +633,38 @@ export class Router {
                   );
                 } catch (_e) {
                   // Ignore cache set error
+                }
+              }
+
+              if (
+                this.cacheOptions?.enabled &&
+                semanticConfig?.enabled &&
+                !currentRequest.stream
+              ) {
+                try {
+                  const promptText = extractPromptText(request.messages);
+                  if (!queryEmbedding) {
+                    queryEmbedding = await this.getEmbeddingForText(
+                      promptText,
+                      semanticConfig,
+                    );
+                  }
+                  if (queryEmbedding && queryEmbedding.length > 0) {
+                    const maxEntries = semanticConfig.maxEntries ?? 1000;
+                    const ttlMs = (this.cacheOptions.ttlSeconds ?? 300) * 1000;
+                    if (this.semanticEntries.length >= maxEntries) {
+                      this.semanticEntries.shift();
+                    }
+                    this.semanticEntries.push({
+                      model: request.model,
+                      prompt: promptText,
+                      embedding: queryEmbedding,
+                      response: apiRes,
+                      expiresAt: Date.now() + ttlMs,
+                    });
+                  }
+                } catch (_e) {
+                  // Ignore semantic cache set error
                 }
               }
             }

@@ -1,12 +1,9 @@
 import type { Provider } from '../providers/Provider.js';
-import type { CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
+export type { CacheOptions, SemanticCacheOptions };
 export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency';
-export interface CacheOptions {
-    enabled?: boolean;
-    ttlSeconds?: number;
-}
 export interface RouterOptions {
     strategy?: RouterStrategy;
     hooks?: SinapsEventHooks;
@@ -27,6 +24,7 @@ export declare class Router {
     private retryDelayMs;
     private cacheOptions?;
     private storage?;
+    private semanticEntries;
     private metrics;
     constructor(providers: Provider[], circuitBreaker: CircuitBreaker, options?: RouterOptions);
     getProviderById(id: string): Provider | undefined;
@@ -39,6 +37,8 @@ export declare class Router {
     private computeCacheKey;
     private isRetryableError;
     private getCandidateModels;
+    private getSemanticCacheConfig;
+    private getEmbeddingForText;
     execute(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
     private computeEmbeddingCacheKey;
     executeEmbedding(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;

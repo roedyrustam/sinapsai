@@ -848,4 +848,147 @@ describe('Router', () => {
       expect(p2.generateContent).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('Semantic In-Process Response Caching', () => {
+    it('should serve semantically similar queries from cache using customEmbed and trigger onSemanticCacheHit', async () => {
+      const onSemanticCacheHit = vi.fn();
+      const p1 = createMockProvider('p1');
+
+      // Simple mock embedding function
+      const customEmbed = vi.fn().mockImplementation(async (text: string) => {
+        if (text.toLowerCase().includes('france')) {
+          // Both questions about France have almost identical vectors
+          return [0.99, 0.05, 0.01];
+        }
+        // Questions about football have orthogonal vectors
+        return [0.01, 0.99, 0.02];
+      });
+
+      const router = new Router([p1], circuitBreaker, {
+        storage,
+        cache: {
+          enabled: true,
+          ttlSeconds: 60,
+          semantic: {
+            enabled: true,
+            similarityThreshold: 0.9,
+            customEmbed,
+          },
+        },
+        hooks: { onSemanticCacheHit },
+      });
+
+      // Request 1: What is the capital of France?
+      const res1 = (await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'What is the capital of France?' }],
+      })) as UnifiedApiResponse;
+
+      expect(res1).toBe(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+      expect(onSemanticCacheHit).not.toHaveBeenCalled();
+
+      // Request 2: Can you tell me the capital of France? (Different phrasing, same semantics)
+      const res2 = (await router.execute({
+        model: 'test',
+        messages: [
+          { role: 'user', content: 'Can you tell me the capital of France?' },
+        ],
+      })) as UnifiedApiResponse;
+
+      expect(res2).toEqual(mockResponse);
+      // p1 was NOT called again! It was served from semantic cache!
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+      expect(onSemanticCacheHit).toHaveBeenCalledTimes(1);
+      const [_req, _cachedRes, similarity] = onSemanticCacheHit.mock.calls[0];
+      expect(similarity).toBeGreaterThanOrEqual(0.95);
+
+      // Request 3: Who won the World Cup? (Semantically unrelated)
+      await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'Who won the World Cup?' }],
+      });
+      // Should NOT match France cache, so provider is called
+      expect(p1.generateContent).toHaveBeenCalledTimes(2);
+    });
+
+    it('should utilize provider generateEmbedding when customEmbed is not specified', async () => {
+      const onSemanticCacheHit = vi.fn();
+      const p1: Provider = {
+        id: 'p-embed-capable',
+        name: 'Provider with Embeddings',
+        generateContent: vi.fn().mockResolvedValue(mockResponse),
+        generateEmbedding: vi.fn().mockImplementation(async (req) => {
+          const text = req.input as string;
+          if (text.includes('weather')) {
+            return {
+              object: 'list',
+              model: 'embed-model',
+              data: [{ object: 'embedding', index: 0, embedding: [1, 0] }],
+            };
+          }
+          return {
+            object: 'list',
+            model: 'embed-model',
+            data: [{ object: 'embedding', index: 0, embedding: [0, 1] }],
+          };
+        }),
+      };
+
+      const router = new Router([p1], circuitBreaker, {
+        storage,
+        cache: {
+          enabled: true,
+          semantic: true, // Default config (similarityThreshold: 0.90)
+        },
+        hooks: { onSemanticCacheHit },
+      });
+
+      // First query
+      await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'How is the weather today?' }],
+      });
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+
+      // Second similar query
+      const res2 = await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'Tell me the weather report' }],
+      });
+
+      expect(res2).toEqual(mockResponse);
+      expect(p1.generateContent).toHaveBeenCalledTimes(1); // Cache hit!
+      expect(onSemanticCacheHit).toHaveBeenCalledTimes(1);
+    });
+
+    it('should clear semantic cache when router.clearCache() is called', async () => {
+      const p1 = createMockProvider('p1');
+      const customEmbed = vi.fn().mockResolvedValue([1, 0, 0]);
+
+      const router = new Router([p1], circuitBreaker, {
+        storage,
+        cache: {
+          enabled: true,
+          semantic: { customEmbed },
+        },
+      });
+
+      await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'Hello 1' }],
+      });
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+
+      // Clear cache
+      await router.clearCache();
+
+      // Subsequent query should miss and call provider again
+      await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'Hello 2' }],
+      });
+      expect(p1.generateContent).toHaveBeenCalledTimes(2);
+    });
+  });
 });

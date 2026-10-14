@@ -77,6 +77,10 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 - 🌐 **Unified API**: Communicate seamlessly across different LLM providers using standard request/response structures aligned with the OpenAI Chat Completions specification.
 - 🧠 **Universal Frontier Reasoning Engine**: Seamless control for deep thinking and Chain-of-Thought across Claude 3.7 Sonnet (`thinkingBudget`), OpenAI o1/o3/o4 (`reasoningEffort: 'low' | 'medium' | 'high'`), Groq LPU, DeepSeek R1, and Gemini Flash Thinking, automatically surfaced in `message.reasoning_content`.
 - ⚡ **Lowest-Latency Routing (`lowest-latency`)**: Dynamically measures running moving-average latency and dispatches prompts to the fastest available LLM provider with zero cold-start lag.
+- 🎯 **Hierarchical Model-Level Fallbacks**: Intelligently fall back to secondary candidate models (e.g., `gpt-4o` -> `gpt-4o-mini`) on the current provider before escalating to provider failover, complete with fast-failover on 401 Unauthorized.
+- 👁️ **Universal Multi-Modal Content (`ContentPart[]`)**: Unified vision and audio payload format (`text`, `image_url`, `input_audio`) natively mapped across OpenAI, Anthropic Claude, and Google Gemini.
+- ⚡ **Zero-Dependency Semantic Caching**: Pure in-process cosine similarity response caching using local or provider embeddings with configurable threshold (0.0 to 1.0) and zero native addons.
+- 📊 **Streaming TTFT & Mid-Stream Circuit Breaking**: Millisecond-accurate Time-To-First-Token telemetry (`onStreamSuccess`) and circuit breaker failure trapping against mid-stream connection drops while protecting client aborts.
 - 💰 **KV-Cache & Prompt Caching Analytics**: Real-time tracking of `cachedPromptTokens` in responses and `totalCachedPromptTokens` in metrics to audit and reduce API bills by 70-90%.
 - 🛠️ **Universal Tool Calling & JSON Mode**: Define tools once with standard JSON Schema (`tools`, `toolChoice`). SinapsAI automatically translates function calls to Anthropic's XML/tool syntax, Gemini's function declarations, and OpenAI formats.
 - 🛡️ **In-Memory Circuit Breaker**: Detects provider outages instantaneously and trips (*Open Circuit*) to prevent cascading latencies and application thread blockage.
@@ -86,10 +90,11 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - `load-balance`: Distributes requests in a round-robin rotation across multiple keys or endpoints to avert rate limiting (HTTP 429).
   - `lowest-cost`: Dynamically sorts and invokes the most cost-effective provider using token pricing (`costPer1kTokens` & dual pricing).
 - ⚡ **Exponential Backoff & Retries**: Automatically retries transient network errors and rate limits (429, 5xx) with random jitter before failing over.
-- 💾 **In-Memory Prompt Hash Caching**: Fast in-memory response caching with configurable TTL to avoid duplicate calls and cut costs.
+- 💾 **In-Memory Prompt Hash & Semantic Caching**: Instant response caching with configurable TTL to avoid duplicate calls and slash inference costs.
+- 🚀 **Concurrent In-Process Batch Engine (`client.batch`)**: Zero-dependency worker pool for high-throughput batch chat completions and embeddings with concurrency limits and live progress tracking.
 - 🌊 **Native SSE Streaming**: Stream completions in real time using native asynchronous generators (`for await...of`).
 - 🔒 **Zero Data Leakage & 100% Local**: Runs strictly within your application's memory space. API keys and prompt payloads never leave your infrastructure.
-- 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onFallback`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) for APM metrics and custom alerting.
+- 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) for APM metrics and custom alerting.
 
 ---
 
@@ -353,21 +358,33 @@ const client = new SinapsClient({
 
 ---
 
-### 8. In-Memory Prompt Response Caching
+### 8. Exact & Semantic In-Process Response Caching
 
-Instantly serve repeated prompt queries with 0ms overhead and zero token consumption using built-in in-memory caching:
+Instantly serve repeated prompt queries with 0ms network overhead and zero token consumption. SinapsAI supports both exact match hash caching and **zero-dependency semantic caching** using cosine similarity:
 
 ```typescript
 const client = new SinapsClient({
   cache: {
-    enabled: true,       // Cache responses for identical prompts
+    enabled: true,       // Cache responses
     ttlSeconds: 300,     // Cache lifespan (default 5 minutes)
+    semantic: {
+      enabled: true,
+      similarityThreshold: 0.90, // Cosine similarity threshold (0.0 to 1.0)
+      embeddingModel: 'text-embedding-3-small', // Or uses available provider
+      // Optional: customEmbed: async (text) => [0.1, 0.2, ...]
+    },
   },
   providers: [
     new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
   ],
+  hooks: {
+    onSemanticCacheHit: (req, cachedRes, similarity) => {
+      console.log(`[Semantic Hit] ${(similarity * 100).toFixed(1)}% match for: ${cachedRes.model}`);
+    },
+  },
 });
 ```
+
 
 ---
 
@@ -564,17 +581,116 @@ const schemaResponse = await client.chat.completions.create({
 
 ---
 
+### 13. Hierarchical Model-Level Fallbacks
+
+Configure candidate fallback models on the client, per-provider, or per-request. If a model encounters a rate limit or 5xx error, SinapsAI tries the secondary candidate models on the current provider before escalating to failover across providers:
+
+```typescript
+const client = new SinapsClient({
+  providers: [
+    new OpenAiProvider({
+      apiKey: process.env.OPENAI_API_KEY!,
+      defaultModel: 'gpt-4o',
+      fallbackModels: ['gpt-4o-mini'], // Provider-level fallback
+    }),
+    new AnthropicProvider({
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+      defaultModel: 'claude-3-7-sonnet-20250219',
+      fallbackModels: ['claude-3-5-haiku-20241022'],
+    }),
+  ],
+  hooks: {
+    onModelFallback: (error, provider, fromModel, toModel) => {
+      console.warn(`[Model Fallback] ${provider.name} failed on ${fromModel}: ${error.message}. Switching to ${toModel}...`);
+    },
+    onFallback: (error, fromProvider, toProvider) => {
+      console.warn(`[Provider Failover] All models exhausted on ${fromProvider.name}. Switching to ${toProvider.name}...`);
+    },
+  },
+});
+
+// You can also override candidate models per request:
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  fallbackModels: ['gpt-4o-mini'],
+  messages: [{ role: 'user', content: 'Generate a short summary.' }],
+});
+```
+
+---
+
+### 14. Universal Multi-Modal Vision & Audio (`ContentPart[]`)
+
+Send text, base64 images, remote URLs, and audio payloads using a single OpenAI-compatible structure. SinapsAI automatically formats them for OpenAI, Anthropic Claude, and Google Gemini:
+
+```typescript
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Describe what is in this image and transcribe the audio note.' },
+        {
+          type: 'image_url',
+          image_url: { url: 'https://example.com/chart.png', detail: 'high' },
+        },
+        {
+          type: 'input_audio',
+          input_audio: { data: '<base64-audio>', format: 'wav' },
+        },
+      ],
+    },
+  ],
+});
+```
+
+---
+
+### 15. Concurrent In-Process Batch Processing (`client.batch`)
+
+Execute bulk chat completions or text embeddings concurrently with zero external dependencies (`p-limit` not needed). Includes concurrency limits, real-time progress callbacks, and fail-soft settled execution:
+
+```typescript
+const batchResult = await client.batch.chat(
+  [
+    { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Classify sentiment: Great product!' }] },
+    { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Classify sentiment: Terrible service.' }] },
+    { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Classify sentiment: Arrived on time.' }] },
+  ],
+  {
+    concurrency: 2,       // Maximum 2 in-flight requests simultaneously
+    stopOnError: false,   // Continue remaining requests on individual errors
+    onProgress: (p) => {
+      console.log(`[Batch Progress] ${p.completed}/${p.total} (${p.percentage}%)`);
+    },
+  },
+);
+
+console.log(`Completed ${batchResult.successful}/${batchResult.total} in ${batchResult.durationMs}ms`);
+for (const item of batchResult.results) {
+  if (item.status === 'fulfilled') {
+    console.log(`[Item #${item.index}] Answer:`, item.value?.choices[0].message.content);
+  } else {
+    console.error(`[Item #${item.index}] Failed:`, item.error?.message);
+  }
+}
+```
+
+---
+
 ## 🧩 Supported Providers
 
 | Provider | Exported Class | Options Supported |
 | :--- | :--- | :--- |
-| **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
-| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` |
-| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
-| **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, reasoning tokens (`reasoning_content`) |
-| **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0) |
-| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
+| **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
+| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
+| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
+| **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning tokens (`reasoning_content`) |
+| **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0), `fallbackModels` |
+| **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
+| **Mistral** | `MistralProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **Custom / On-Prem** | `Provider` (Interface) | Custom implementations for vLLM, LocalAI, TGI, etc. |
 
 ### Creating a Custom Provider (e.g. Ollama)
@@ -621,9 +737,13 @@ export class OllamaProvider implements Provider {
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `providers` | `Provider[]` | *(Required)* | List of provider instances to register |
-| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost'` | `'failover'` | Routing algorithm for requests |
+| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency'` | `'failover'` | Routing algorithm for requests |
 | `storage` | `StateStorage` | `InMemoryStorage` | State store for circuit breaker tracking |
 | `circuitBreaker` | `CircuitBreakerOptions` | `{}` | Fault tolerance parameters |
+| `cache` | `CacheOptions` | `{}` | In-process exact & semantic response caching configuration |
+| `retries` | `number` | `0` | Number of retries with exponential backoff before failover |
+| `retryDelayMs` | `number` | `200` | Initial backoff delay for retries |
+| `fallbackModels` | `string[]` | `undefined` | Global candidate model fallback list |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |
 
 ### `CircuitBreakerOptions`

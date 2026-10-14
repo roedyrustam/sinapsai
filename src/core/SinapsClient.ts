@@ -1,5 +1,7 @@
 import type { Provider } from '../providers/Provider.js';
 import type {
+  BatchOptions,
+  BatchResult,
   CircuitBreakerStatus,
   CreateChatCompletionRequest,
   CreateChatCompletionRequestNonStreaming,
@@ -12,6 +14,7 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { executeBatch } from './BatchExecutor.js';
 import {
   CircuitBreaker,
   type CircuitBreakerOptions,
@@ -103,6 +106,52 @@ export class SinapsClient {
       request: CreateEmbeddingRequest,
     ): Promise<CreateEmbeddingResponse> => {
       return this.router.executeEmbedding(request);
+    },
+  };
+
+  public readonly batch = {
+    /**
+     * Executes multiple non-streaming chat completion requests concurrently with
+     * built-in concurrency control, fail-soft resilience, and progress reporting.
+     */
+    chat: async (
+      requests: CreateChatCompletionRequestNonStreaming[],
+      options?: BatchOptions,
+    ): Promise<BatchResult<UnifiedApiResponse>> => {
+      return executeBatch(
+        requests,
+        async (req) => {
+          const res = await this.chat.completions.create(req);
+          return res as UnifiedApiResponse;
+        },
+        options,
+      );
+    },
+
+    /**
+     * Executes multiple text embedding requests concurrently with
+     * built-in concurrency control, fail-soft resilience, and progress reporting.
+     */
+    embeddings: async (
+      requests: CreateEmbeddingRequest[],
+      options?: BatchOptions,
+    ): Promise<BatchResult<CreateEmbeddingResponse>> => {
+      return executeBatch(
+        requests,
+        async (req) => this.embeddings.create(req),
+        options,
+      );
+    },
+
+    /**
+     * General concurrency executor for running any custom async task over an array of items.
+     */
+    create: async <TReq, TRes>(
+      items: TReq[],
+      handler: (item: TReq, index: number) => Promise<TRes>,
+      options?: BatchOptions,
+    ): Promise<BatchResult<TRes>> => {
+      return executeBatch(items, handler, options);
     },
   };
 

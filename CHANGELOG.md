@@ -26,7 +26,21 @@
   - Added `onModelFallback?: (error: Error, provider: Provider, fromModel: string, toModel: string) => void` observability hook to monitor model downgrades in real time.
   - Fast-failover protection: detects 401 Unauthorized / authentication failures and halts further model attempts on the compromised provider, failing over immediately.
   - Circuit Breaker alignment: successful fallback models record success and preserve provider health.
-- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, TTFT hooks, multi-modal formatting, and hierarchical model-level fallbacks, expanding test coverage to 149 tests across 15 test suites with 100% pass rate.
+- **Zero-Dependency Semantic In-Process Response Caching**:
+  - Implemented high-performance in-process vector similarity search via pure TypeScript cosine similarity (`cosineSimilarity` and `extractPromptText`) with zero runtime dependencies.
+  - Added `semantic: SemanticCacheOptions | boolean` configuration to `CacheOptions`, with customizable `similarityThreshold` (default: 0.90), `embeddingModel`, `maxEntries` (default: 1000), and `customEmbed` function.
+  - Sub-millisecond similarity scoring: queries are evaluated in-memory against active semantic cache vectors, returning cached responses for semantically equivalent queries phrased differently.
+  - Added `onSemanticCacheHit?: (request: UnifiedApiRequest, cachedResponse: UnifiedApiResponse, similarity: number) => void` hook to inspect real-time similarity percentages on semantic cache hits.
+  - Integrated with `router.clearCache()` to simultaneously flush both exact hash key storage and semantic vector indices.
+- **Concurrent In-Process Batch Processing Engine (`client.batch`)**:
+  - Implemented high-throughput, zero-dependency async worker pool in `BatchExecutor.ts` with configurable `concurrency` (default: 4), live `onProgress` callbacks, and `AbortSignal` cancellation support.
+  - Added fail-soft settled mode (`stopOnError: false`, default) and fail-fast mode (`stopOnError: true`, throwing typed `BatchExecutionError`).
+  - Integrated into `SinapsClient.batch`:
+    - `client.batch.chat(requests, options)`: Concurrent execution of bulk chat completions across router failover, circuit breakers, and semantic cache.
+    - `client.batch.embeddings(requests, options)`: Concurrent execution of bulk text embeddings.
+    - `client.batch.create(items, handler, options)`: Generic concurrency executor for custom async tasks.
+  - Added runnable example `examples/15-concurrent-batch-processing.ts` and test suite in `src/core/BatchExecutor.test.ts`.
+- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, TTFT hooks, multi-modal formatting, hierarchical model-level fallbacks, semantic cosine caching, and batch execution, expanding test coverage to 169 tests across 17 test suites with 100% pass rate.
 
 ## [2.0.0] - 2026-10-13 — Superintelligence Edition
 ### Added

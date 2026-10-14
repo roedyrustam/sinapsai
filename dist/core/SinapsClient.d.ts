@@ -1,5 +1,5 @@
 import type { Provider } from '../providers/Provider.js';
-import type { CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BatchOptions, BatchResult, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
@@ -29,6 +29,22 @@ export declare class SinapsClient {
     };
     readonly embeddings: {
         create: (request: CreateEmbeddingRequest) => Promise<CreateEmbeddingResponse>;
+    };
+    readonly batch: {
+        /**
+         * Executes multiple non-streaming chat completion requests concurrently with
+         * built-in concurrency control, fail-soft resilience, and progress reporting.
+         */
+        chat: (requests: CreateChatCompletionRequestNonStreaming[], options?: BatchOptions) => Promise<BatchResult<UnifiedApiResponse>>;
+        /**
+         * Executes multiple text embedding requests concurrently with
+         * built-in concurrency control, fail-soft resilience, and progress reporting.
+         */
+        embeddings: (requests: CreateEmbeddingRequest[], options?: BatchOptions) => Promise<BatchResult<CreateEmbeddingResponse>>;
+        /**
+         * General concurrency executor for running any custom async task over an array of items.
+         */
+        create: <TReq, TRes>(items: TReq[], handler: (item: TReq, index: number) => Promise<TRes>, options?: BatchOptions) => Promise<BatchResult<TRes>>;
     };
     getMetrics(): SinapsMetrics;
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
