@@ -322,6 +322,90 @@ export class Router {
           const res = await this.circuitBreaker.execute(provider, request);
           const latencyMs = Date.now() - startTime;
 
+          if (
+            request.stream &&
+            res != null &&
+            typeof res === 'object' &&
+            Symbol.asyncIterator in res
+          ) {
+            const self = this;
+            const iterable = res as AsyncIterable<UnifiedApiStreamChunk>;
+            let firstChunkTime = 0;
+            let collectedPromptTokens = 0;
+            let collectedCompletionTokens = 0;
+            let collectedCachedPromptTokens = 0;
+
+            return (async function* () {
+              try {
+                for await (const chunk of iterable) {
+                  if (!firstChunkTime) {
+                    firstChunkTime = Date.now();
+                  }
+                  if (chunk.usage) {
+                    collectedPromptTokens =
+                      chunk.usage.promptTokens || collectedPromptTokens;
+                    collectedCompletionTokens =
+                      chunk.usage.completionTokens || collectedCompletionTokens;
+                    collectedCachedPromptTokens =
+                      chunk.usage.cachedPromptTokens ||
+                      collectedCachedPromptTokens;
+                  }
+                  yield chunk;
+                }
+                const totalLatencyMs = Date.now() - startTime;
+                const ttftMs = firstChunkTime
+                  ? firstChunkTime - startTime
+                  : totalLatencyMs;
+
+                let costUsd = 0;
+                if (
+                  provider.promptCostPer1k !== undefined &&
+                  provider.completionCostPer1k !== undefined
+                ) {
+                  costUsd =
+                    (collectedPromptTokens / 1000) * provider.promptCostPer1k +
+                    (collectedCompletionTokens / 1000) *
+                      provider.completionCostPer1k;
+                } else if (provider.costPer1kTokens !== undefined) {
+                  costUsd =
+                    ((collectedPromptTokens + collectedCompletionTokens) /
+                      1000) *
+                    provider.costPer1kTokens;
+                }
+
+                self.recordMetrics(
+                  provider.id,
+                  true,
+                  totalLatencyMs,
+                  collectedPromptTokens,
+                  collectedCompletionTokens,
+                  costUsd,
+                  collectedCachedPromptTokens,
+                );
+
+                self.hooks?.onStreamSuccess?.(provider, ttftMs, totalLatencyMs);
+              } catch (streamError) {
+                const isAbort =
+                  request.signal?.aborted ||
+                  (streamError as Error)?.name === 'AbortError' ||
+                  (streamError as Error)?.message
+                    ?.toLowerCase()
+                    .includes('aborted');
+                if (!isAbort) {
+                  self.recordMetrics(
+                    provider.id,
+                    false,
+                    Date.now() - startTime,
+                    0,
+                    0,
+                    0,
+                  );
+                }
+                throw streamError;
+              }
+            })();
+          }
+
           if (!request.stream && 'choices' in (res as UnifiedApiResponse)) {
             const apiRes = res as UnifiedApiResponse;
             this.hooks?.onSuccess?.(provider, apiRes, latencyMs);

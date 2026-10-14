@@ -90,6 +90,11 @@ export class DeepSeekProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any): UnifiedApiResponse {
     const choice = data.choices?.[0];
+    const cachedPromptTokens =
+      data.usage?.prompt_cache_hit_tokens ??
+      data.usage?.prompt_tokens_details?.cached_tokens ??
+      undefined;
+
     return {
       id: data.id || `deepseek-${Date.now()}`,
       model: data.model,
@@ -109,6 +114,7 @@ export class DeepSeekProvider implements Provider {
             promptTokens: data.usage.prompt_tokens || 0,
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
+            cachedPromptTokens,
           }
         : undefined,
     };

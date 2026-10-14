@@ -240,6 +240,34 @@ describe('GroqProvider', () => {
       );
     });
 
+    it('should extract cachedPromptTokens from prompt_tokens_details', () => {
+      const groqResponse = {
+        id: 'chatcmpl-cached',
+        model: 'llama-3.3-70b-versatile',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Fast Groq reply',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 200,
+          completion_tokens: 30,
+          total_tokens: 230,
+          prompt_tokens_details: {
+            cached_tokens: 150,
+          },
+        },
+      };
+
+      const result = provider.formatResponse(groqResponse);
+      expect(result.usage?.cachedPromptTokens).toBe(150);
+      expect(result.usage?.promptTokens).toBe(200);
+    });
+
     it('should handle response without usage metadata gracefully', () => {
       const groqResponse = {
         id: 'chatcmpl-456',

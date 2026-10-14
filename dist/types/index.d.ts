@@ -81,6 +81,12 @@ export interface UnifiedApiStreamChunk {
         };
         finishReason: string | null;
     }>;
+    usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+        cachedPromptTokens?: number;
+    };
 }
 export interface RateLimitInfo {
     remainingRequests?: number;
@@ -172,6 +178,7 @@ export interface CircuitBreakerStatus {
 import type { Provider } from '../providers/Provider.js';
 export interface SinapsEventHooks {
     onSuccess?: (provider: Provider, response: UnifiedApiResponse, latencyMs: number) => void;
+    onStreamSuccess?: (provider: Provider, ttftMs: number, totalLatencyMs: number) => void;
     onEmbeddingSuccess?: (provider: Provider, response: CreateEmbeddingResponse, latencyMs: number) => void;
     onFallback?: (error: Error, fromProvider: Provider, toProvider: Provider) => void;
     onCircuitOpen?: (provider: Provider) => void;

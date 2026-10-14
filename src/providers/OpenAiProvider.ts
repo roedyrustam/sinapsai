@@ -90,6 +90,7 @@ export class OpenAiProvider implements Provider {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -185,6 +186,17 @@ export class OpenAiProvider implements Provider {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage: UnifiedApiStreamChunk['usage'] | undefined;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens:
+                      parsed.usage.prompt_tokens_details?.cached_tokens ??
+                      undefined,
+                  };
+                }
                 yield {
                   id: parsed.id || `openai-${Date.now()}`,
                   model: parsed.model,
@@ -202,6 +214,7 @@ export class OpenAiProvider implements Provider {
                       finishReason: chunk?.finish_reason || null,
                     },
                   ],
+                  usage: chunkUsage,
                 };
               } catch (_e) {
                 // ignore parse error for individual chunks

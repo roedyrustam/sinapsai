@@ -236,4 +236,142 @@ describe('CircuitBreaker', () => {
       expect(resetStatus.failures).toBe(0);
     });
   });
+
+  describe('Streaming Execution & Mid-Stream Failure', () => {
+    it('should successfully stream chunks through circuit breaker', async () => {
+      const mockStreamProvider: Provider = {
+        id: 'stream-provider',
+        name: 'StreamProvider',
+        generateContent: vi.fn().mockImplementation(async () => {
+          return (async function* () {
+            yield {
+              id: 'c1',
+              model: 'test',
+              choices: [{ delta: { content: 'chunk 1' }, finishReason: null }],
+            };
+            yield {
+              id: 'c2',
+              model: 'test',
+              choices: [
+                { delta: { content: 'chunk 2' }, finishReason: 'stop' },
+              ],
+            };
+          })();
+        }),
+      };
+
+      const res = await circuitBreaker.execute(mockStreamProvider, {
+        model: 'test',
+        messages: [{ role: 'user', content: 'test' }],
+        stream: true,
+      });
+
+      // biome-ignore lint/suspicious/noExplicitAny: test chunk iteration
+      const chunks: any[] = [];
+      // biome-ignore lint/suspicious/noExplicitAny: test chunk iteration
+      for await (const chunk of res as AsyncIterable<any>) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(2);
+      expect(chunks[0].choices[0].delta.content).toBe('chunk 1');
+      expect(chunks[1].choices[0].delta.content).toBe('chunk 2');
+
+      const status = await circuitBreaker.getStatus('stream-provider');
+      expect(status.state).toBe('CLOSED');
+      expect(status.failures).toBe(0);
+    });
+
+    it('should record failure and trip circuit breaker if mid-stream disconnect occurs', async () => {
+      const failingStreamProvider: Provider = {
+        id: 'stream-fail-provider',
+        name: 'StreamFailProvider',
+        generateContent: vi.fn().mockImplementation(async () => {
+          return (async function* () {
+            yield {
+              id: 'c1',
+              model: 'test',
+              choices: [{ delta: { content: 'chunk 1' }, finishReason: null }],
+            };
+            // Simulate socket disconnect on chunk 2
+            throw new Error('Connection reset by peer mid-stream');
+          })();
+        }),
+      };
+
+      // 1st failure
+      const res1 = await circuitBreaker.execute(failingStreamProvider, {
+        model: 'test',
+        messages: [{ role: 'user', content: 'test' }],
+        stream: true,
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test chunk iteration
+      const it1 = (res1 as AsyncIterable<any>)[Symbol.asyncIterator]();
+      await expect(it1.next()).resolves.toBeDefined(); // 1st chunk works
+      await expect(it1.next()).rejects.toThrow(
+        'Connection reset by peer mid-stream',
+      ); // mid-stream throws
+
+      // 2nd failure
+      const res2 = await circuitBreaker.execute(failingStreamProvider, {
+        model: 'test',
+        messages: [{ role: 'user', content: 'test' }],
+        stream: true,
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test chunk iteration
+      const it2 = (res2 as AsyncIterable<any>)[Symbol.asyncIterator]();
+      await it2.next();
+      await expect(it2.next()).rejects.toThrow(
+        'Connection reset by peer mid-stream',
+      );
+
+      // Now threshold (2) is reached -> Circuit should be OPEN!
+      await expect(
+        circuitBreaker.execute(failingStreamProvider, {
+          model: 'test',
+          messages: [{ role: 'user', content: 'test' }],
+          stream: true,
+        }),
+      ).rejects.toThrow(
+        'Circuit breaker is OPEN for provider: stream-fail-provider',
+      );
+    });
+
+    it('should NOT record failure if stream error is an intentional client abort', async () => {
+      const abortController = new AbortController();
+      const abortStreamProvider: Provider = {
+        id: 'stream-abort-provider',
+        name: 'StreamAbortProvider',
+        generateContent: vi.fn().mockImplementation(async () => {
+          return (async function* () {
+            yield {
+              id: 'c1',
+              model: 'test',
+              choices: [{ delta: { content: 'chunk 1' }, finishReason: null }],
+            };
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            throw err;
+          })();
+        }),
+      };
+
+      const res = await circuitBreaker.execute(abortStreamProvider, {
+        model: 'test',
+        messages: [{ role: 'user', content: 'test' }],
+        stream: true,
+        signal: abortController.signal,
+      });
+
+      // biome-ignore lint/suspicious/noExplicitAny: test chunk iteration
+      const it = (res as AsyncIterable<any>)[Symbol.asyncIterator]();
+      await it.next();
+      await expect(it.next()).rejects.toThrow('aborted');
+
+      // Verify circuit breaker status was NOT incremented as a failure
+      const status = await circuitBreaker.getStatus('stream-abort-provider');
+      expect(status.failures).toBe(0);
+      expect(status.state).toBe('CLOSED');
+    });
+  });
 });

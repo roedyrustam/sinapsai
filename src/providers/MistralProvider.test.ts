@@ -106,6 +106,34 @@ describe('MistralProvider', () => {
         totalTokens: 23,
       });
     });
+
+    it('should extract cachedPromptTokens from prompt_tokens_details', () => {
+      const cachedResponse = {
+        id: 'cmpl-mistral-cached',
+        model: 'mistral-large-latest',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Cached response',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 120,
+          completion_tokens: 30,
+          total_tokens: 150,
+          prompt_tokens_details: {
+            cached_tokens: 90,
+          },
+        },
+      };
+
+      const result = provider.formatResponse(cachedResponse);
+      expect(result.usage?.cachedPromptTokens).toBe(90);
+      expect(result.usage?.promptTokens).toBe(120);
+    });
   });
 
   describe('generateContent & rate limits', () => {

@@ -628,4 +628,112 @@ describe('Router', () => {
       expect(resetAll.p2.state).toBe('CLOSED');
     });
   });
+
+  describe('Streaming Metrics & TTFT Tracking', () => {
+    it('should track streaming metrics, tokens, TTFT, and trigger onStreamSuccess hook', async () => {
+      const onStreamSuccess = vi.fn();
+      const mockStreamChunk1: UnifiedApiStreamChunk = {
+        id: 'chunk-1',
+        model: 'test-model',
+        choices: [{ delta: { content: 'Hello ' }, finishReason: null }],
+      };
+      const mockStreamChunk2: UnifiedApiStreamChunk = {
+        id: 'chunk-2',
+        model: 'test-model',
+        choices: [{ delta: { content: 'world!' }, finishReason: 'stop' }],
+        usage: {
+          promptTokens: 12,
+          completionTokens: 8,
+          totalTokens: 20,
+          cachedPromptTokens: 5,
+        },
+      };
+
+      const streamProvider: Provider = {
+        id: 'p-stream',
+        name: 'StreamProvider',
+        costPer1kTokens: 0.002,
+        generateContent: vi.fn().mockImplementation(async () => {
+          return (async function* () {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            yield mockStreamChunk1;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            yield mockStreamChunk2;
+          })();
+        }),
+      };
+
+      const router = new Router([streamProvider], circuitBreaker, {
+        hooks: { onStreamSuccess },
+      });
+
+      const res = await router.execute({
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Stream test' }],
+        stream: true,
+      });
+
+      const chunks: UnifiedApiStreamChunk[] = [];
+      for await (const chunk of res as AsyncIterable<UnifiedApiStreamChunk>) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(2);
+      expect(onStreamSuccess).toHaveBeenCalledTimes(1);
+      const [cbProvider, ttftMs, totalLatencyMs] =
+        onStreamSuccess.mock.calls[0];
+      expect(cbProvider.id).toBe('p-stream');
+      expect(ttftMs).toBeGreaterThanOrEqual(5);
+      expect(totalLatencyMs).toBeGreaterThanOrEqual(ttftMs);
+
+      const metrics = router.getMetrics();
+      expect(metrics.totalRequests).toBe(1);
+      expect(metrics.successfulRequests).toBe(1);
+      expect(metrics.totalPromptTokens).toBe(12);
+      expect(metrics.totalCompletionTokens).toBe(8);
+      expect(metrics.totalTokens).toBe(20);
+      expect(metrics.totalCachedPromptTokens).toBe(5);
+      expect(metrics.providerMetrics['p-stream'].requests).toBe(1);
+      expect(metrics.providerMetrics['p-stream'].successes).toBe(1);
+      expect(metrics.providerMetrics['p-stream'].cachedPromptTokens).toBe(5);
+    });
+
+    it('should record metric failure when streaming errors mid-flight', async () => {
+      const failingStreamProvider: Provider = {
+        id: 'p-stream-fail',
+        name: 'FailingStreamProvider',
+        generateContent: vi.fn().mockImplementation(async () => {
+          return (async function* () {
+            yield {
+              id: 'c1',
+              model: 'test',
+              choices: [{ delta: { content: 'chunk 1' }, finishReason: null }],
+            };
+            throw new Error('Mid-stream network timeout');
+          })();
+        }),
+      };
+
+      const router = new Router([failingStreamProvider], circuitBreaker);
+      const res = await router.execute({
+        model: 'test',
+        messages: [{ role: 'user', content: 'Fail mid stream' }],
+        stream: true,
+      });
+
+      const streamIterator = (res as AsyncIterable<UnifiedApiStreamChunk>)[
+        Symbol.asyncIterator
+      ]();
+      await expect(streamIterator.next()).resolves.toBeDefined();
+      await expect(streamIterator.next()).rejects.toThrow(
+        'Mid-stream network timeout',
+      );
+
+      const metrics = router.getMetrics();
+      expect(metrics.totalRequests).toBe(1);
+      expect(metrics.failedRequests).toBe(1);
+      expect(metrics.successfulRequests).toBe(0);
+      expect(metrics.providerMetrics['p-stream-fail'].failures).toBe(1);
+    });
+  });
 });

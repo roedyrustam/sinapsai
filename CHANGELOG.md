@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.0.1] - 2026-10-15
+### Added
+- **Ecosystem-Wide KV-Cache & Prompt Caching Unification**:
+  - **DeepSeek Provider**: Extracted `prompt_cache_hit_tokens` and `prompt_tokens_details.cached_tokens` into `usage.cachedPromptTokens`, enabling audit of DeepSeek's KV cache discount in metrics.
+  - **OpenRouter Provider**: Added multi-strategy cached token extraction supporting `prompt_tokens_details.cached_tokens`, `prompt_cache_hit_tokens`, and calculated tokens from `cache_discount`. Also added extraction of `reasoning_content` in both `formatResponse` and streaming delta.
+  - **Gemini Provider**: Standardized `usageMetadata.cachedContentTokenCount` to `usage.cachedPromptTokens`.
+  - **Groq & Mistral Providers**: Extracted `prompt_tokens_details.cached_tokens` into `usage.cachedPromptTokens`.
+- **Streaming Error Resilience & Circuit Breaker Hardening**:
+  - Implemented mid-stream error trapping inside the async generator in `CircuitBreaker.ts`. Mid-stream connection resets and network drops now accurately trigger `recordFailure` and trip the circuit breaker if the failure threshold is reached.
+  - Corrected `recordSuccess` timing for streaming so that success is registered upon full stream delivery rather than prematurely on the first chunk.
+  - Added client-side abort protection: downstream cancellation via `AbortController` (`AbortError` or `request.signal.aborted`) is gracefully handled and exempted from penalizing provider reliability in the Circuit Breaker.
+- **Streaming Telemetry & TTFT (Time To First Token) Analytics**:
+  - Intercepted streaming responses in `Router.ts` to accumulate token usage, cached tokens, and compute real-time TTFT and total stream duration.
+  - Added `onStreamSuccess?: (provider: Provider, ttftMs: number, totalLatencyMs: number) => void` hook to `SinapsEventHooks`.
+  - Added `usage` field to `UnifiedApiStreamChunk` and enabled `stream_options: { include_usage: true }` / stream usage parsing across OpenAI, Groq, Anthropic, Gemini, and OpenRouter.
+- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, and TTFT hooks, expanding test coverage to 144 tests across 15 test suites with 100% pass rate.
+
 ## [2.0.0] - 2026-10-13 — Superintelligence Edition
 ### Added
 - **Groq Cloud LPU Integration Hardening**:

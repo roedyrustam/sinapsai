@@ -120,6 +120,32 @@ describe('DeepSeekProvider', () => {
       });
     });
 
+    it('should extract cachedPromptTokens from prompt_cache_hit_tokens or prompt_tokens_details', () => {
+      const deepseekCachedResponse = {
+        id: 'deepseek-msg-cached',
+        model: 'deepseek-chat',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Cached reply',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 25,
+          total_tokens: 125,
+          prompt_cache_hit_tokens: 80,
+        },
+      };
+
+      const result = provider.formatResponse(deepseekCachedResponse);
+      expect(result.usage?.cachedPromptTokens).toBe(80);
+      expect(result.usage?.promptTokens).toBe(100);
+    });
+
     it('should handle response without usage metadata', () => {
       const response = {
         id: 'msg-456',

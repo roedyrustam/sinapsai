@@ -212,6 +212,18 @@ export class OpenRouterProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any): UnifiedApiResponse {
     const choice = data.choices?.[0];
+    const reasoningContent =
+      choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+
+    const cachedPromptTokens =
+      data.usage?.prompt_tokens_details?.cached_tokens ??
+      data.usage?.prompt_cache_hit_tokens ??
+      (data.usage?.cache_discount
+        ? Math.round(
+            (data.usage.prompt_tokens || 0) * data.usage.cache_discount,
+          )
+        : undefined);
+
     return {
       id: data.id || `openrouter-${Date.now()}`,
       model: data.model,
@@ -220,6 +232,7 @@ export class OpenRouterProvider implements Provider {
           message: {
             role: 'assistant',
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls,
           },
           finishReason: choice?.finish_reason || 'stop',
@@ -230,6 +243,7 @@ export class OpenRouterProvider implements Provider {
             promptTokens: data.usage.prompt_tokens || 0,
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
+            cachedPromptTokens,
           }
         : undefined,
     };
@@ -293,6 +307,18 @@ export class OpenRouterProvider implements Provider {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage: UnifiedApiStreamChunk['usage'] | undefined;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens:
+                      parsed.usage.prompt_tokens_details?.cached_tokens ??
+                      parsed.usage.prompt_cache_hit_tokens ??
+                      undefined,
+                  };
+                }
                 yield {
                   id: parsed.id || `openrouter-${Date.now()}`,
                   model: parsed.model,
@@ -301,11 +327,16 @@ export class OpenRouterProvider implements Provider {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content:
+                          chunk?.delta?.reasoning ??
+                          chunk?.delta?.reasoning_content ??
+                          null,
                         tool_calls: chunk?.delta?.tool_calls,
                       },
                       finishReason: chunk?.finish_reason || null,
                     },
                   ],
+                  usage: chunkUsage,
                 };
               } catch (_e) {
                 // ignore

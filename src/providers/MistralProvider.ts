@@ -109,6 +109,8 @@ export class MistralProvider implements Provider {
             promptTokens: data.usage.prompt_tokens || 0,
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
+            cachedPromptTokens:
+              data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
           }
         : undefined,
     };

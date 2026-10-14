@@ -97,6 +97,7 @@ export class GroqProvider implements Provider {
 
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -149,6 +150,8 @@ export class GroqProvider implements Provider {
             promptTokens: data.usage.prompt_tokens || 0,
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
+            cachedPromptTokens:
+              data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
           }
         : undefined,
     };
@@ -204,6 +207,17 @@ export class GroqProvider implements Provider {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage: UnifiedApiStreamChunk['usage'] | undefined;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens:
+                      parsed.usage.prompt_tokens_details?.cached_tokens ??
+                      undefined,
+                  };
+                }
                 yield {
                   id: parsed.id || `groq-${Date.now()}`,
                   model: parsed.model,
@@ -221,6 +235,7 @@ export class GroqProvider implements Provider {
                       finishReason: chunk?.finish_reason || null,
                     },
                   ],
+                  usage: chunkUsage,
                 };
               } catch (_e) {
                 // ignore

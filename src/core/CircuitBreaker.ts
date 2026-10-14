@@ -160,22 +160,41 @@ export class CircuitBreaker {
         try {
           firstResult = await iterator.next();
         } catch (error) {
-          await this.recordFailure(provider.id);
+          const isAbort =
+            request.signal?.aborted ||
+            (error as Error)?.name === 'AbortError' ||
+            (error as Error)?.message?.toLowerCase().includes('aborted');
+          if (!isAbort) {
+            await this.recordFailure(provider.id);
+          }
           throw error;
         }
 
-        await this.recordSuccess(provider.id);
-
+        const self = this;
         return (async function* () {
-          if (!firstResult.done) {
-            yield firstResult.value;
-            // The rest of the chunks
-            let nextResult: IteratorResult<UnifiedApiStreamChunk>;
-            nextResult = await iterator.next();
-            while (!nextResult.done) {
-              yield nextResult.value;
+          try {
+            if (!firstResult.done) {
+              yield firstResult.value;
+              // The rest of the chunks
+              let nextResult: IteratorResult<UnifiedApiStreamChunk>;
               nextResult = await iterator.next();
+              while (!nextResult.done) {
+                yield nextResult.value;
+                nextResult = await iterator.next();
+              }
             }
+            await self.recordSuccess(provider.id);
+          } catch (streamError) {
+            const isAbort =
+              request.signal?.aborted ||
+              (streamError as Error)?.name === 'AbortError' ||
+              (streamError as Error)?.message
+                ?.toLowerCase()
+                .includes('aborted');
+            if (!isAbort) {
+              await self.recordFailure(provider.id);
+            }
+            throw streamError;
           }
         })();
       }
@@ -183,7 +202,13 @@ export class CircuitBreaker {
       await this.recordSuccess(provider.id);
       return response;
     } catch (error) {
-      await this.recordFailure(provider.id);
+      const isAbort =
+        request.signal?.aborted ||
+        (error as Error)?.name === 'AbortError' ||
+        (error as Error)?.message?.toLowerCase().includes('aborted');
+      if (!isAbort) {
+        await this.recordFailure(provider.id);
+      }
       throw error;
     }
   }

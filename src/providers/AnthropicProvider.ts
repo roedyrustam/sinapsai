@@ -278,12 +278,19 @@ export class AnthropicProvider implements Provider {
         return (async function* () {
           const { parseSSE } = await import('../utils/stream.js');
           let messageId = `anthropic-${Date.now()}`;
+          let promptTokens = 0;
+          let cachedPromptTokens: number | undefined;
           try {
             for await (const msg of parseSSE(response)) {
               if (msg.event === 'message_start') {
                 try {
                   const parsed = JSON.parse(msg.data);
                   if (parsed.message?.id) messageId = parsed.message.id;
+                  if (parsed.message?.usage) {
+                    promptTokens = parsed.message.usage.input_tokens || 0;
+                    cachedPromptTokens =
+                      parsed.message.usage.cache_read_input_tokens || undefined;
+                  }
                 } catch (_e) {}
               } else if (msg.event === 'content_block_delta') {
                 try {
@@ -321,6 +328,16 @@ export class AnthropicProvider implements Provider {
               } else if (msg.event === 'message_delta') {
                 try {
                   const parsed = JSON.parse(msg.data);
+                  const completionTokens = parsed.usage?.output_tokens || 0;
+                  const chunkUsage =
+                    promptTokens || completionTokens
+                      ? {
+                          promptTokens,
+                          completionTokens,
+                          totalTokens: promptTokens + completionTokens,
+                          cachedPromptTokens,
+                        }
+                      : undefined;
                   if (parsed.delta?.stop_reason) {
                     let finishReason = 'stop';
                     switch (parsed.delta.stop_reason) {
@@ -343,6 +360,7 @@ export class AnthropicProvider implements Provider {
                           finishReason,
                         },
                       ],
+                      usage: chunkUsage,
                     };
                   }
                 } catch (_e) {}

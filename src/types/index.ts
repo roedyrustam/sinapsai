@@ -94,6 +94,12 @@ export interface UnifiedApiStreamChunk {
     };
     finishReason: string | null;
   }>;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens?: number;
+  };
 }
 
 export interface RateLimitInfo {
@@ -200,6 +206,11 @@ export interface SinapsEventHooks {
     provider: Provider,
     response: UnifiedApiResponse,
     latencyMs: number,
+  ) => void;
+  onStreamSuccess?: (
+    provider: Provider,
+    ttftMs: number,
+    totalLatencyMs: number,
   ) => void;
   onEmbeddingSuccess?: (
     provider: Provider,

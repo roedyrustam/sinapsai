@@ -184,6 +184,33 @@ describe('GeminiProvider', () => {
       );
     });
 
+    it('should extract cachedPromptTokens from cachedContentTokenCount', () => {
+      const geminiCachedResponse = {
+        candidates: [
+          {
+            content: {
+              parts: [{ text: 'Response with context cache' }],
+              role: 'model',
+            },
+            finishReason: 'STOP',
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 2048,
+          candidatesTokenCount: 120,
+          totalTokenCount: 2168,
+          cachedContentTokenCount: 1800,
+        },
+      };
+
+      const result = provider.formatResponse(
+        geminiCachedResponse,
+        'gemini-2.5-flash',
+      );
+      expect(result.usage?.cachedPromptTokens).toBe(1800);
+      expect(result.usage?.promptTokens).toBe(2048);
+    });
+
     it('should handle response without usage metadata gracefully', () => {
       const geminiResponse = {
         candidates: [

@@ -290,6 +290,63 @@ describe('OpenRouterProvider', () => {
       });
     });
 
+    it('should extract reasoning_content and cachedPromptTokens from prompt_tokens_details or cache_discount', () => {
+      const openrouterReasoningResponse = {
+        id: 'gen-r1',
+        model: 'deepseek/deepseek-r1',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Final synthesized response',
+              reasoning: 'Detailed Chain-of-Thought thinking...',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 500,
+          completion_tokens: 150,
+          total_tokens: 650,
+          prompt_tokens_details: {
+            cached_tokens: 300,
+          },
+        },
+      };
+
+      const result = provider.formatResponse(openrouterReasoningResponse);
+      expect(result.choices[0].message.content).toBe(
+        'Final synthesized response',
+      );
+      expect(result.choices[0].message.reasoning_content).toBe(
+        'Detailed Chain-of-Thought thinking...',
+      );
+      expect(result.usage?.cachedPromptTokens).toBe(300);
+
+      // Also test with cache_discount
+      const discountResponse = {
+        id: 'gen-disc',
+        model: 'anthropic/claude-3.5-sonnet',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Discount reply',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 1000,
+          completion_tokens: 100,
+          total_tokens: 1100,
+          cache_discount: 0.5,
+        },
+      };
+      const discResult = provider.formatResponse(discountResponse);
+      expect(discResult.usage?.cachedPromptTokens).toBe(500);
+    });
+
     it('should handle response without usage metadata gracefully', () => {
       const openrouterResponse = {
         id: 'gen-456',

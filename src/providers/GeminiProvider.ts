@@ -296,6 +296,8 @@ export class GeminiProvider implements Provider {
             promptTokens: data.usageMetadata.promptTokenCount || 0,
             completionTokens: data.usageMetadata.candidatesTokenCount || 0,
             totalTokens: data.usageMetadata.totalTokenCount || 0,
+            cachedPromptTokens:
+              data.usageMetadata.cachedContentTokenCount || undefined,
           }
         : undefined,
     };
@@ -373,6 +375,7 @@ export class GeminiProvider implements Provider {
                             : null,
                     },
                   ],
+                  usage: chunk.usage,
                 };
               } catch (_e) {}
             }

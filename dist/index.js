@@ -165,26 +165,41 @@ var CircuitBreaker = class {
         try {
           firstResult = await iterator.next();
         } catch (error) {
-          await this.recordFailure(provider.id);
+          const isAbort = request.signal?.aborted || error?.name === "AbortError" || error?.message?.toLowerCase().includes("aborted");
+          if (!isAbort) {
+            await this.recordFailure(provider.id);
+          }
           throw error;
         }
-        await this.recordSuccess(provider.id);
+        const self = this;
         return (async function* () {
-          if (!firstResult.done) {
-            yield firstResult.value;
-            let nextResult;
-            nextResult = await iterator.next();
-            while (!nextResult.done) {
-              yield nextResult.value;
+          try {
+            if (!firstResult.done) {
+              yield firstResult.value;
+              let nextResult;
               nextResult = await iterator.next();
+              while (!nextResult.done) {
+                yield nextResult.value;
+                nextResult = await iterator.next();
+              }
             }
+            await self.recordSuccess(provider.id);
+          } catch (streamError) {
+            const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
+            if (!isAbort) {
+              await self.recordFailure(provider.id);
+            }
+            throw streamError;
           }
         })();
       }
       await this.recordSuccess(provider.id);
       return response;
     } catch (error) {
-      await this.recordFailure(provider.id);
+      const isAbort = request.signal?.aborted || error?.name === "AbortError" || error?.message?.toLowerCase().includes("aborted");
+      if (!isAbort) {
+        await this.recordFailure(provider.id);
+      }
       throw error;
     }
   }
@@ -488,6 +503,60 @@ var Router = class {
         try {
           const res = await this.circuitBreaker.execute(provider, request);
           const latencyMs = Date.now() - startTime;
+          if (request.stream && res != null && typeof res === "object" && Symbol.asyncIterator in res) {
+            const self = this;
+            const iterable = res;
+            let firstChunkTime = 0;
+            let collectedPromptTokens = 0;
+            let collectedCompletionTokens = 0;
+            let collectedCachedPromptTokens = 0;
+            return (async function* () {
+              try {
+                for await (const chunk of iterable) {
+                  if (!firstChunkTime) {
+                    firstChunkTime = Date.now();
+                  }
+                  if (chunk.usage) {
+                    collectedPromptTokens = chunk.usage.promptTokens || collectedPromptTokens;
+                    collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
+                    collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
+                  }
+                  yield chunk;
+                }
+                const totalLatencyMs = Date.now() - startTime;
+                const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
+                let costUsd = 0;
+                if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+                  costUsd = collectedPromptTokens / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
+                } else if (provider.costPer1kTokens !== void 0) {
+                  costUsd = (collectedPromptTokens + collectedCompletionTokens) / 1e3 * provider.costPer1kTokens;
+                }
+                self.recordMetrics(
+                  provider.id,
+                  true,
+                  totalLatencyMs,
+                  collectedPromptTokens,
+                  collectedCompletionTokens,
+                  costUsd,
+                  collectedCachedPromptTokens
+                );
+                self.hooks?.onStreamSuccess?.(provider, ttftMs, totalLatencyMs);
+              } catch (streamError) {
+                const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
+                if (!isAbort) {
+                  self.recordMetrics(
+                    provider.id,
+                    false,
+                    Date.now() - startTime,
+                    0,
+                    0,
+                    0
+                  );
+                }
+                throw streamError;
+              }
+            })();
+          }
           if (!request.stream && "choices" in res) {
             const apiRes = res;
             this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
@@ -1119,12 +1188,18 @@ ${msg.content}`;
         return (async function* () {
           const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
           let messageId = `anthropic-${Date.now()}`;
+          let promptTokens = 0;
+          let cachedPromptTokens;
           try {
             for await (const msg of parseSSE2(response)) {
               if (msg.event === "message_start") {
                 try {
                   const parsed = JSON.parse(msg.data);
                   if (parsed.message?.id) messageId = parsed.message.id;
+                  if (parsed.message?.usage) {
+                    promptTokens = parsed.message.usage.input_tokens || 0;
+                    cachedPromptTokens = parsed.message.usage.cache_read_input_tokens || void 0;
+                  }
                 } catch (_e) {
                 }
               } else if (msg.event === "content_block_delta") {
@@ -1164,6 +1239,13 @@ ${msg.content}`;
               } else if (msg.event === "message_delta") {
                 try {
                   const parsed = JSON.parse(msg.data);
+                  const completionTokens = parsed.usage?.output_tokens || 0;
+                  const chunkUsage = promptTokens || completionTokens ? {
+                    promptTokens,
+                    completionTokens,
+                    totalTokens: promptTokens + completionTokens,
+                    cachedPromptTokens
+                  } : void 0;
                   if (parsed.delta?.stop_reason) {
                     let finishReason = "stop";
                     switch (parsed.delta.stop_reason) {
@@ -1185,7 +1267,8 @@ ${msg.content}`;
                           delta: {},
                           finishReason
                         }
-                      ]
+                      ],
+                      usage: chunkUsage
                     };
                   }
                 } catch (_e) {
@@ -1284,6 +1367,7 @@ var DeepSeekProvider = class {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data) {
     const choice = data.choices?.[0];
+    const cachedPromptTokens = data.usage?.prompt_cache_hit_tokens ?? data.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
     return {
       id: data.id || `deepseek-${Date.now()}`,
       model: data.model,
@@ -1301,7 +1385,8 @@ var DeepSeekProvider = class {
       usage: data.usage ? {
         promptTokens: data.usage.prompt_tokens || 0,
         completionTokens: data.usage.completion_tokens || 0,
-        totalTokens: data.usage.total_tokens || 0
+        totalTokens: data.usage.total_tokens || 0,
+        cachedPromptTokens
       } : void 0
     };
   }
@@ -1597,7 +1682,8 @@ var GeminiProvider = class {
       usage: data.usageMetadata ? {
         promptTokens: data.usageMetadata.promptTokenCount || 0,
         completionTokens: data.usageMetadata.candidatesTokenCount || 0,
-        totalTokens: data.usageMetadata.totalTokenCount || 0
+        totalTokens: data.usageMetadata.totalTokenCount || 0,
+        cachedPromptTokens: data.usageMetadata.cachedContentTokenCount || void 0
       } : void 0
     };
   }
@@ -1657,7 +1743,8 @@ var GeminiProvider = class {
                       },
                       finishReason: chunk.choices[0].finishReason === "stop" && !chunk.choices[0].message.content ? "stop" : chunk.choices[0].finishReason !== "stop" ? chunk.choices[0].finishReason : null
                     }
-                  ]
+                  ],
+                  usage: chunk.usage
                 };
               } catch (_e) {
               }
@@ -1878,6 +1965,7 @@ var GroqProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -1919,7 +2007,8 @@ var GroqProvider = class {
       usage: data.usage ? {
         promptTokens: data.usage.prompt_tokens || 0,
         completionTokens: data.usage.completion_tokens || 0,
-        totalTokens: data.usage.total_tokens || 0
+        totalTokens: data.usage.total_tokens || 0,
+        cachedPromptTokens: data.usage.prompt_tokens_details?.cached_tokens ?? void 0
       } : void 0
     };
   }
@@ -1967,6 +2056,15 @@ var GroqProvider = class {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens: parsed.usage.prompt_tokens_details?.cached_tokens ?? void 0
+                  };
+                }
                 yield {
                   id: parsed.id || `groq-${Date.now()}`,
                   model: parsed.model,
@@ -1980,7 +2078,8 @@ var GroqProvider = class {
                       },
                       finishReason: chunk?.finish_reason || null
                     }
-                  ]
+                  ],
+                  usage: chunkUsage
                 };
               } catch (_e) {
               }
@@ -2092,7 +2191,8 @@ var MistralProvider = class {
       usage: data.usage ? {
         promptTokens: data.usage.prompt_tokens || 0,
         completionTokens: data.usage.completion_tokens || 0,
-        totalTokens: data.usage.total_tokens || 0
+        totalTokens: data.usage.total_tokens || 0,
+        cachedPromptTokens: data.usage.prompt_tokens_details?.cached_tokens ?? void 0
       } : void 0
     };
   }
@@ -2541,6 +2641,7 @@ var OpenAiProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -2623,6 +2724,15 @@ var OpenAiProvider = class {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens: parsed.usage.prompt_tokens_details?.cached_tokens ?? void 0
+                  };
+                }
                 yield {
                   id: parsed.id || `openai-${Date.now()}`,
                   model: parsed.model,
@@ -2636,7 +2746,8 @@ var OpenAiProvider = class {
                       },
                       finishReason: chunk?.finish_reason || null
                     }
-                  ]
+                  ],
+                  usage: chunkUsage
                 };
               } catch (_e) {
               }
@@ -2849,6 +2960,10 @@ var OpenRouterProvider = class {
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data) {
     const choice = data.choices?.[0];
+    const reasoningContent = choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? data.usage?.prompt_cache_hit_tokens ?? (data.usage?.cache_discount ? Math.round(
+      (data.usage.prompt_tokens || 0) * data.usage.cache_discount
+    ) : void 0);
     return {
       id: data.id || `openrouter-${Date.now()}`,
       model: data.model,
@@ -2857,6 +2972,7 @@ var OpenRouterProvider = class {
           message: {
             role: "assistant",
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
@@ -2865,7 +2981,8 @@ var OpenRouterProvider = class {
       usage: data.usage ? {
         promptTokens: data.usage.prompt_tokens || 0,
         completionTokens: data.usage.completion_tokens || 0,
-        totalTokens: data.usage.total_tokens || 0
+        totalTokens: data.usage.total_tokens || 0,
+        cachedPromptTokens
       } : void 0
     };
   }
@@ -2920,6 +3037,15 @@ var OpenRouterProvider = class {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens: parsed.usage.prompt_tokens_details?.cached_tokens ?? parsed.usage.prompt_cache_hit_tokens ?? void 0
+                  };
+                }
                 yield {
                   id: parsed.id || `openrouter-${Date.now()}`,
                   model: parsed.model,
@@ -2928,11 +3054,13 @@ var OpenRouterProvider = class {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content: chunk?.delta?.reasoning ?? chunk?.delta?.reasoning_content ?? null,
                         tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null
                     }
-                  ]
+                  ],
+                  usage: chunkUsage
                 };
               } catch (_e) {
               }
