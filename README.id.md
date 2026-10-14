@@ -9,9 +9,9 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/v/sinapsai.svg" alt="npm version" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
-  <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-134%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-169%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -60,11 +60,15 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [5. Observabilitas via Event Hooks & Rate Limiting](#5-observabilitas-via-event-hooks--rate-limiting)
   - [6. Telemetri Real-Time In-Process (getMetrics)](#6-telemetri-real-time-in-process-getmetrics)
   - [7. Retries dengan Exponential Backoff & Jitter](#7-retries-dengan-exponential-backoff--jitter)
-  - [8. In-Memory Prompt Response Caching](#8-in-memory-prompt-response-caching)
+  - [8. Exact & Semantic In-Process Response Caching](#8-exact--semantic-in-process-response-caching)
   - [9. Tool Calling & Eksekusi Fungsi](#9-tool-calling--eksekusi-fungsi)
   - [10. Structured Outputs (JSON Mode)](#10-structured-outputs-json-mode)
   - [11. Unified Text Embeddings](#11-unified-text-embeddings)
   - [12. OpenRouter Free Tier & Perutean Nol-Biaya](#12-openrouter-free-tier--perutean-nol-biaya)
+  - [13. Integrasi Inferensi Kilat & Reasoning Groq LPU](#13-integrasi-inferensi-kilat--reasoning-groq-lpu)
+  - [14. Hierarchical Model-Level Fallbacks](#14-hierarchical-model-level-fallbacks)
+  - [15. Dukungan Multi-Modal Terpadu Vision & Audio (ContentPart[])](#15-dukungan-multi-modal-terpadu-vision--audio-contentpart)
+  - [16. Pemrosesan Batch Konkuren In-Process (client.batch)](#16-pemrosesan-batch-konkuren-in-process-clientbatch)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -302,6 +306,16 @@ const client = new SinapsClient({
     onSuccess: (provider, response, latencyMs) => {
       metrics.recordLatency(provider.name, latencyMs);
       console.log(`[Success] ${provider.name} selesai dalam ${latencyMs}ms`);
+    },
+    onStreamSuccess: (provider, ttftMs, totalLatencyMs) => {
+      metrics.recordStream(provider.name, ttftMs, totalLatencyMs);
+      console.log(`[Stream TTFT] ${provider.name}: TTFT=${ttftMs}ms, Total=${totalLatencyMs}ms`);
+    },
+    onModelFallback: (error, provider, fromModel, toModel) => {
+      console.warn(`[Model Fallback] ${provider.name} gagal pada model ${fromModel}: ${error.message}. Berpindah ke model cadangan ${toModel}...`);
+    },
+    onSemanticCacheHit: (request, cachedResponse, similarity) => {
+      console.log(`[Semantic Cache Hit] Kemiripan ${(similarity * 100).toFixed(1)}% untuk model ${cachedResponse.model}`);
     },
     onRateLimitWarning: (provider, rateLimit) => {
       console.warn(`[Peringatan] Provider ${provider.name} mendekati batas kuota! Sisa request: ${rateLimit.remainingRequests}`);
@@ -584,7 +598,7 @@ const schemaResponse = await client.chat.completions.create({
 
 ---
 
-### 13. Hierarchical Model-Level Fallbacks
+### 14. Hierarchical Model-Level Fallbacks
 
 Konfigurasikan daftar kandidat model cadangan pada tingkat client, per-provider, maupun per-request. Jika sebuah model terkena limit atau error 5xx, SinapsAI secara cerdas mencoba model alternatif pada provider yang sama terlebih dahulu sebelum memicu failover lintas provider:
 
@@ -622,7 +636,7 @@ const response = await client.chat.completions.create({
 
 ---
 
-### 14. Dukungan Multi-Modal Terpadu Vision & Audio (`ContentPart[]`)
+### 15. Dukungan Multi-Modal Terpadu Vision & Audio (`ContentPart[]`)
 
 Kirimkan payload teks, gambar (URL remote maupun base64), dan audio menggunakan format standar OpenAI yang konsisten. SinapsAI secara otomatis mengonversikannya untuk OpenAI, Anthropic Claude, dan Google Gemini:
 
@@ -650,7 +664,7 @@ const response = await client.chat.completions.create({
 
 ---
 
-### 15. Pemrosesan Batch Konkuren In-Process (`client.batch`)
+### 16. Pemrosesan Batch Konkuren In-Process (`client.batch`)
 
 Eksekusi banyak chat completion maupun embedding teks secara paralel tanpa dependensi eksternal (tidak memerlukan `p-limit`). Dilengkapi pembatasan konkurensi, callback progres real-time, dan eksekusi bertoleransi kegagalan (*fail-soft settled execution*):
 
@@ -792,13 +806,15 @@ Baca **[Panduan Berkontribusi (CONTRIBUTING.md)](./CONTRIBUTING.md)** untuk info
 
 ## 📄 Lisensi
 
-Proyek ini dilisensikan di bawah **[Creative Commons Attribution 4.0 International (CC BY 4.0)](./LICENSE)**.
+Proyek ini dilisensikan di bawah **[MIT License](./LICENSE)**.
 
 Anda bebas untuk:
-- **Berbagi (Share)** — menyalin dan menyebarluaskan materi ini dalam media atau format apa pun.
-- **Mengadaptasi (Adapt)** — mengubah, menggubah, dan membuat turunan dari materi ini untuk kepentingan apa pun, termasuk komersial.
+- **Menggunakan** — untuk keperluan komersial, edukasi, maupun pribadi tanpa batasan.
+- **Memodifikasi** — mengubah, mengadaptasi, dan mengembangkan codebase ini.
+- **Mendistribusikan** — menyalin dan menyebarluaskan kode dalam media atau format apa pun.
+- **Memberikan Sublicense** — memberikan izin lisensi kepada pihak ketiga.
 
-Dengan syarat mencantumkan atribusi yang sesuai dan memberikan tautan ke lisensi.
+Dengan ketentuan menyertakan pemberitahuan hak cipta dan izin lisensi pada semua salinan atau bagian substansial dari perangkat lunak.
 
 ---
 

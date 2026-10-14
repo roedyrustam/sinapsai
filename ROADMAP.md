@@ -57,4 +57,18 @@
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 12 (`examples/12-groq-lightning-fast-reasoning.ts`) dan contoh 13 (`examples/13-superintelligence-latency-and-reasoning.ts`).
 - [x] 134/134 Tests Passed di 15 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.0.0.
 
+## Phase 7: Semantic In-Process Caching, Concurrent Batching & Resilient Streaming Control Plane (v2.0.1) - *Completed*
+- [x] **Zero-Dependency Semantic Response Caching**: Algoritma in-process cosine similarity murni (`cosineSimilarity` & `extractPromptText`), opsi konfigurasi `semantic: SemanticCacheOptions` (`similarityThreshold`, `maxEntries`, `embeddingModel`, `customEmbed`), serta hook observabilitas `onSemanticCacheHit`.
+- [x] **Hierarchical Model-Level Fallback Engine**: Rantai model fallback berjenjang (request, provider, dan client) dengan fast-failover pada 401 Unauthorized dan hook `onModelFallback`.
+- [x] **Universal Multi-Modal Content (`ContentPart[]`)**: Format payload OpenAI terpadu untuk `text`, `image_url` (URL & base64), dan `input_audio` yang dipetakan secara mulus ke Google Gemini dan Anthropic Claude.
+- [x] **Concurrent In-Process Batch Processing Engine (`client.batch`)**: Worker pool konkuren tanpa dependensi eksternal untuk bulk chat completions (`client.batch.chat`), embeddings (`client.batch.embeddings`), dan task generik (`client.batch.create`) dengan kontrol konkurensi, pelaporan progres (`onProgress`), dan mode eksekusi terselesaikan bertoleransi kesalahan (*fail-soft settled mode*).
+- [x] **Streaming Error Resilience & TTFT Telemetry**: Penjagaan mid-stream connection drop pada Circuit Breaker, registrasi `recordSuccess` pada penyelesaian penuh stream, pembebasan pembatalan klien (`AbortSignal`), dan telemetri Time-To-First-Token (`onStreamSuccess`) serta akumulasi token pada `UnifiedApiStreamChunk.usage`.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 14 (`examples/14-semantic-caching-and-fallbacks.ts`) dan contoh 15 (`examples/15-concurrent-batch-processing.ts`).
+- [x] 169/169 Tests Passed di 17 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.0.1.
+
+## Phase 8: Distributed Edge Synchronization & Advanced Control Plane (Upcoming / v2.1.0)
+- [ ] **Cross-Worker / Distributed Storage Adapter**: Adaptasi state circuit breaker dan cache metadata untuk Cloudflare KV, D1, dan Redis Cluster tanpa mengorbankan mode in-process native.
+- [ ] **Real-Time Voice & Bidirectional Audio Streaming**: Abstraksi unified WebSocket/WebRTC untuk model multimodal real-time (OpenAI Realtime API & Gemini Multimodal Live API).
+- [ ] **Dynamic Prompt Compression & Context Sliding**: Pengurangan token prompt secara otomatis saat mendekati batas konteks model menggunakan ekstraksi semantik in-process.
+
 

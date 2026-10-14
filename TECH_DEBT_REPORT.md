@@ -6,7 +6,7 @@
 - **Type Safety Rigidity**: Fixed implicit `any` in `src/core/CircuitBreaker.ts` IteratorResult. Replaced loose `any` types across all `Provider` implementations (`AnthropicProvider`, `GeminiProvider`, `GroqProvider`, `OpenAiProvider`, `OpenRouterProvider`) with appropriate types (`UnifiedApiStreamChunk`, `NodeJS.Timeout`, typed Errors, and bypassed third-party loose typing legitimately using `biome-ignore`).
 - **Linter Eradication**: Fixed the `useYield` error in `src/core/Router.test.ts` by correctly decorating intentional generator exceptions for fallback testing.
 - **Hardcoded Secrets & Magic Numbers**: Configuration variables are passed correctly via options, no raw secrets found in `src`.
-- **Test Coverage Handoff**: Comprehensive test suite is present and passing (49/49 unit tests successful).
+- **Test Coverage Handoff**: Comprehensive test suite is present and passing (169/169 unit tests successful across 17 test suites).
 
 ## Remediations Applied
 - Formatted and reordered imports across `src/index.ts`, `src/core/SinapsClient.ts`, and `src/core/SinapsClient.test.ts`.

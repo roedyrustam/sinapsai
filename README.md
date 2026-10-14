@@ -9,9 +9,9 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/v/sinapsai.svg" alt="npm version" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
-  <a href="https://creativecommons.org/licenses/by/4.0/"><img src="https://img.shields.io/badge/License-CC_BY_4.0-lightgrey.svg" alt="License: CC BY 4.0" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-134%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-169%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -58,11 +58,15 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [5. Observability with Event Hooks & Rate Limiting](#5-observability-with-event-hooks--rate-limiting)
   - [6. Real-Time In-Process Telemetry (getMetrics)](#6-real-time-in-process-telemetry-getmetrics)
   - [7. Retries with Exponential Backoff & Jitter](#7-retries-with-exponential-backoff--jitter)
-  - [8. In-Memory Prompt Response Caching](#8-in-memory-prompt-response-caching)
+  - [8. Exact & Semantic In-Process Response Caching](#8-exact--semantic-in-process-response-caching)
   - [9. Tool Calling & Function Execution](#9-tool-calling--function-execution)
   - [10. Structured Outputs (JSON Mode)](#10-structured-outputs-json-mode)
   - [11. Unified Text Embeddings](#11-unified-text-embeddings)
   - [12. OpenRouter Free Tier & Zero-Cost Routing](#12-openrouter-free-tier--zero-cost-routing)
+  - [13. Groq LPU Ultra-Fast Inference & Reasoning Integration](#13-groq-lpu-ultra-fast-inference--reasoning-integration)
+  - [14. Hierarchical Model-Level Fallbacks](#14-hierarchical-model-level-fallbacks)
+  - [15. Universal Multi-Modal Vision & Audio (ContentPart[])](#15-universal-multi-modal-vision--audio-contentpart)
+  - [16. Concurrent In-Process Batch Processing (client.batch)](#16-concurrent-in-process-batch-processing-clientbatch)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -299,6 +303,15 @@ const client = new SinapsClient({
   hooks: {
     onSuccess: (provider, response, latencyMs) => {
       telemetry.recordSuccess(provider.name, latencyMs, response.usage?.totalTokens);
+    },
+    onStreamSuccess: (provider, ttftMs, totalLatencyMs) => {
+      telemetry.recordStreamLatency(provider.name, ttftMs, totalLatencyMs);
+    },
+    onModelFallback: (error, provider, fromModel, toModel) => {
+      console.warn(`[Model Fallback] ${provider.name} failed on ${fromModel}: ${error.message}. Switching to candidate model ${toModel}...`);
+    },
+    onSemanticCacheHit: (request, cachedResponse, similarity) => {
+      console.log(`[Semantic Cache Hit] ${(similarity * 100).toFixed(1)}% match for model ${cachedResponse.model}`);
     },
     onRateLimitWarning: (provider, rateLimit) => {
       console.warn(`[Warning] Provider ${provider.name} capacity low! Remaining: ${rateLimit.remainingRequests}`);
@@ -581,7 +594,7 @@ const schemaResponse = await client.chat.completions.create({
 
 ---
 
-### 13. Hierarchical Model-Level Fallbacks
+### 14. Hierarchical Model-Level Fallbacks
 
 Configure candidate fallback models on the client, per-provider, or per-request. If a model encounters a rate limit or 5xx error, SinapsAI tries the secondary candidate models on the current provider before escalating to failover across providers:
 
@@ -619,7 +632,7 @@ const response = await client.chat.completions.create({
 
 ---
 
-### 14. Universal Multi-Modal Vision & Audio (`ContentPart[]`)
+### 15. Universal Multi-Modal Vision & Audio (`ContentPart[]`)
 
 Send text, base64 images, remote URLs, and audio payloads using a single OpenAI-compatible structure. SinapsAI automatically formats them for OpenAI, Anthropic Claude, and Google Gemini:
 
@@ -647,7 +660,7 @@ const response = await client.chat.completions.create({
 
 ---
 
-### 15. Concurrent In-Process Batch Processing (`client.batch`)
+### 16. Concurrent In-Process Batch Processing (`client.batch`)
 
 Execute bulk chat completions or text embeddings concurrently with zero external dependencies (`p-limit` not needed). Includes concurrency limits, real-time progress callbacks, and fail-soft settled execution:
 
@@ -789,13 +802,15 @@ Please read the **[Contributing Guide](./CONTRIBUTING.md)** for:
 
 ## 📄 License
 
-This project is licensed under the **[Creative Commons Attribution 4.0 International License (CC BY 4.0)](./LICENSE)**.
+This project is licensed under the **[MIT License](./LICENSE)**.
 
 You are free to:
-- **Share** — copy and redistribute the material in any medium or format.
-- **Adapt** — remix, transform, and build upon the material for any purpose, even commercially.
+- **Use** — commercially, educationally, and privately without restrictions.
+- **Modify** — alter, adapt, and build upon the source code.
+- **Distribute** — copy and redistribute the code in any medium or format.
+- **Sublicense** — grant others rights to use the software.
 
-Under the condition that you provide appropriate attribution and a link to the license.
+Under the condition that the copyright notice and permission notice are included in all copies or substantial portions of the Software.
 
 ---
 
