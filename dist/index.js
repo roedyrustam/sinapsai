@@ -279,6 +279,7 @@ var Router = class {
   strategy;
   circuitBreaker;
   hooks;
+  fallbackModels;
   currentProviderIndex = 0;
   retries;
   retryDelayMs;
@@ -303,6 +304,7 @@ var Router = class {
     this.strategy = options.strategy || "failover";
     this.circuitBreaker = circuitBreaker;
     this.hooks = options.hooks;
+    this.fallbackModels = options.fallbackModels;
     this.retries = options.retries ?? 0;
     this.retryDelayMs = options.retryDelayMs ?? 300;
     this.cacheOptions = options.cache;
@@ -434,6 +436,26 @@ var Router = class {
     }
     return true;
   }
+  getCandidateModels(provider, request) {
+    const list = [];
+    if (request.model) {
+      list.push(request.model);
+    }
+    if (provider.fallbackModels && Array.isArray(provider.fallbackModels)) {
+      for (const m of provider.fallbackModels) {
+        if (m && !list.includes(m)) {
+          list.push(m);
+        }
+      }
+    }
+    const requestFallbacks = request.fallbackModels ?? this.fallbackModels ?? [];
+    for (const m of requestFallbacks) {
+      if (m && !list.includes(m)) {
+        list.push(m);
+      }
+    }
+    return list.length > 0 ? list : ["default"];
+  }
   async execute(request) {
     this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
@@ -507,143 +529,185 @@ var Router = class {
         previousError = error;
         continue;
       }
-      const maxRetries = provider.retries ?? this.retries;
-      const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
-      let attempt = 0;
-      while (true) {
-        const startTime = Date.now();
-        try {
-          const res = await this.circuitBreaker.execute(provider, request);
-          const latencyMs = Date.now() - startTime;
-          if (request.stream && res != null && typeof res === "object" && Symbol.asyncIterator in res) {
-            const self = this;
-            const iterable = res;
-            let firstChunkTime = 0;
-            let collectedPromptTokens = 0;
-            let collectedCompletionTokens = 0;
-            let collectedCachedPromptTokens = 0;
-            return (async function* () {
-              try {
-                for await (const chunk of iterable) {
-                  if (!firstChunkTime) {
-                    firstChunkTime = Date.now();
-                  }
-                  if (chunk.usage) {
-                    collectedPromptTokens = chunk.usage.promptTokens || collectedPromptTokens;
-                    collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
-                    collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
-                  }
-                  yield chunk;
-                }
-                const totalLatencyMs = Date.now() - startTime;
-                const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
-                let costUsd = 0;
-                if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
-                  costUsd = collectedPromptTokens / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
-                } else if (provider.costPer1kTokens !== void 0) {
-                  costUsd = (collectedPromptTokens + collectedCompletionTokens) / 1e3 * provider.costPer1kTokens;
-                }
-                self.recordMetrics(
-                  provider.id,
-                  true,
-                  totalLatencyMs,
-                  collectedPromptTokens,
-                  collectedCompletionTokens,
-                  costUsd,
-                  collectedCachedPromptTokens
-                );
-                self.hooks?.onStreamSuccess?.(provider, ttftMs, totalLatencyMs);
-              } catch (streamError) {
-                const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
-                if (!isAbort) {
-                  self.recordMetrics(
-                    provider.id,
-                    false,
-                    Date.now() - startTime,
-                    0,
-                    0,
-                    0
-                  );
-                }
-                throw streamError;
-              }
-            })();
-          }
-          if (!request.stream && "choices" in res) {
-            const apiRes = res;
-            this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
-            const promptTokens = apiRes.usage?.promptTokens ?? 0;
-            const completionTokens = apiRes.usage?.completionTokens ?? 0;
-            let costUsd = 0;
-            if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
-              costUsd = promptTokens / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
-            } else if (provider.costPer1kTokens !== void 0) {
-              costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
-            }
-            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
-            this.recordMetrics(
-              provider.id,
-              true,
-              latencyMs,
-              promptTokens,
-              completionTokens,
-              costUsd,
-              cachedPromptTokens
-            );
-            if (apiRes.rateLimit) {
-              if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
-                this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
-                if (this.storage) {
-                  const ttlSec = apiRes.rateLimit.resetMs ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1e3)) : 10;
-                  await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
-                }
-              }
-            }
-            if (this.cacheOptions?.enabled && this.storage) {
-              try {
-                const cacheKey = this.computeCacheKey(request);
-                await this.storage.set(
-                  cacheKey,
-                  apiRes,
-                  this.cacheOptions.ttlSeconds ?? 300
-                );
-              } catch (_e) {
-              }
-            }
-          }
-          return res;
-        } catch (error) {
-          const err = error;
-          if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
-            this.hooks?.onRateLimit?.(provider, err);
-            if (this.storage) {
-              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
-            }
-          }
-          if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
-            attempt++;
-            const jitter = Math.random() * 50;
-            const delay = Math.min(
-              baseDelay * 2 ** (attempt - 1) + jitter,
-              1e4
-            );
-            this.hooks?.onRetry?.(provider, err, attempt, delay);
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            continue;
-          }
-          this.recordMetrics(
-            provider.id,
-            false,
-            Date.now() - startTime,
-            0,
-            0,
-            0
-          );
-          errors.push(err);
-          previousProvider = provider;
-          previousError = err;
+      const candidateModels = this.getCandidateModels(provider, request);
+      let lastModelError = null;
+      for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+        const isStillAvailable = await this.circuitBreaker.isAvailable(
+          provider.id
+        );
+        if (!isStillAvailable) {
           break;
         }
+        const currentModel = candidateModels[mIdx];
+        const currentRequest = currentModel === request.model ? request : { ...request, model: currentModel };
+        const maxRetries = provider.retries ?? this.retries;
+        const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+        let attempt = 0;
+        while (true) {
+          const startTime = Date.now();
+          try {
+            const res = await this.circuitBreaker.execute(
+              provider,
+              currentRequest
+            );
+            const latencyMs = Date.now() - startTime;
+            if (currentRequest.stream && res != null && typeof res === "object" && Symbol.asyncIterator in res) {
+              const self = this;
+              const iterable = res;
+              let firstChunkTime = 0;
+              let collectedPromptTokens = 0;
+              let collectedCompletionTokens = 0;
+              let collectedCachedPromptTokens = 0;
+              return (async function* () {
+                try {
+                  for await (const chunk of iterable) {
+                    if (!firstChunkTime) {
+                      firstChunkTime = Date.now();
+                    }
+                    if (chunk.usage) {
+                      collectedPromptTokens = chunk.usage.promptTokens || collectedPromptTokens;
+                      collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
+                      collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
+                    }
+                    yield chunk;
+                  }
+                  const totalLatencyMs = Date.now() - startTime;
+                  const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
+                  let costUsd = 0;
+                  if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+                    costUsd = collectedPromptTokens / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
+                  } else if (provider.costPer1kTokens !== void 0) {
+                    costUsd = (collectedPromptTokens + collectedCompletionTokens) / 1e3 * provider.costPer1kTokens;
+                  }
+                  self.recordMetrics(
+                    provider.id,
+                    true,
+                    totalLatencyMs,
+                    collectedPromptTokens,
+                    collectedCompletionTokens,
+                    costUsd,
+                    collectedCachedPromptTokens
+                  );
+                  self.hooks?.onStreamSuccess?.(
+                    provider,
+                    ttftMs,
+                    totalLatencyMs
+                  );
+                } catch (streamError) {
+                  const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
+                  if (!isAbort) {
+                    self.recordMetrics(
+                      provider.id,
+                      false,
+                      Date.now() - startTime,
+                      0,
+                      0,
+                      0
+                    );
+                  }
+                  throw streamError;
+                }
+              })();
+            }
+            if (!currentRequest.stream && "choices" in res) {
+              const apiRes = res;
+              this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
+              const promptTokens = apiRes.usage?.promptTokens ?? 0;
+              const completionTokens = apiRes.usage?.completionTokens ?? 0;
+              let costUsd = 0;
+              if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+                costUsd = promptTokens / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
+              } else if (provider.costPer1kTokens !== void 0) {
+                costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
+              }
+              const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
+              this.recordMetrics(
+                provider.id,
+                true,
+                latencyMs,
+                promptTokens,
+                completionTokens,
+                costUsd,
+                cachedPromptTokens
+              );
+              if (apiRes.rateLimit) {
+                if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
+                  this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
+                  if (this.storage) {
+                    const ttlSec = apiRes.rateLimit.resetMs ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1e3)) : 10;
+                    await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
+                  }
+                }
+              }
+              if (this.cacheOptions?.enabled && this.storage) {
+                try {
+                  const cacheKey = this.computeCacheKey(request);
+                  await this.storage.set(
+                    cacheKey,
+                    apiRes,
+                    this.cacheOptions.ttlSeconds ?? 300
+                  );
+                } catch (_e) {
+                }
+              }
+            }
+            return res;
+          } catch (error) {
+            const err = error;
+            if (request.signal?.aborted) {
+              throw err;
+            }
+            if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
+              this.hooks?.onRateLimit?.(provider, err);
+              if (this.storage) {
+                await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+              }
+            }
+            if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
+              attempt++;
+              const jitter = Math.random() * 50;
+              const delay = Math.min(
+                baseDelay * 2 ** (attempt - 1) + jitter,
+                1e4
+              );
+              this.hooks?.onRetry?.(provider, err, attempt, delay);
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              continue;
+            }
+            this.recordMetrics(
+              provider.id,
+              false,
+              Date.now() - startTime,
+              0,
+              0,
+              0
+            );
+            lastModelError = err;
+            const isAuthError2 = err.status === 401 || err.message.toLowerCase().includes("unauthorized") || err.message.toLowerCase().includes("invalid api key");
+            if (isAuthError2) {
+              break;
+            }
+            if (mIdx + 1 < candidateModels.length) {
+              const nextModel = candidateModels[mIdx + 1];
+              this.hooks?.onModelFallback?.(
+                err,
+                provider,
+                currentModel,
+                nextModel
+              );
+            }
+            break;
+          }
+        }
+        const isAuthError = lastModelError?.status === 401 || lastModelError?.message?.toLowerCase().includes("unauthorized") || lastModelError?.message?.toLowerCase().includes("invalid api key");
+        if (isAuthError) {
+          break;
+        }
+      }
+      if (lastModelError) {
+        errors.push(lastModelError);
+        previousProvider = provider;
+        previousError = lastModelError;
       }
     }
     throw new AggregateError(errors, "All providers failed or are unavailable");
@@ -848,6 +912,7 @@ var SinapsClient = class {
     this.router = new Router(options.providers, cb, {
       strategy: options.strategy,
       hooks: options.hooks,
+      fallbackModels: options.fallbackModels,
       retries: options.retries,
       retryDelayMs: options.retryDelayMs,
       cache: options.cache,
@@ -993,6 +1058,9 @@ var AnthropicProvider = class {
   }
   get retryDelayMs() {
     return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -1380,6 +1448,9 @@ var DeepSeekProvider = class {
   get retryDelayMs() {
     return this.config.retryDelayMs;
   }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -1573,6 +1644,9 @@ var GeminiProvider = class {
   }
   get retryDelayMs() {
     return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -2044,6 +2118,9 @@ var GroqProvider = class {
   get retryDelayMs() {
     return this.config.retryDelayMs;
   }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -2253,6 +2330,9 @@ var MistralProvider = class {
   }
   get retryDelayMs() {
     return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -2488,6 +2568,9 @@ var OllamaProvider = class {
   }
   get retryDelayMs() {
     return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -2725,6 +2808,9 @@ var OpenAiProvider = class {
   }
   get retryDelayMs() {
     return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -3023,6 +3109,9 @@ var OpenRouterProvider = class {
   }
   get retryDelayMs() {
     return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {

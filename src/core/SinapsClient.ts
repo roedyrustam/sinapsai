@@ -26,6 +26,7 @@ export interface SinapsClientOptions {
   storage?: StateStorage;
   circuitBreaker?: CircuitBreakerOptions;
   hooks?: SinapsEventHooks;
+  fallbackModels?: string[];
   retries?: number;
   retryDelayMs?: number;
   cache?: CacheOptions;
@@ -55,6 +56,7 @@ export class SinapsClient {
     this.router = new Router(options.providers, cb, {
       strategy: options.strategy,
       hooks: options.hooks,
+      fallbackModels: options.fallbackModels,
       retries: options.retries,
       retryDelayMs: options.retryDelayMs,
       cache: options.cache,

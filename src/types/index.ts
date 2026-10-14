@@ -165,6 +165,7 @@ export interface ProviderConfig {
   completionCostPer1k?: number;
   defaultModel?: string;
   modelMap?: Record<string, string>;
+  fallbackModels?: string[];
   retries?: number;
   retryDelayMs?: number;
 }
@@ -247,6 +248,12 @@ export interface SinapsEventHooks {
     error: Error,
     fromProvider: Provider,
     toProvider: Provider,
+  ) => void;
+  onModelFallback?: (
+    error: Error,
+    provider: Provider,
+    fromModel: string,
+    toModel: string,
   ) => void;
   onCircuitOpen?: (provider: Provider) => void;
   onCircuitClose?: (provider: Provider) => void;

@@ -9,6 +9,7 @@ export interface SinapsClientOptions {
     storage?: StateStorage;
     circuitBreaker?: CircuitBreakerOptions;
     hooks?: SinapsEventHooks;
+    fallbackModels?: string[];
     retries?: number;
     retryDelayMs?: number;
     cache?: CacheOptions;

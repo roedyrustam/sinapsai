@@ -12,8 +12,10 @@ export interface Provider {
   costPer1kTokens?: number;
   promptCostPer1k?: number;
   completionCostPer1k?: number;
+  fallbackModels?: string[];
   retries?: number;
   retryDelayMs?: number;
+  resolveModel?(model: string): string;
   generateContent(
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;

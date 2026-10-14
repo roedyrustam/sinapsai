@@ -20,7 +20,13 @@
   - **Anthropic Provider**: Automatically translates `image_url` parts to native Anthropic content blocks, converting base64 data URLs (`data:image/...;base64,...`) into base64 image sources and external links into URL image sources.
   - **Gemini Provider**: Formats `ContentPart[]` into Google AI `parts`, mapping base64 images and audio to `inlineData` and URLs to `fileData`.
   - **Router Cost Estimation**: Updated `estimateRequestCost` to parse `ContentPart[]`, calculating token costs from text parts while gracefully supporting multimodal payloads.
-- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, TTFT hooks, and multi-modal request formatting for Anthropic and Gemini, expanding test coverage to 146 tests across 15 test suites with 100% pass rate.
+- **Hierarchical Model-Level Fallback Engine**:
+  - Implemented multi-tier hierarchical resilience: attempts candidate model fallbacks within the active provider before escalating to provider-level failover.
+  - Configurable across 3 levels: request-level (`request.fallbackModels`), provider-level (`ProviderConfig.fallbackModels`), and client-level (`SinapsClientOptions.fallbackModels`).
+  - Added `onModelFallback?: (error: Error, provider: Provider, fromModel: string, toModel: string) => void` observability hook to monitor model downgrades in real time.
+  - Fast-failover protection: detects 401 Unauthorized / authentication failures and halts further model attempts on the compromised provider, failing over immediately.
+  - Circuit Breaker alignment: successful fallback models record success and preserve provider health.
+- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, TTFT hooks, multi-modal formatting, and hierarchical model-level fallbacks, expanding test coverage to 149 tests across 15 test suites with 100% pass rate.
 
 ## [2.0.0] - 2026-10-13 — Superintelligence Edition
 ### Added

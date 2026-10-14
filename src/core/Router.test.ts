@@ -736,4 +736,116 @@ describe('Router', () => {
       expect(metrics.providerMetrics['p-stream-fail'].failures).toBe(1);
     });
   });
+
+  describe('Hierarchical Model-Level Fallback', () => {
+    it('should fallback to candidate model on same provider when primary model fails with 429 and trigger onModelFallback', async () => {
+      const onModelFallback = vi.fn();
+      const p1 = createMockProvider('p1');
+      p1.fallbackModels = ['gpt-4o-mini'];
+
+      const p2 = createMockProvider('p2');
+
+      p1.generateContent = vi.fn().mockImplementation(async (req) => {
+        if (req.model === 'gpt-4o') {
+          const err = new Error('429 Rate Limit Exceeded on gpt-4o');
+          (err as Error & { status?: number }).status = 429;
+          throw err;
+        }
+        return {
+          ...mockResponse,
+          model: 'gpt-4o-mini',
+        };
+      });
+
+      const router = new Router([p1, p2], circuitBreaker, {
+        hooks: { onModelFallback },
+      });
+
+      const res = (await router.execute({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hi' }],
+      })) as UnifiedApiResponse;
+
+      expect(res.model).toBe('gpt-4o-mini');
+      expect(p1.generateContent).toHaveBeenCalledTimes(2);
+      expect(p1.generateContent).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ model: 'gpt-4o' }),
+      );
+      expect(p1.generateContent).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ model: 'gpt-4o-mini' }),
+      );
+      expect(onModelFallback).toHaveBeenCalledTimes(1);
+      const [err, provider, fromM, toM] = onModelFallback.mock.calls[0];
+      expect(err).toBeInstanceOf(Error);
+      expect(provider.id).toBe('p1');
+      expect(fromM).toBe('gpt-4o');
+      expect(toM).toBe('gpt-4o-mini');
+      expect(p2.generateContent).not.toHaveBeenCalled();
+    });
+
+    it('should failover to second provider when all candidate models on first provider fail', async () => {
+      const onModelFallback = vi.fn();
+      const onFallback = vi.fn();
+      const p1 = createMockProvider('p1');
+      p1.fallbackModels = ['model-b'];
+
+      p1.generateContent = vi.fn().mockImplementation(async (req) => {
+        const err = new Error(`Model ${req.model} failed`);
+        (err as Error & { status?: number }).status = 503;
+        throw err;
+      });
+
+      const p2 = createMockProvider('p2');
+      p2.generateContent = vi.fn().mockResolvedValue({
+        ...mockResponse,
+        model: 'model-c',
+      });
+
+      const cb = new CircuitBreaker(storage, { failureThreshold: 5 });
+      const router = new Router([p1, p2], cb, {
+        hooks: { onModelFallback, onFallback },
+      });
+
+      const res = (await router.execute({
+        model: 'model-a',
+        fallbackModels: ['model-c'],
+        messages: [{ role: 'user', content: 'Hi' }],
+      })) as UnifiedApiResponse;
+
+      expect(res.model).toBe('model-c');
+      // p1 tried model-a, then model-b, then model-c (all failed)
+      expect(p1.generateContent).toHaveBeenCalledTimes(3);
+      // p2 was called and succeeded!
+      expect(p2.generateContent).toHaveBeenCalled();
+      expect(onFallback).toHaveBeenCalledTimes(1);
+      expect(onFallback).toHaveBeenCalledWith(expect.any(Error), p1, p2);
+    });
+
+    it('should immediately failover without testing more models on provider when receiving 401 Unauthorized', async () => {
+      const p1 = createMockProvider('p1');
+      p1.fallbackModels = ['model-b', 'model-c'];
+      p1.generateContent = vi.fn().mockImplementation(async () => {
+        const err = new Error('401 Invalid API Key');
+        (err as Error & { status?: number }).status = 401;
+        throw err;
+      });
+
+      const p2 = createMockProvider('p2');
+      p2.generateContent = vi.fn().mockResolvedValue(mockResponse);
+
+      const router = new Router([p1, p2], circuitBreaker);
+
+      const res = await router.execute({
+        model: 'model-a',
+        messages: [{ role: 'user', content: 'Hi' }],
+      });
+
+      expect(res).toBe(mockResponse);
+      // Because 401 is an auth error, p1 should ONLY be called once and NOT try model-b or model-c!
+      expect(p1.generateContent).toHaveBeenCalledTimes(1);
+      expect(p2.generateContent).toHaveBeenCalledTimes(1);
+    });
+  });
 });

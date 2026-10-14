@@ -10,6 +10,7 @@ export interface CacheOptions {
 export interface RouterOptions {
     strategy?: RouterStrategy;
     hooks?: SinapsEventHooks;
+    fallbackModels?: string[];
     retries?: number;
     retryDelayMs?: number;
     cache?: CacheOptions;
@@ -20,6 +21,7 @@ export declare class Router {
     private strategy;
     private circuitBreaker;
     private hooks?;
+    private fallbackModels?;
     private currentProviderIndex;
     private retries;
     private retryDelayMs;
@@ -36,6 +38,7 @@ export declare class Router {
     private estimateRequestCost;
     private computeCacheKey;
     private isRetryableError;
+    private getCandidateModels;
     execute(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
     private computeEmbeddingCacheKey;
     executeEmbedding(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;

@@ -51,6 +51,7 @@ export declare class GeminiProvider implements Provider {
     get completionCostPer1k(): number | undefined;
     get retries(): number | undefined;
     get retryDelayMs(): number | undefined;
+    get fallbackModels(): string[] | undefined;
     resolveModel(model: string): string;
     formatRequest(request: UnifiedApiRequest): any;
     formatResponse(data: any, model: string): UnifiedApiResponse;

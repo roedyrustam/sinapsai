@@ -142,6 +142,7 @@ export interface ProviderConfig {
     completionCostPer1k?: number;
     defaultModel?: string;
     modelMap?: Record<string, string>;
+    fallbackModels?: string[];
     retries?: number;
     retryDelayMs?: number;
 }
@@ -200,6 +201,7 @@ export interface SinapsEventHooks {
     onStreamSuccess?: (provider: Provider, ttftMs: number, totalLatencyMs: number) => void;
     onEmbeddingSuccess?: (provider: Provider, response: CreateEmbeddingResponse, latencyMs: number) => void;
     onFallback?: (error: Error, fromProvider: Provider, toProvider: Provider) => void;
+    onModelFallback?: (error: Error, provider: Provider, fromModel: string, toModel: string) => void;
     onCircuitOpen?: (provider: Provider) => void;
     onCircuitClose?: (provider: Provider) => void;
     onRateLimit?: (provider: Provider, error: Error) => void;

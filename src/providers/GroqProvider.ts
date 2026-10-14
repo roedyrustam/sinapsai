@@ -39,6 +39,10 @@ export class GroqProvider implements Provider {
     return this.config.retryDelayMs;
   }
 
+  get fallbackModels(): string[] | undefined {
+    return this.config.fallbackModels;
+  }
+
   public resolveModel(model: string): string {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
