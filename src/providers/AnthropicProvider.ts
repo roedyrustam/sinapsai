@@ -1,5 +1,7 @@
 import type {
+  ContentPart,
   ProviderConfig,
+  TextContentPart,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
@@ -69,17 +71,64 @@ export class AnthropicProvider implements Provider {
 
     const systemMessages: string[] = [];
 
+    const formatAnthropicContent = (content: string | ContentPart[] | null) => {
+      if (content === null || content === undefined) return '';
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content.map((part) => {
+          if (part.type === 'text') {
+            return { type: 'text', text: part.text };
+          }
+          if (part.type === 'image_url') {
+            const url = part.image_url.url;
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              return {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: match[1],
+                  data: match[2],
+                },
+              };
+            }
+            return {
+              type: 'image',
+              source: {
+                type: 'url',
+                url,
+              },
+            };
+          }
+          return { type: 'text', text: JSON.stringify(part) };
+        });
+      }
+      return '';
+    };
+
     for (const msg of request.messages) {
       if (msg.role === 'system') {
-        if (msg.content) systemMessages.push(msg.content);
+        if (typeof msg.content === 'string') {
+          systemMessages.push(msg.content);
+        } else if (Array.isArray(msg.content)) {
+          const sysText = msg.content
+            .filter((p) => p.type === 'text')
+            .map((p) => (p as TextContentPart).text)
+            .join('\n');
+          if (sysText) systemMessages.push(sysText);
+        }
       } else if (msg.role === 'tool') {
+        const toolContent =
+          typeof msg.content === 'string'
+            ? msg.content
+            : JSON.stringify(msg.content || '');
         payload.messages.push({
           role: 'user',
           content: [
             {
               type: 'tool_result',
               tool_use_id: msg.tool_call_id,
-              content: msg.content || '',
+              content: toolContent,
             },
           ],
         });
@@ -90,8 +139,14 @@ export class AnthropicProvider implements Provider {
       ) {
         // biome-ignore lint/suspicious/noExplicitAny: anthropic content blocks
         const contentBlocks: any[] = [];
-        if (msg.content) {
+        if (typeof msg.content === 'string') {
           contentBlocks.push({ type: 'text', text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const part of msg.content) {
+            if (part.type === 'text') {
+              contentBlocks.push({ type: 'text', text: part.text });
+            }
+          }
         }
         for (const tc of msg.tool_calls) {
           let input = {};
@@ -123,7 +178,7 @@ export class AnthropicProvider implements Provider {
         } else {
           payload.messages.push({
             role: msg.role,
-            content: msg.content ?? '',
+            content: formatAnthropicContent(msg.content),
           });
         }
       }

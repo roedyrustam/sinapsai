@@ -175,7 +175,19 @@ export class Router {
       let totalChars = 0;
       if (Array.isArray(request.messages)) {
         for (const msg of request.messages) {
-          totalChars += msg.content?.length ?? 0;
+          if (typeof msg.content === 'string') {
+            totalChars += msg.content.length;
+          } else if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+              if (part.type === 'text') {
+                totalChars += part.text.length;
+              } else if (part.type === 'image_url') {
+                totalChars += 1600; // ~400 tokens per image equivalent
+              } else if (part.type === 'input_audio') {
+                totalChars += 2000;
+              }
+            }
+          }
         }
       }
       const estimatedPromptTokens = Math.max(1, Math.ceil(totalChars / 4));

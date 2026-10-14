@@ -1,4 +1,5 @@
 import type {
+  ContentPart,
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
   ProviderConfig,
@@ -123,17 +124,81 @@ export class GeminiProvider implements Provider {
     // biome-ignore lint/suspicious/noExplicitAny: complex gemini parts
     const systemParts: any[] = [];
 
+    const formatGeminiParts = (
+      content: string | ContentPart[] | null | undefined,
+      // biome-ignore lint/suspicious/noExplicitAny: gemini part format
+    ): any[] => {
+      if (content === null || content === undefined) {
+        return [{ text: '' }];
+      }
+      if (typeof content === 'string') {
+        return [{ text: content }];
+      }
+      if (Array.isArray(content)) {
+        // biome-ignore lint/suspicious/noExplicitAny: gemini part format
+        const parts: any[] = [];
+        for (const part of content) {
+          if (part.type === 'text') {
+            parts.push({ text: part.text });
+          } else if (part.type === 'image_url') {
+            const url = part.image_url.url;
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              parts.push({
+                inlineData: {
+                  mimeType: match[1],
+                  data: match[2],
+                },
+              });
+            } else {
+              let mimeType = 'image/jpeg';
+              if (url.endsWith('.png')) mimeType = 'image/png';
+              else if (url.endsWith('.webp')) mimeType = 'image/webp';
+              else if (url.endsWith('.gif')) mimeType = 'image/gif';
+              parts.push({
+                fileData: {
+                  mimeType,
+                  fileUri: url,
+                },
+              });
+            }
+          } else if (part.type === 'input_audio') {
+            parts.push({
+              inlineData: {
+                mimeType: `audio/${part.input_audio.format || 'wav'}`,
+                data: part.input_audio.data,
+              },
+            });
+          }
+        }
+        return parts.length > 0 ? parts : [{ text: '' }];
+      }
+      return [{ text: '' }];
+    };
+
     for (const msg of request.messages) {
       if (msg.role === 'system') {
-        if (msg.content) systemParts.push({ text: msg.content });
+        if (typeof msg.content === 'string') {
+          systemParts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const p of msg.content) {
+            if (p.type === 'text') {
+              systemParts.push({ text: p.text });
+            }
+          }
+        }
       } else if (msg.role === 'tool') {
+        const responseContent =
+          typeof msg.content === 'string'
+            ? msg.content
+            : JSON.stringify(msg.content ?? '');
         contents.push({
           role: 'user',
           parts: [
             {
               functionResponse: {
                 name: msg.name || 'function',
-                response: { content: msg.content },
+                response: { content: responseContent },
               },
             },
           ],
@@ -145,7 +210,15 @@ export class GeminiProvider implements Provider {
       ) {
         // biome-ignore lint/suspicious/noExplicitAny: gemini parts
         const parts: any[] = [];
-        if (msg.content) parts.push({ text: msg.content });
+        if (typeof msg.content === 'string') {
+          parts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const p of msg.content) {
+            if (p.type === 'text') {
+              parts.push({ text: p.text });
+            }
+          }
+        }
         for (const tc of msg.tool_calls) {
           let args = {};
           try {
@@ -166,17 +239,14 @@ export class GeminiProvider implements Provider {
         });
       } else {
         const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
+        const msgParts = formatGeminiParts(msg.content);
         const lastContent = contents[contents.length - 1];
-        if (
-          lastContent &&
-          lastContent.role === geminiRole &&
-          typeof msg.content === 'string'
-        ) {
-          lastContent.parts.push({ text: msg.content });
+        if (lastContent && lastContent.role === geminiRole) {
+          lastContent.parts.push(...msgParts);
         } else {
           contents.push({
             role: geminiRole,
-            parts: [{ text: msg.content ?? '' }],
+            parts: msgParts,
           });
         }
       }

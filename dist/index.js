@@ -386,7 +386,19 @@ var Router = class {
       let totalChars = 0;
       if (Array.isArray(request.messages)) {
         for (const msg of request.messages) {
-          totalChars += msg.content?.length ?? 0;
+          if (typeof msg.content === "string") {
+            totalChars += msg.content.length;
+          } else if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+              if (part.type === "text") {
+                totalChars += part.text.length;
+              } else if (part.type === "image_url") {
+                totalChars += 1600;
+              } else if (part.type === "input_audio") {
+                totalChars += 2e3;
+              }
+            }
+          }
         }
       }
       const estimatedPromptTokens = Math.max(1, Math.ceil(totalChars / 4));
@@ -1007,24 +1019,70 @@ var AnthropicProvider = class {
       payload.temperature = request.temperature;
     }
     const systemMessages = [];
+    const formatAnthropicContent = (content) => {
+      if (content === null || content === void 0) return "";
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) {
+        return content.map((part) => {
+          if (part.type === "text") {
+            return { type: "text", text: part.text };
+          }
+          if (part.type === "image_url") {
+            const url = part.image_url.url;
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              return {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: match[1],
+                  data: match[2]
+                }
+              };
+            }
+            return {
+              type: "image",
+              source: {
+                type: "url",
+                url
+              }
+            };
+          }
+          return { type: "text", text: JSON.stringify(part) };
+        });
+      }
+      return "";
+    };
     for (const msg of request.messages) {
       if (msg.role === "system") {
-        if (msg.content) systemMessages.push(msg.content);
+        if (typeof msg.content === "string") {
+          systemMessages.push(msg.content);
+        } else if (Array.isArray(msg.content)) {
+          const sysText = msg.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+          if (sysText) systemMessages.push(sysText);
+        }
       } else if (msg.role === "tool") {
+        const toolContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content || "");
         payload.messages.push({
           role: "user",
           content: [
             {
               type: "tool_result",
               tool_use_id: msg.tool_call_id,
-              content: msg.content || ""
+              content: toolContent
             }
           ]
         });
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const contentBlocks = [];
-        if (msg.content) {
+        if (typeof msg.content === "string") {
           contentBlocks.push({ type: "text", text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const part of msg.content) {
+            if (part.type === "text") {
+              contentBlocks.push({ type: "text", text: part.text });
+            }
+          }
         }
         for (const tc of msg.tool_calls) {
           let input = {};
@@ -1053,7 +1111,7 @@ ${msg.content}`;
         } else {
           payload.messages.push({
             role: msg.role,
-            content: msg.content ?? ""
+            content: formatAnthropicContent(msg.content)
           });
         }
       }
@@ -1532,24 +1590,88 @@ var GeminiProvider = class {
   formatRequest(request) {
     const contents = [];
     const systemParts = [];
+    const formatGeminiParts = (content) => {
+      if (content === null || content === void 0) {
+        return [{ text: "" }];
+      }
+      if (typeof content === "string") {
+        return [{ text: content }];
+      }
+      if (Array.isArray(content)) {
+        const parts = [];
+        for (const part of content) {
+          if (part.type === "text") {
+            parts.push({ text: part.text });
+          } else if (part.type === "image_url") {
+            const url = part.image_url.url;
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              parts.push({
+                inlineData: {
+                  mimeType: match[1],
+                  data: match[2]
+                }
+              });
+            } else {
+              let mimeType = "image/jpeg";
+              if (url.endsWith(".png")) mimeType = "image/png";
+              else if (url.endsWith(".webp")) mimeType = "image/webp";
+              else if (url.endsWith(".gif")) mimeType = "image/gif";
+              parts.push({
+                fileData: {
+                  mimeType,
+                  fileUri: url
+                }
+              });
+            }
+          } else if (part.type === "input_audio") {
+            parts.push({
+              inlineData: {
+                mimeType: `audio/${part.input_audio.format || "wav"}`,
+                data: part.input_audio.data
+              }
+            });
+          }
+        }
+        return parts.length > 0 ? parts : [{ text: "" }];
+      }
+      return [{ text: "" }];
+    };
     for (const msg of request.messages) {
       if (msg.role === "system") {
-        if (msg.content) systemParts.push({ text: msg.content });
+        if (typeof msg.content === "string") {
+          systemParts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const p of msg.content) {
+            if (p.type === "text") {
+              systemParts.push({ text: p.text });
+            }
+          }
+        }
       } else if (msg.role === "tool") {
+        const responseContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
         contents.push({
           role: "user",
           parts: [
             {
               functionResponse: {
                 name: msg.name || "function",
-                response: { content: msg.content }
+                response: { content: responseContent }
               }
             }
           ]
         });
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const parts = [];
-        if (msg.content) parts.push({ text: msg.content });
+        if (typeof msg.content === "string") {
+          parts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const p of msg.content) {
+            if (p.type === "text") {
+              parts.push({ text: p.text });
+            }
+          }
+        }
         for (const tc of msg.tool_calls) {
           let args = {};
           try {
@@ -1570,13 +1692,14 @@ var GeminiProvider = class {
         });
       } else {
         const geminiRole = msg.role === "assistant" ? "model" : "user";
+        const msgParts = formatGeminiParts(msg.content);
         const lastContent = contents[contents.length - 1];
-        if (lastContent && lastContent.role === geminiRole && typeof msg.content === "string") {
-          lastContent.parts.push({ text: msg.content });
+        if (lastContent && lastContent.role === geminiRole) {
+          lastContent.parts.push(...msgParts);
         } else {
           contents.push({
             role: geminiRole,
-            parts: [{ text: msg.content ?? "" }]
+            parts: msgParts
           });
         }
       }

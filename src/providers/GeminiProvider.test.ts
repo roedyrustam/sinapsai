@@ -117,6 +117,68 @@ describe('GeminiProvider', () => {
         },
       ]);
     });
+
+    it('should correctly format multimodal ContentPart[] (text, image, audio)', () => {
+      const request: UnifiedApiRequest = {
+        model: 'gemini-2.5-flash',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Describe image and audio' },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+                },
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'https://example.com/photo.jpg',
+                },
+              },
+              {
+                type: 'input_audio',
+                input_audio: {
+                  data: 'UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==',
+                  format: 'wav',
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.contents).toEqual([
+        {
+          role: 'user',
+          parts: [
+            { text: 'Describe image and audio' },
+            {
+              inlineData: {
+                mimeType: 'image/png',
+                data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+              },
+            },
+            {
+              fileData: {
+                mimeType: 'image/jpeg',
+                fileUri: 'https://example.com/photo.jpg',
+              },
+            },
+            {
+              inlineData: {
+                mimeType: 'audio/wav',
+                data: 'UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==',
+              },
+            },
+          ],
+        },
+      ]);
+    });
   });
 
   describe('formatResponse', () => {

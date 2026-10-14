@@ -15,7 +15,12 @@
   - Intercepted streaming responses in `Router.ts` to accumulate token usage, cached tokens, and compute real-time TTFT and total stream duration.
   - Added `onStreamSuccess?: (provider: Provider, ttftMs: number, totalLatencyMs: number) => void` hook to `SinapsEventHooks`.
   - Added `usage` field to `UnifiedApiStreamChunk` and enabled `stream_options: { include_usage: true }` / stream usage parsing across OpenAI, Groq, Anthropic, Gemini, and OpenRouter.
-- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, and TTFT hooks, expanding test coverage to 144 tests across 15 test suites with 100% pass rate.
+- **Universal Multi-Modal Content Support (`ContentPart[]`)**:
+  - Enhanced `ChatMessage.content` to support both traditional `string` and structured multi-modal `ContentPart[]` (`TextContentPart`, `ImageUrlContentPart`, `InputAudioContentPart`).
+  - **Anthropic Provider**: Automatically translates `image_url` parts to native Anthropic content blocks, converting base64 data URLs (`data:image/...;base64,...`) into base64 image sources and external links into URL image sources.
+  - **Gemini Provider**: Formats `ContentPart[]` into Google AI `parts`, mapping base64 images and audio to `inlineData` and URLs to `fileData`.
+  - **Router Cost Estimation**: Updated `estimateRequestCost` to parse `ContentPart[]`, calculating token costs from text parts while gracefully supporting multimodal payloads.
+- **Test Suite Expansion**: Added unit tests verifying mid-stream failure, abort exemptions, streaming token accumulation, TTFT hooks, and multi-modal request formatting for Anthropic and Gemini, expanding test coverage to 146 tests across 15 test suites with 100% pass rate.
 
 ## [2.0.0] - 2026-10-13 — Superintelligence Edition
 ### Added

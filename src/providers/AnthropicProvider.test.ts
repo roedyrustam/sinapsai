@@ -110,6 +110,58 @@ describe('AnthropicProvider', () => {
       expect(result.temperature).toBe(1.0);
       expect(result.max_tokens).toBe(6144); // maxTokens adjusted to budget_tokens + 4096
     });
+
+    it('should correctly format multimodal ContentPart[] (text and image)', () => {
+      const request: UnifiedApiRequest = {
+        model: 'claude-3-5-sonnet-20241022',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Describe this image' },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+                },
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'https://example.com/photo.jpg',
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.messages).toEqual([
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Describe this image' },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+              },
+            },
+            {
+              type: 'image',
+              source: {
+                type: 'url',
+                url: 'https://example.com/photo.jpg',
+              },
+            },
+          ],
+        },
+      ]);
+    });
   });
 
   describe('formatResponse', () => {
