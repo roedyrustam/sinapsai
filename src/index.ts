@@ -6,6 +6,7 @@
  * @license MIT
  */
 
+export * from './ai-sdk/index.js';
 export * from './core/BatchExecutor.js';
 export * from './core/CircuitBreaker.js';
 export * from './core/InMemoryStorage.js';
@@ -15,3 +16,4 @@ export * from './core/StateStorage.js';
 export * from './providers/index.js';
 export * from './types/index.js';
 export * from './utils/similarity.js';
+

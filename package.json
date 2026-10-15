@@ -13,6 +13,13 @@
       "edge-light": "./dist/index.js",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./ai-sdk": {
+      "types": "./dist/ai-sdk/index.d.ts",
+      "workerd": "./dist/ai-sdk/index.js",
+      "edge-light": "./dist/ai-sdk/index.js",
+      "import": "./dist/ai-sdk/index.js",
+      "require": "./dist/ai-sdk/index.cjs"
     }
   },
   "files": [
