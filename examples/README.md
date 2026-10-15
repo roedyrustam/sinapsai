@@ -51,6 +51,12 @@ npx tsx examples/14-semantic-caching-and-fallbacks.ts
 
 # 15. Concurrent In-Process Batch Processing (client.batch)
 npx tsx examples/15-concurrent-batch-processing.ts
+
+# 16. Vercel AI SDK Official Adapter (sinapsai/ai-sdk)
+npx tsx examples/16-vercel-ai-sdk-adapter.ts
+
+# 17. Distributed Storage Adapters & In-Process PII Guardrails
+npx tsx examples/17-distributed-storage-and-pii-guardrails.ts
 ```
 
 

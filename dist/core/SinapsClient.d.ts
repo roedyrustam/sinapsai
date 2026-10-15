@@ -8,6 +8,7 @@
 import type { Provider } from '../providers/Provider.js';
 import type { BatchOptions, BatchResult, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
+import { type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
 export interface SinapsClientOptions {
@@ -20,10 +21,18 @@ export interface SinapsClientOptions {
     retries?: number;
     retryDelayMs?: number;
     cache?: CacheOptions;
+    /**
+     * Optional PII guardrails configuration.
+     * When enabled, automatically redacts personally identifiable information
+     * (email, phone, credit card, SSN, IP) from all outgoing messages before
+     * they are sent to LLM providers.
+     */
+    piiGuardrails?: PIIGuardrailsOptions | boolean;
 }
 export declare class SinapsClient {
     private router;
     private storage;
+    private piiGuardrails?;
     constructor(options: SinapsClientOptions);
     readonly chat: {
         completions: {

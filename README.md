@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-169%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-236%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -68,6 +68,8 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [15. Universal Multi-Modal Vision & Audio (ContentPart[])](#15-universal-multi-modal-vision--audio-contentpart)
   - [16. Concurrent In-Process Batch Processing (client.batch)](#16-concurrent-in-process-batch-processing-clientbatch)
   - [17. Vercel AI SDK Official Adapter (sinapsai/ai-sdk)](#17-vercel-ai-sdk-official-adapter-sinapsaiai-sdk)
+  - [18. Distributed Storage Adapters (Cloudflare KV, Redis, D1)](#18-distributed-storage-adapters-cloudflare-kv-redis-d1)
+  - [19. Zero-Dependency In-Process PII Guardrails (PIIGuardrails)](#19-zero-dependency-in-process-pii-guardrails-piiguardrails)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -727,6 +729,126 @@ export async function POST(req: Request) {
 
   return result.toDataStreamResponse();
 }
+```
+
+---
+
+### 18. Distributed Storage Adapters (`CloudflareKVStorage`, `RedisStorage`, `D1Storage`)
+
+By default, SinapsAI manages rate limits, circuit breaker states, and exact/semantic caches in ultra-fast local process memory (`InMemoryStorage`). For multi-instance Node.js clusters, serverless functions, or Cloudflare Workers Edge deployments, SinapsAI provides pluggable, zero-dependency distributed storage adapters:
+
+#### A. Redis / Upstash / Valkey (`RedisStorage`)
+Share circuit breaker health and rate limits across horizontal Node.js containers:
+
+```typescript
+import { SinapsClient, OpenAiProvider, AnthropicProvider, RedisStorage } from 'sinapsai';
+import Redis from 'ioredis'; // or import { Redis } from '@upstash/redis'
+
+const redis = new Redis(process.env.REDIS_URL!);
+
+const client = new SinapsClient({
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+  storage: new RedisStorage(redis, { prefix: 'sinaps:prod:' }),
+});
+```
+
+#### B. Cloudflare Workers KV (`CloudflareKVStorage`)
+Deploy on Cloudflare Workers edge network with global key-value distribution and automatic TTL expiration:
+
+```typescript
+import { SinapsClient, GroqProvider, CloudflareKVStorage } from 'sinapsai';
+
+export default {
+  async fetch(request: Request, env: { SINAPS_KV: KVNamespace }) {
+    const client = new SinapsClient({
+      providers: [new GroqProvider({ apiKey: env.GROQ_API_KEY })],
+      storage: new CloudflareKVStorage(env.SINAPS_KV, { prefix: 'edge:' }),
+    });
+
+    const completion = await client.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: 'Explain quantum computing in 1 sentence.' }],
+    });
+
+    return Response.json(completion);
+  },
+};
+```
+
+#### C. Cloudflare D1 SQL (`D1Storage`)
+Store cache and rate limits in serverless SQL with automatic schema migration (`CREATE TABLE IF NOT EXISTS`) and TTL cleanup:
+
+```typescript
+import { SinapsClient, GeminiProvider, D1Storage } from 'sinapsai';
+
+export default {
+  async fetch(request: Request, env: { DB: D1Database }) {
+    const client = new SinapsClient({
+      providers: [new GeminiProvider({ apiKey: env.GEMINI_API_KEY })],
+      storage: new D1Storage(env.DB, { tableName: 'sinaps_kv' }),
+    });
+
+    // States and rate limits are persisted in Cloudflare D1 SQL
+  },
+};
+```
+
+---
+
+### 19. Zero-Dependency In-Process PII Guardrails (`PIIGuardrails`)
+
+Protect sensitive personal information (PII) before it ever leaves your network perimeter. SinapsAI features a built-in, zero-dependency PII guardrails engine that automatically detects and redacts emails, phone numbers, credit card numbers (with Luhn validation), Social Security Numbers (SSN), IP addresses, IBANs, passport numbers, dates of birth, URLs, and JWTs in-process:
+
+#### A. Automatic Middleware in `SinapsClient`
+Enable `piiGuardrails` on the client to automatically sanitize all outgoing prompts:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  piiGuardrails: {
+    enabled: true,
+    categories: ['email', 'phone', 'credit_card', 'ssn', 'ip_address'],
+    allowlist: ['support@company.com'],
+    onPIIDetected: (matches) => {
+      console.warn(`[Audit] Detected & redacted ${matches.length} PII items.`);
+    },
+  },
+});
+
+// Outgoing prompt is sanitized automatically before dispatch:
+// "Contact me at [EMAIL] or card [CREDIT_CARD]"
+const response = await client.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    {
+      role: 'user',
+      content: 'Contact me at alice@secret.org or charge card 4532-0150-1234-5678.',
+    },
+  ],
+});
+```
+
+#### B. Standalone Engine Usage
+Use `PIIGuardrails` independently to sanitize arbitrary strings or inspect matches:
+
+```typescript
+import { PIIGuardrails } from 'sinapsai';
+
+const guardrails = new PIIGuardrails({
+  categories: ['email', 'phone', 'credit_card', 'jwt'],
+  redactionFormat: '[REDACTED_{category}]',
+});
+
+const sanitized = guardrails.redact('Call +1-555-867-5309 or email ceo@startup.io');
+console.log(sanitized);
+// "Call [REDACTED_PHONE] or email [REDACTED_EMAIL]"
+
+const hasSensitiveData = guardrails.hasPII('My token is eyJhbGci...'); // true
 ```
 
 ---

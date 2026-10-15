@@ -10,6 +10,7 @@ import type { Provider } from '../providers/Provider.js';
 import type {
   BatchOptions,
   BatchResult,
+  ChatMessage,
   CircuitBreakerStatus,
   CreateChatCompletionRequest,
   CreateChatCompletionRequestNonStreaming,
@@ -28,6 +29,7 @@ import {
   type CircuitBreakerOptions,
 } from './CircuitBreaker.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
+import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
 
@@ -41,14 +43,30 @@ export interface SinapsClientOptions {
   retries?: number;
   retryDelayMs?: number;
   cache?: CacheOptions;
+  /**
+   * Optional PII guardrails configuration.
+   * When enabled, automatically redacts personally identifiable information
+   * (email, phone, credit card, SSN, IP) from all outgoing messages before
+   * they are sent to LLM providers.
+   */
+  piiGuardrails?: PIIGuardrailsOptions | boolean;
 }
 
 export class SinapsClient {
   private router: Router;
   private storage: StateStorage;
+  private piiGuardrails?: PIIGuardrails;
 
   constructor(options: SinapsClientOptions) {
     this.storage = options.storage || new InMemoryStorage();
+
+    // Initialize PII guardrails if configured
+    if (options.piiGuardrails) {
+      this.piiGuardrails =
+        options.piiGuardrails === true
+          ? new PIIGuardrails()
+          : new PIIGuardrails(options.piiGuardrails);
+    }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId: string) => {
@@ -80,9 +98,14 @@ export class SinapsClient {
       create: (async (
         request: CreateChatCompletionRequest,
       ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> => {
+        // Apply PII redaction to outgoing messages if guardrails are enabled
+        const messages: ChatMessage[] = this.piiGuardrails
+          ? this.piiGuardrails.redactMessages(request.messages)
+          : request.messages;
+
         const fullReq: UnifiedApiRequest = {
           model: request.model || 'default',
-          messages: request.messages,
+          messages,
           temperature: request.temperature,
           maxTokens: request.maxTokens,
           stream: request.stream,

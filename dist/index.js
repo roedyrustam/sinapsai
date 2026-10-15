@@ -392,6 +392,193 @@ var InMemoryStorage = class {
   }
 };
 
+// src/core/PIIGuardrails.ts
+var PATTERNS = {
+  email: /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g,
+  phone: /(?:\+?\d{1,4}[\s\-.]?)?\(?\d{1,4}\)?[\s\-.]?\d{2,4}[\s\-.]?\d{2,4}(?:[\s\-.]?\d{1,4})?\b/g,
+  credit_card: /\b(?:(?:4\d{3}|5[1-5]\d{2}|6(?:011|5\d{2}))[\s\-.]?\d{4}[\s\-.]?\d{4}[\s\-.]?\d{4}|3[47]\d{2}[\s\-.]?\d{6}[\s\-.]?\d{5})\b/g,
+  ssn: /\b\d{3}[\s\-.]?\d{2}[\s\-.]?\d{4}\b/g,
+  ip_address: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})\b/g,
+  iban: /\b[A-Z]{2}\d{2}[\s]?[A-Z0-9]{4}[\s]?(?:[A-Z0-9]{4}[\s]?){1,7}[A-Z0-9]{1,4}\b/g,
+  passport: /\b[A-Z]{1,2}\d{6,9}\b/g,
+  date_of_birth: /\b(?:0[1-9]|[12]\d|3[01])[/\-.](?:0[1-9]|1[0-2])[/\-.](?:19|20)\d{2}\b/g,
+  url: /https?:\/\/[^\s<>"')\]]+/g,
+  jwt: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g
+};
+var CATEGORY_PRIORITY = {
+  jwt: 100,
+  credit_card: 90,
+  iban: 85,
+  passport: 80,
+  ssn: 75,
+  ip_address: 70,
+  email: 65,
+  date_of_birth: 60,
+  url: 50,
+  phone: 40,
+  custom: 30
+};
+function isValidLuhn(digits) {
+  const cleaned = digits.replace(/[\s\-.]/g, "");
+  if (cleaned.length < 13 || cleaned.length > 19) return false;
+  let sum = 0;
+  let alternate = false;
+  for (let i = cleaned.length - 1; i >= 0; i--) {
+    let n = Number.parseInt(cleaned[i], 10);
+    if (Number.isNaN(n)) return false;
+    if (alternate) {
+      n *= 2;
+      if (n > 9) n -= 9;
+    }
+    sum += n;
+    alternate = !alternate;
+  }
+  return sum % 10 === 0;
+}
+var PIIGuardrails = class {
+  patterns;
+  redactionFormat;
+  enabled;
+  onPIIDetected;
+  allowlist;
+  constructor(options) {
+    const categories = options?.categories ?? [
+      "email",
+      "phone",
+      "credit_card",
+      "ssn",
+      "ip_address"
+    ];
+    this.redactionFormat = options?.redactionFormat ?? "[{category}]";
+    this.enabled = options?.enabled ?? true;
+    this.onPIIDetected = options?.onPIIDetected;
+    this.allowlist = new Set(options?.allowlist ?? []);
+    this.patterns = [];
+    for (const cat of categories) {
+      const pattern = PATTERNS[cat];
+      if (pattern) {
+        this.patterns.push({
+          category: cat,
+          regex: new RegExp(pattern.source, pattern.flags)
+        });
+      }
+    }
+    if (options?.customPatterns) {
+      for (const [category, regex] of Object.entries(options.customPatterns)) {
+        this.patterns.push({
+          category,
+          regex: new RegExp(regex.source, regex.flags || "g")
+        });
+      }
+    }
+  }
+  /**
+   * Detects all PII matches in the given text without modifying it.
+   */
+  detect(text) {
+    if (!this.enabled || !text) return [];
+    const matches = [];
+    for (const entry of this.patterns) {
+      const regex = new RegExp(entry.regex.source, entry.regex.flags);
+      let match = regex.exec(text);
+      while (match !== null) {
+        const original = match[0];
+        const matchIndex = match.index;
+        match = regex.exec(text);
+        if (this.allowlist.has(original)) continue;
+        if (entry.category === "credit_card" && !isValidLuhn(original)) {
+          continue;
+        }
+        if (entry.category === "phone") {
+          const digitCount = original.replace(/\D/g, "").length;
+          if (digitCount < 7 || digitCount > 15) continue;
+        }
+        const redacted = this.formatRedaction(entry.category);
+        matches.push({
+          category: entry.category,
+          original,
+          redacted,
+          startIndex: matchIndex,
+          endIndex: matchIndex + original.length
+        });
+      }
+    }
+    matches.sort((a, b) => {
+      const lenDiff = b.endIndex - b.startIndex - (a.endIndex - a.startIndex);
+      if (lenDiff !== 0) return lenDiff;
+      const prioA = CATEGORY_PRIORITY[a.category] ?? 30;
+      const prioB = CATEGORY_PRIORITY[b.category] ?? 30;
+      return prioB - prioA;
+    });
+    const deduped = [];
+    for (const m of matches) {
+      const overlaps = deduped.some(
+        (existing) => m.startIndex < existing.endIndex && m.endIndex > existing.startIndex
+      );
+      if (!overlaps) {
+        deduped.push(m);
+      }
+    }
+    deduped.sort((a, b) => b.startIndex - a.startIndex);
+    return deduped;
+  }
+  /**
+   * Redacts all detected PII from the given text and returns
+   * the sanitized string.
+   */
+  redact(text) {
+    if (!this.enabled || !text) return text;
+    const matches = this.detect(text);
+    if (matches.length === 0) return text;
+    if (this.onPIIDetected) {
+      this.onPIIDetected(matches);
+    }
+    let result = text;
+    for (const match of matches) {
+      result = result.slice(0, match.startIndex) + match.redacted + result.slice(match.endIndex);
+    }
+    return result;
+  }
+  /**
+   * Redacts PII from all string content within a ChatMessage array.
+   * Handles both string content and ContentPart[] arrays.
+   */
+  redactMessages(messages) {
+    if (!this.enabled) return messages;
+    return messages.map((msg) => {
+      const cleaned = { ...msg };
+      if (typeof cleaned.content === "string") {
+        cleaned.content = this.redact(cleaned.content);
+      } else if (Array.isArray(cleaned.content)) {
+        cleaned.content = cleaned.content.map(
+          (part) => {
+            if (part.type === "text" && typeof part.text === "string") {
+              return { ...part, text: this.redact(part.text) };
+            }
+            return part;
+          }
+        );
+      }
+      return cleaned;
+    });
+  }
+  /**
+   * Returns the total count of PII instances detected in text.
+   */
+  count(text) {
+    return this.detect(text).length;
+  }
+  /**
+   * Returns true if any PII is detected in the given text.
+   */
+  hasPII(text) {
+    return this.detect(text).length > 0;
+  }
+  formatRedaction(category) {
+    return this.redactionFormat.replace("{category}", category.toUpperCase());
+  }
+};
+
 // src/utils/similarity.ts
 function cosineSimilarity(a, b) {
   if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
@@ -1145,8 +1332,12 @@ var Router = class {
 var SinapsClient = class {
   router;
   storage;
+  piiGuardrails;
   constructor(options) {
     this.storage = options.storage || new InMemoryStorage();
+    if (options.piiGuardrails) {
+      this.piiGuardrails = options.piiGuardrails === true ? new PIIGuardrails() : new PIIGuardrails(options.piiGuardrails);
+    }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId) => {
@@ -1175,9 +1366,10 @@ var SinapsClient = class {
   chat = {
     completions: {
       create: (async (request) => {
+        const messages = this.piiGuardrails ? this.piiGuardrails.redactMessages(request.messages) : request.messages;
         const fullReq = {
           model: request.model || "default",
-          messages: request.messages,
+          messages,
           temperature: request.temperature,
           maxTokens: request.maxTokens,
           stream: request.stream,
@@ -1663,6 +1855,205 @@ function createSinapsAI(clientOrOptions) {
   return provider;
 }
 var sinapsai = createSinapsAI;
+
+// src/core/CloudflareKVStorage.ts
+var CloudflareKVStorage = class {
+  kv;
+  prefix;
+  constructor(kv, options) {
+    this.kv = kv;
+    this.prefix = options?.prefix ?? "sinaps:";
+  }
+  key(k) {
+    return `${this.prefix}${k}`;
+  }
+  async get(key) {
+    const raw = await this.kv.get(this.key(key), { type: "text" });
+    if (raw === null) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  async set(key, value, ttlSeconds) {
+    const serialized = JSON.stringify(value);
+    const options = {};
+    if (ttlSeconds && ttlSeconds > 0) {
+      options.expirationTtl = Math.max(60, ttlSeconds);
+    }
+    await this.kv.put(this.key(key), serialized, options);
+  }
+  async delete(key) {
+    await this.kv.delete(this.key(key));
+  }
+  async increment(key) {
+    const prefixedKey = this.key(key);
+    const raw = await this.kv.get(prefixedKey, { type: "text" });
+    let current = 0;
+    if (raw !== null) {
+      try {
+        current = JSON.parse(raw);
+      } catch {
+        current = 0;
+      }
+    }
+    const newValue = current + 1;
+    await this.kv.put(prefixedKey, JSON.stringify(newValue));
+    return newValue;
+  }
+  async clear() {
+    let cursor;
+    let complete = false;
+    while (!complete) {
+      const result = await this.kv.list({
+        prefix: this.prefix,
+        limit: 1e3,
+        cursor
+      });
+      await Promise.all(result.keys.map((k) => this.kv.delete(k.name)));
+      complete = result.list_complete;
+      cursor = result.cursor;
+    }
+  }
+};
+
+// src/core/D1Storage.ts
+var D1Storage = class {
+  db;
+  tableName;
+  migrated = false;
+  autoMigrate;
+  constructor(db, options) {
+    this.db = db;
+    this.tableName = options?.tableName ?? "sinaps_state";
+    this.autoMigrate = options?.autoMigrate ?? true;
+  }
+  async ensureTable() {
+    if (this.migrated || !this.autoMigrate) return;
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ${this.tableName} (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        expires_at INTEGER
+      )
+    `);
+    this.migrated = true;
+  }
+  async get(key) {
+    await this.ensureTable();
+    const now = Math.floor(Date.now() / 1e3);
+    const row = await this.db.prepare(
+      `SELECT value FROM ${this.tableName} WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)`
+    ).bind(key, now).first();
+    if (!row) return null;
+    const rawValue = typeof row === "string" ? row : row.value;
+    if (!rawValue) return null;
+    try {
+      return JSON.parse(rawValue);
+    } catch {
+      return null;
+    }
+  }
+  async set(key, value, ttlSeconds) {
+    await this.ensureTable();
+    const serialized = JSON.stringify(value);
+    const expiresAt = ttlSeconds && ttlSeconds > 0 ? Math.floor(Date.now() / 1e3) + ttlSeconds : null;
+    await this.db.prepare(
+      `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, ?)`
+    ).bind(key, serialized, expiresAt).run();
+  }
+  async delete(key) {
+    await this.ensureTable();
+    await this.db.prepare(`DELETE FROM ${this.tableName} WHERE key = ?`).bind(key).run();
+  }
+  async increment(key) {
+    await this.ensureTable();
+    const current = await this.get(key);
+    const newValue = (current ?? 0) + 1;
+    await this.db.prepare(
+      `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, (SELECT expires_at FROM ${this.tableName} WHERE key = ?))`
+    ).bind(key, JSON.stringify(newValue), key).run();
+    return newValue;
+  }
+  async clear() {
+    await this.ensureTable();
+    await this.db.prepare(`DELETE FROM ${this.tableName}`).run();
+  }
+  /**
+   * Removes expired entries. Call periodically via scheduled handler
+   * or Cron Trigger to keep the table lean.
+   */
+  async purgeExpired() {
+    await this.ensureTable();
+    const now = Math.floor(Date.now() / 1e3);
+    await this.db.prepare(
+      `DELETE FROM ${this.tableName} WHERE expires_at IS NOT NULL AND expires_at <= ?`
+    ).bind(now).run();
+  }
+};
+
+// src/core/RedisStorage.ts
+var RedisStorage = class {
+  redis;
+  prefix;
+  constructor(redis, options) {
+    this.redis = redis;
+    this.prefix = options?.prefix ?? "sinaps:";
+  }
+  key(k) {
+    return `${this.prefix}${k}`;
+  }
+  async get(key) {
+    const raw = await this.redis.get(this.key(key));
+    if (raw === null || raw === void 0) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  async set(key, value, ttlSeconds) {
+    const prefixedKey = this.key(key);
+    const serialized = JSON.stringify(value);
+    if (ttlSeconds && ttlSeconds > 0) {
+      await this.redis.set(prefixedKey, serialized, "EX", ttlSeconds);
+    } else {
+      await this.redis.set(prefixedKey, serialized);
+    }
+  }
+  async delete(key) {
+    await this.redis.del(this.key(key));
+  }
+  async increment(key) {
+    return this.redis.incr(this.key(key));
+  }
+  async clear() {
+    if (typeof this.redis.scan === "function") {
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          "MATCH",
+          `${this.prefix}*`,
+          "COUNT",
+          100
+        );
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await this.redis.del(keys);
+        }
+      } while (cursor !== "0");
+    } else if (typeof this.redis.keys === "function") {
+      const keys = await this.redis.keys(`${this.prefix}*`);
+      if (keys.length > 0) {
+        for (const key of keys) {
+          await this.redis.del(key);
+        }
+      }
+    }
+  }
+};
 
 // src/utils/rateLimit.ts
 function parseDurationMs(durationStr) {
@@ -4076,6 +4467,18 @@ function createOpenRouterFreeProvider(config) {
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Zero-Dependency PII Guardrails Engine
+ *
+ * In-process automatic redaction of Personally Identifiable Information (PII)
+ * from outgoing LLM payloads before they leave the network boundary.
+ * No external dependencies, no data leaves the process unprotected.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Vercel AI SDK EmbeddingModelV1 Implementation
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
@@ -4114,7 +4517,31 @@ function createOpenRouterFreeProvider(config) {
  * @copyright 2026 Roedy Rustam
  * @license MIT
  */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Cloudflare Workers KV Storage Adapter
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Cloudflare D1 (SQLite Edge) Storage Adapter
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Redis / Upstash Storage Adapter
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 
-export { AnthropicProvider, BatchExecutionError, CircuitBreaker, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, executeBatch, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai };
+export { AnthropicProvider, BatchExecutionError, CircuitBreaker, CloudflareKVStorage, D1Storage, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RedisStorage, Router, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, executeBatch, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

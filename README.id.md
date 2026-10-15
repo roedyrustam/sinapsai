@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-169%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-236%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -70,6 +70,8 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [15. Dukungan Multi-Modal Terpadu Vision & Audio (ContentPart[])](#15-dukungan-multi-modal-terpadu-vision--audio-contentpart)
   - [16. Pemrosesan Batch Konkuren In-Process (client.batch)](#16-pemrosesan-batch-konkuren-in-process-clientbatch)
   - [17. Adapter Resmi Vercel AI SDK (sinapsai/ai-sdk)](#17-adapter-resmi-vercel-ai-sdk-sinapsaiai-sdk)
+  - [18. Adapter Storage Terdistribusi (Cloudflare KV, Redis, D1)](#18-adapter-storage-terdistribusi-cloudflare-kv-redis-d1)
+  - [19. Zero-Dependency In-Process PII Guardrails (PIIGuardrails)](#19-zero-dependency-in-process-pii-guardrails-piiguardrails)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -731,6 +733,126 @@ export async function POST(req: Request) {
 
   return result.toDataStreamResponse();
 }
+```
+
+---
+
+### 18. Adapter Storage Terdistribusi (`CloudflareKVStorage`, `RedisStorage`, `D1Storage`)
+
+Secara default, SinapsAI mengelola pembatasan kuota (*rate limits*), status *Circuit Breaker*, dan *exact/semantic cache* di memori lokal proses yang super cepat (`InMemoryStorage`). Untuk lingkungan multi-instance (kluster Node.js / Docker), serverless functions, atau jaringan edge Cloudflare Workers, SinapsAI menyediakan adapter penyimpanan terdistribusi bawaan tanpa dependensi pihak ketiga:
+
+#### A. Redis / Upstash / Valkey (`RedisStorage`)
+Bagikan kesehatan circuit breaker dan rate limiting di seluruh container Node.js secara horizontal:
+
+```typescript
+import { SinapsClient, OpenAiProvider, AnthropicProvider, RedisStorage } from 'sinapsai';
+import Redis from 'ioredis'; // atau import { Redis } from '@upstash/redis'
+
+const redis = new Redis(process.env.REDIS_URL!);
+
+const client = new SinapsClient({
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+  storage: new RedisStorage(redis, { prefix: 'sinaps:prod:' }),
+});
+```
+
+#### B. Cloudflare Workers KV (`CloudflareKVStorage`)
+Deploy di jaringan edge Cloudflare Workers dengan distribusi global dan masa kedaluwarsa TTL otomatis:
+
+```typescript
+import { SinapsClient, GroqProvider, CloudflareKVStorage } from 'sinapsai';
+
+export default {
+  async fetch(request: Request, env: { SINAPS_KV: KVNamespace }) {
+    const client = new SinapsClient({
+      providers: [new GroqProvider({ apiKey: env.GROQ_API_KEY })],
+      storage: new CloudflareKVStorage(env.SINAPS_KV, { prefix: 'edge:' }),
+    });
+
+    const completion = await client.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: 'Jelaskan komputasi kuantum dalam 1 kalimat.' }],
+    });
+
+    return Response.json(completion);
+  },
+};
+```
+
+#### C. Cloudflare D1 SQL (`D1Storage`)
+Simpan cache dan rate limit di database SQL serverless dengan migrasi tabel otomatis (`CREATE TABLE IF NOT EXISTS`) dan pembersihan TTL:
+
+```typescript
+import { SinapsClient, GeminiProvider, D1Storage } from 'sinapsai';
+
+export default {
+  async fetch(request: Request, env: { DB: D1Database }) {
+    const client = new SinapsClient({
+      providers: [new GeminiProvider({ apiKey: env.GEMINI_API_KEY })],
+      storage: new D1Storage(env.DB, { tableName: 'sinaps_kv' }),
+    });
+
+    // State dan rate limits tersimpan aman di Cloudflare D1 SQL
+  },
+};
+```
+
+---
+
+### 19. Zero-Dependency In-Process PII Guardrails (`PIIGuardrails`)
+
+Lindungi data privasi dan informasi sensitif pengguna (*Personally Identifiable Information* - PII) sebelum payload meninggalkan batas jaringan aplikasi Anda. SinapsAI dilengkapi mesin *PII Guardrails* in-process bawaan tanpa dependensi eksternal yang otomatis mendeteksi dan menyamarkan (redact) email, nomor telepon, nomor kartu kredit (lengkap dengan validasi algoritma Luhn), nomor jaminan sosial (SSN), alamat IP, nomor IBAN, paspor, tanggal lahir, URL, dan token JWT:
+
+#### A. Middleware Otomatis di `SinapsClient`
+Aktifkan opsi `piiGuardrails` pada inisialisasi client agar seluruh pesan keluar otomatis disanitasi:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  piiGuardrails: {
+    enabled: true,
+    categories: ['email', 'phone', 'credit_card', 'ssn', 'ip_address'],
+    allowlist: ['support@company.com'],
+    onPIIDetected: (matches) => {
+      console.warn(`[Audit] Terdeteksi dan disanitasi ${matches.length} item PII.`);
+    },
+  },
+});
+
+// Prompt keluar otomatis disanitasi sebelum dikirim ke provider LLM:
+// "Hubungi saya di [EMAIL] atau kartu [CREDIT_CARD]"
+const response = await client.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    {
+      role: 'user',
+      content: 'Hubungi saya di alice@secret.org atau tagih kartu 4532-0150-1234-5678.',
+    },
+  ],
+});
+```
+
+#### B. Penggunaan Mandiri (Standalone Engine)
+Gunakan kelas `PIIGuardrails` secara independen untuk membersihkan teks atau mendeteksi kebocoran data:
+
+```typescript
+import { PIIGuardrails } from 'sinapsai';
+
+const guardrails = new PIIGuardrails({
+  categories: ['email', 'phone', 'credit_card', 'jwt'],
+  redactionFormat: '[DISAMARKAN_{category}]',
+});
+
+const hasilSanitasi = guardrails.redact('Hubungi +62-812-3456-7890 atau email ceo@startup.id');
+console.log(hasilSanitasi);
+// "Hubungi [DISAMARKAN_PHONE] atau email [DISAMARKAN_EMAIL]"
+
+const adaDataSensitif = guardrails.hasPII('Token saya adalah eyJhbGci...'); // true
 ```
 
 ---
