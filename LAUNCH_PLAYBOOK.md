@@ -155,12 +155,23 @@ Posting di subreddit yang relevan (beri jeda 2-3 jam antar subreddit agar tidak 
 > ```
 
 **Tweet 5 (Call to Action)**:
-> SinapsAI is 100% open source under CC BY 4.0.
+> SinapsAI is 100% open source under MIT License.
 > 
 > ⭐ Star the repo on GitHub:
 > https://github.com/roedyrustam/sinapsai
 > 
 > Feedback and PRs are warmly welcome! 🤝
+
+---
+
+### 🆑 LinkedIn (Artikel Panjang / Pulse & Postingan Feed)
+Naskah lengkap artikel panjang (LinkedIn Pulse) dan postingan feed berdampak tinggi telah disediakan di **[LINKEDIN_ARTICLE.md](./LINKEDIN_ARTICLE.md)**.
+
+- **Waktu Terbaik Publikasi**: Selasa – Kamis pukul 07:30 – 09:00 WIB atau 12:00 – 13:30 WIB (saat jam aktif profesional teknologi).
+- **Target Audiens**: CTO, VP of Engineering, AI Engineers, Tech Leads, dan Pengembang TypeScript/Node.js.
+- **Taktik Distribusi**:
+  1. Publikasikan artikel mendalam melalui fitur **"Write article" / LinkedIn Pulse**.
+  2. Publikasikan ringkasan hook di Feed pribadi dengan melampirkan link artikel dan link repositori GitHub di kolom komentar pertama (untuk memaksimalkan impresi algoritma LinkedIn).
 
 ---
 
