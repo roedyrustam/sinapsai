@@ -5,6 +5,7 @@
  * @copyright 2026 Roedy Rustam
  * @license MIT
  */
+export * from './ai-sdk/index.js';
 export * from './core/BatchExecutor.js';
 export * from './core/CircuitBreaker.js';
 export * from './core/InMemoryStorage.js';

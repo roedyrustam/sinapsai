@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.1.0] - 2026-10-15
+### Added
+- **Official Vercel AI SDK Ecosystem Adapter (`sinapsai/ai-sdk`)**:
+  - Implemented the Vercel AI SDK `LanguageModelV1` and `EmbeddingModelV1` specifications with zero external runtime dependencies.
+  - Exported subpath `./ai-sdk` in `package.json` (`import { createSinapsAI, sinapsai } from 'sinapsai/ai-sdk'`) and root exports.
+  - Full drop-in compatibility with Vercel AI SDK core functions: `streamText`, `generateText`, `streamObject`, `generateObject`, and Next.js 15 Route Handlers.
+  - Seamless multi-modal prompt conversion: translates `LanguageModelV1Prompt` (system, user, assistant, tool, images, audio) into unified `ChatMessage[]`.
+  - Transparent in-process resilience: requests invoked through Vercel AI SDK automatically benefit from SinapsAI's in-memory Circuit Breaker, automated multi-provider failover, hierarchical model fallback, lowest-latency routing, and semantic cache.
+  - Deep Reasoning deltas: streams reasoning tokens (`type: 'reasoning'`) for Claude 3.7 Sonnet, Gemini Flash Thinking, DeepSeek R1, and Groq directly into Vercel AI SDK streams.
+  - Full tool calling support: streaming `tool-call` and `tool-call-delta` events for autonomous multi-step agentic execution.
+  - Vector embeddings integration: `sinaps.textEmbeddingModel()` and `sinaps.embedding()` conforming to `EmbeddingModelV1`.
+  - Added runnable example `examples/16-vercel-ai-sdk-adapter.ts` and 13 unit tests in `src/ai-sdk/index.test.ts`.
+  - Expanded test suite to 182 passed tests across 18 test suites with 100% pass rate.
+
 ## [2.0.1] - 2026-10-15
 ### Added
 - **Ecosystem-Wide KV-Cache & Prompt Caching Unification**:

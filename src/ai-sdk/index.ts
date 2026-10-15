@@ -17,9 +17,9 @@ import type {
   SinapsModelSettings,
 } from './types.js';
 
+export * from './promptConverter.js';
 export * from './SinapsEmbeddingModel.js';
 export * from './SinapsLanguageModel.js';
-export * from './promptConverter.js';
 export * from './types.js';
 
 /**
@@ -43,16 +43,18 @@ export * from './types.js';
  * ```
  */
 export function createSinapsAI(
-  clientOrOptions?: SinapsAIProviderInput,
+  clientOrOptions: SinapsAIProviderInput,
 ): SinapsAIProvider {
-  let client: SinapsClient;
-  if (clientOrOptions instanceof SinapsClient) {
-    client = clientOrOptions;
-  } else if (clientOrOptions && 'providers' in clientOrOptions) {
-    client = new SinapsClient(clientOrOptions);
-  } else {
-    client = new SinapsClient({ providers: [] });
+  if (!clientOrOptions) {
+    throw new Error(
+      'createSinapsAI requires a SinapsClient instance or SinapsClientOptions with at least one configured provider.',
+    );
   }
+
+  const client =
+    clientOrOptions instanceof SinapsClient
+      ? clientOrOptions
+      : new SinapsClient(clientOrOptions);
 
   const createLanguageModel = (
     modelId: string,
@@ -65,7 +67,7 @@ export function createSinapsAI(
   ) => new SinapsEmbeddingModel(client, modelId, settings);
 
   const provider = ((modelId: string, settings?: SinapsModelSettings) =>
-    createLanguageModel(modelId, settings)) as SinapsAIProvider;
+    createLanguageModel(modelId, settings)) as unknown as SinapsAIProvider;
 
   provider.languageModel = createLanguageModel;
   provider.chat = createLanguageModel;
@@ -83,6 +85,6 @@ export function createSinapsAI(
 }
 
 /**
- * Pre-instantiated default SinapsAI provider wrapper.
+ * Alias for `createSinapsAI`.
  */
-export const sinapsai = createSinapsAI();
+export const sinapsai = createSinapsAI;

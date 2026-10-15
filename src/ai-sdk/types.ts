@@ -7,7 +7,10 @@
  * @license MIT
  */
 
-import type { SinapsClient, SinapsClientOptions } from '../core/SinapsClient.js';
+import type {
+  SinapsClient,
+  SinapsClientOptions,
+} from '../core/SinapsClient.js';
 
 export type LanguageModelV1FinishReason =
   | 'stop'
@@ -195,7 +198,9 @@ export interface LanguageModelV1 {
   readonly defaultObjectGenerationMode?: 'json' | 'tool';
   readonly supportsImageUrls?: boolean;
 
-  doGenerate(options: LanguageModelV1CallOptions): Promise<LanguageModelV1Result>;
+  doGenerate(
+    options: LanguageModelV1CallOptions,
+  ): Promise<LanguageModelV1Result>;
 
   doStream(options: LanguageModelV1CallOptions): Promise<{
     stream: ReadableStream<LanguageModelV1StreamPart>;
@@ -233,7 +238,9 @@ export interface EmbeddingModelV1 {
   readonly maxEmbeddingsPerCall?: number;
   readonly supportsParallelCalls?: boolean;
 
-  doEmbed(options: EmbeddingModelV1CallOptions): Promise<EmbeddingModelV1Result>;
+  doEmbed(
+    options: EmbeddingModelV1CallOptions,
+  ): Promise<EmbeddingModelV1Result>;
 }
 
 export interface SinapsModelSettings {
@@ -248,7 +255,10 @@ export interface SinapsEmbeddingSettings {
 
 export interface SinapsAIProvider {
   (modelId: string, settings?: SinapsModelSettings): LanguageModelV1;
-  languageModel(modelId: string, settings?: SinapsModelSettings): LanguageModelV1;
+  languageModel(
+    modelId: string,
+    settings?: SinapsModelSettings,
+  ): LanguageModelV1;
   chat(modelId: string, settings?: SinapsModelSettings): LanguageModelV1;
   textEmbeddingModel(
     modelId: string,

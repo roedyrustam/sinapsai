@@ -67,6 +67,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [14. Hierarchical Model-Level Fallbacks](#14-hierarchical-model-level-fallbacks)
   - [15. Universal Multi-Modal Vision & Audio (ContentPart[])](#15-universal-multi-modal-vision--audio-contentpart)
   - [16. Concurrent In-Process Batch Processing (client.batch)](#16-concurrent-in-process-batch-processing-clientbatch)
+  - [17. Vercel AI SDK Official Adapter (sinapsai/ai-sdk)](#17-vercel-ai-sdk-official-adapter-sinapsaiai-sdk)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -687,6 +688,44 @@ for (const item of batchResult.results) {
   } else {
     console.error(`[Item #${item.index}] Failed:`, item.error?.message);
   }
+}
+```
+
+---
+
+### 17. Vercel AI SDK Official Adapter (`sinapsai/ai-sdk`)
+
+Connect SinapsAI directly to the **Vercel AI SDK** (`ai`). Use SinapsAI as a drop-in provider for `streamText`, `generateText`, `streamObject`, and Next.js 15 App Router Route Handlers while benefiting from automatic failover, Circuit Breaker protection, lowest-latency routing, and semantic caching:
+
+```typescript
+// app/api/chat/route.ts
+import { createSinapsAI } from 'sinapsai/ai-sdk';
+import { GroqProvider, OpenAiProvider, AnthropicProvider } from 'sinapsai';
+import { streamText } from 'ai';
+
+// 1. Create the SinapsAI provider with multi-provider resilience
+const sinaps = createSinapsAI({
+  strategy: 'lowest-latency',
+  providers: [
+    new GroqProvider({ apiKey: process.env.GROQ_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+});
+
+// 2. Pass to Vercel AI SDK streamText or generateText
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = streamText({
+    model: sinaps('llama-3.3-70b-versatile', {
+      thinkingBudget: 1024,
+      fallbackModels: ['gpt-4o-mini', 'claude-3-7-sonnet-20250219'],
+    }),
+    messages,
+  });
+
+  return result.toDataStreamResponse();
 }
 ```
 

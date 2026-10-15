@@ -69,6 +69,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [14. Hierarchical Model-Level Fallbacks](#14-hierarchical-model-level-fallbacks)
   - [15. Dukungan Multi-Modal Terpadu Vision & Audio (ContentPart[])](#15-dukungan-multi-modal-terpadu-vision--audio-contentpart)
   - [16. Pemrosesan Batch Konkuren In-Process (client.batch)](#16-pemrosesan-batch-konkuren-in-process-clientbatch)
+  - [17. Adapter Resmi Vercel AI SDK (sinapsai/ai-sdk)](#17-adapter-resmi-vercel-ai-sdk-sinapsaiai-sdk)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -691,6 +692,44 @@ for (const item of batchResult.results) {
   } else {
     console.error(`[Item #${item.index}] Gagal:`, item.error?.message);
   }
+}
+```
+
+---
+
+### 17. Adapter Resmi Vercel AI SDK (`sinapsai/ai-sdk`)
+
+Hubungkan SinapsAI langsung dengan ekosistem **Vercel AI SDK** (`ai`). Gunakan SinapsAI sebagai *drop-in provider* untuk `streamText`, `generateText`, `streamObject`, dan Route Handler Next.js 15 App Router, dengan seluruh keunggulan otomatis failover, Circuit Breaker, perutean latensi terendah, dan semantic caching:
+
+```typescript
+// app/api/chat/route.ts
+import { createSinapsAI } from 'sinapsai/ai-sdk';
+import { GroqProvider, OpenAiProvider, AnthropicProvider } from 'sinapsai';
+import { streamText } from 'ai';
+
+// 1. Buat instance provider SinapsAI dengan keandalan multi-provider
+const sinaps = createSinapsAI({
+  strategy: 'lowest-latency',
+  providers: [
+    new GroqProvider({ apiKey: process.env.GROQ_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+});
+
+// 2. Gunakan langsung di streamText atau generateText Vercel AI SDK
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = streamText({
+    model: sinaps('llama-3.3-70b-versatile', {
+      thinkingBudget: 1024,
+      fallbackModels: ['gpt-4o-mini', 'claude-3-7-sonnet-20250219'],
+    }),
+    messages,
+  });
+
+  return result.toDataStreamResponse();
 }
 ```
 

@@ -1245,6 +1245,425 @@ var SinapsClient = class {
   }
 };
 
+// src/ai-sdk/SinapsEmbeddingModel.ts
+var SinapsEmbeddingModel = class {
+  specificationVersion = "v1";
+  provider = "sinapsai";
+  modelId;
+  maxEmbeddingsPerCall = 2048;
+  supportsParallelCalls = true;
+  client;
+  settings;
+  constructor(client, modelId, settings) {
+    this.client = client;
+    this.modelId = modelId;
+    this.settings = settings;
+  }
+  async doEmbed(options) {
+    const res = await this.client.embeddings.create({
+      model: this.modelId,
+      input: options.values,
+      signal: options.abortSignal,
+      dimensions: this.settings?.dimensions
+    });
+    const embeddings = res.data.map((item) => item.embedding);
+    const tokens = res.usage?.promptTokens ?? 0;
+    return {
+      embeddings,
+      usage: {
+        tokens
+      }
+    };
+  }
+};
+
+// src/ai-sdk/promptConverter.ts
+function convertPromptToSinapsMessages(prompt) {
+  const messages = [];
+  for (const message of prompt) {
+    if (message.role === "system") {
+      messages.push({
+        role: "system",
+        content: message.content
+      });
+    } else if (message.role === "user") {
+      const parts = [];
+      for (const part of message.content) {
+        if (part.type === "text") {
+          parts.push({
+            type: "text",
+            text: part.text
+          });
+        } else if (part.type === "image") {
+          let urlStr;
+          if (part.image instanceof URL) {
+            urlStr = part.image.toString();
+          } else if (typeof part.image === "string") {
+            urlStr = part.image;
+          } else if (part.image instanceof Uint8Array || typeof Buffer !== "undefined" && Buffer.isBuffer(part.image)) {
+            const base64 = typeof Buffer !== "undefined" ? Buffer.from(part.image).toString("base64") : btoa(String.fromCharCode(...part.image));
+            const mimeType = part.mimeType || "image/jpeg";
+            urlStr = `data:${mimeType};base64,${base64}`;
+          } else {
+            urlStr = String(part.image);
+          }
+          parts.push({
+            type: "image_url",
+            image_url: { url: urlStr }
+          });
+        }
+      }
+      if (parts.length === 1 && parts[0].type === "text") {
+        messages.push({
+          role: "user",
+          content: parts[0].text
+        });
+      } else {
+        messages.push({
+          role: "user",
+          content: parts
+        });
+      }
+    } else if (message.role === "assistant") {
+      let textContent = "";
+      const toolCalls = [];
+      for (const part of message.content) {
+        if (part.type === "text") {
+          textContent += part.text;
+        } else if (part.type === "tool-call") {
+          toolCalls.push({
+            id: part.toolCallId,
+            type: "function",
+            function: {
+              name: part.toolName,
+              arguments: typeof part.args === "string" ? part.args : JSON.stringify(part.args)
+            }
+          });
+        }
+      }
+      messages.push({
+        role: "assistant",
+        content: textContent.length > 0 ? textContent : null,
+        tool_calls: toolCalls.length > 0 ? toolCalls : void 0
+      });
+    } else if (message.role === "tool") {
+      for (const part of message.content) {
+        messages.push({
+          role: "tool",
+          tool_call_id: part.toolCallId,
+          name: part.toolName,
+          content: typeof part.result === "string" ? part.result : JSON.stringify(part.result)
+        });
+      }
+    }
+  }
+  return messages;
+}
+function convertToolsAndMode(mode) {
+  if (!mode) {
+    return {};
+  }
+  if (mode.type === "regular") {
+    let tools;
+    if (mode.tools && mode.tools.length > 0) {
+      tools = mode.tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters ?? void 0
+        }
+      }));
+    }
+    let toolChoice;
+    if (mode.toolChoice) {
+      if (mode.toolChoice.type === "auto") {
+        toolChoice = "auto";
+      } else if (mode.toolChoice.type === "none") {
+        toolChoice = "none";
+      } else if (mode.toolChoice.type === "required") {
+        toolChoice = "required";
+      } else if (mode.toolChoice.type === "tool") {
+        toolChoice = {
+          type: "function",
+          function: { name: mode.toolChoice.toolName }
+        };
+      }
+    }
+    return { tools, toolChoice };
+  }
+  if (mode.type === "object-json") {
+    return {
+      responseFormat: {
+        type: "json_object",
+        json_schema: mode.schema ? {
+          name: mode.name || "response",
+          description: mode.description,
+          schema: mode.schema
+        } : void 0
+      }
+    };
+  }
+  if (mode.type === "object-tool") {
+    return {
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: mode.tool.name,
+            description: mode.tool.description,
+            parameters: mode.tool.parameters ?? void 0
+          }
+        }
+      ],
+      toolChoice: {
+        type: "function",
+        function: { name: mode.tool.name }
+      }
+    };
+  }
+  return {};
+}
+function mapFinishReason(finishReason) {
+  if (!finishReason) {
+    return "stop";
+  }
+  const normalized = finishReason.toLowerCase();
+  switch (normalized) {
+    case "stop":
+    case "end_turn":
+    case "stop_sequence":
+      return "stop";
+    case "length":
+    case "max_tokens":
+      return "length";
+    case "tool_calls":
+    case "tool_use":
+    case "function_call":
+      return "tool-calls";
+    case "content_filter":
+    case "safety":
+      return "content-filter";
+    case "error":
+      return "error";
+    default:
+      return "other";
+  }
+}
+
+// src/ai-sdk/SinapsLanguageModel.ts
+var SinapsLanguageModel = class {
+  specificationVersion = "v1";
+  provider = "sinapsai";
+  modelId;
+  defaultObjectGenerationMode = "json";
+  supportsImageUrls = true;
+  client;
+  settings;
+  constructor(client, modelId, settings) {
+    this.client = client;
+    this.modelId = modelId;
+    this.settings = settings;
+  }
+  async doGenerate(options) {
+    const messages = convertPromptToSinapsMessages(options.prompt);
+    const { tools, toolChoice, responseFormat } = convertToolsAndMode(
+      options.mode
+    );
+    const requestPayload = {
+      model: this.modelId,
+      messages,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      tools,
+      toolChoice,
+      responseFormat,
+      fallbackModels: this.settings?.fallbackModels,
+      thinkingBudget: this.settings?.thinkingBudget,
+      reasoningEffort: this.settings?.reasoningEffort,
+      signal: options.abortSignal
+    };
+    const response = await this.client.chat.completions.create(
+      requestPayload
+    );
+    const choice = response.choices?.[0];
+    const message = choice?.message;
+    let toolCalls;
+    if (message?.tool_calls && message.tool_calls.length > 0) {
+      toolCalls = message.tool_calls.map((tc) => ({
+        toolCallType: "function",
+        toolCallId: tc.id,
+        toolName: tc.function.name,
+        args: tc.function.arguments
+      }));
+    }
+    return {
+      text: message?.content ?? void 0,
+      toolCalls,
+      finishReason: mapFinishReason(choice?.finishReason),
+      usage: {
+        promptTokens: response.usage?.promptTokens ?? 0,
+        completionTokens: response.usage?.completionTokens ?? 0
+      },
+      rawCall: {
+        rawPrompt: options.prompt,
+        rawSettings: {
+          temperature: options.temperature,
+          maxTokens: options.maxTokens,
+          mode: options.mode
+        }
+      }
+    };
+  }
+  async doStream(options) {
+    const messages = convertPromptToSinapsMessages(options.prompt);
+    const { tools, toolChoice, responseFormat } = convertToolsAndMode(
+      options.mode
+    );
+    const requestPayload = {
+      model: this.modelId,
+      messages,
+      stream: true,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      tools,
+      toolChoice,
+      responseFormat,
+      fallbackModels: this.settings?.fallbackModels,
+      thinkingBudget: this.settings?.thinkingBudget,
+      reasoningEffort: this.settings?.reasoningEffort,
+      signal: options.abortSignal
+    };
+    const client = this.client;
+    const rawSettings = {
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      mode: options.mode
+    };
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          const responseStream = await client.chat.completions.create(
+            requestPayload
+          );
+          let promptTokens = 0;
+          let completionTokens = 0;
+          let finishReason = "stop";
+          const activeTools = /* @__PURE__ */ new Map();
+          for await (const chunk of responseStream) {
+            if (chunk.usage) {
+              promptTokens = chunk.usage.promptTokens || promptTokens;
+              completionTokens = chunk.usage.completionTokens || completionTokens;
+            }
+            const choice = chunk.choices?.[0];
+            if (!choice) continue;
+            if (choice.delta?.reasoning_content) {
+              controller.enqueue({
+                type: "reasoning",
+                textDelta: choice.delta.reasoning_content
+              });
+            }
+            if (choice.delta?.content) {
+              controller.enqueue({
+                type: "text-delta",
+                textDelta: choice.delta.content
+              });
+            }
+            if (choice.delta?.tool_calls) {
+              for (const tc of choice.delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                let active = activeTools.get(idx);
+                if (!active) {
+                  active = {
+                    id: tc.id || `call_${Date.now()}_${idx}`,
+                    name: tc.function?.name || "",
+                    args: tc.function?.arguments || ""
+                  };
+                  activeTools.set(idx, active);
+                } else {
+                  if (tc.id) active.id = tc.id;
+                  if (tc.function?.name) active.name = tc.function.name;
+                  if (tc.function?.arguments) {
+                    active.args += tc.function.arguments;
+                  }
+                }
+                if (!active.emittedStart && active.name) {
+                  controller.enqueue({
+                    type: "tool-call",
+                    toolCallType: "function",
+                    toolCallId: active.id,
+                    toolName: active.name,
+                    args: active.args
+                  });
+                  active.emittedStart = true;
+                } else if (tc.function?.arguments) {
+                  controller.enqueue({
+                    type: "tool-call-delta",
+                    toolCallType: "function",
+                    toolCallId: active.id,
+                    toolName: active.name,
+                    argsTextDelta: tc.function.arguments
+                  });
+                }
+              }
+            }
+            if (choice.finishReason) {
+              finishReason = mapFinishReason(choice.finishReason);
+            }
+          }
+          controller.enqueue({
+            type: "finish",
+            finishReason,
+            usage: {
+              promptTokens,
+              completionTokens
+            }
+          });
+          controller.close();
+        } catch (error) {
+          controller.enqueue({
+            type: "error",
+            error
+          });
+          controller.close();
+        }
+      }
+    });
+    return {
+      stream,
+      rawCall: {
+        rawPrompt: options.prompt,
+        rawSettings
+      }
+    };
+  }
+};
+
+// src/ai-sdk/index.ts
+function createSinapsAI(clientOrOptions) {
+  if (!clientOrOptions) {
+    throw new Error(
+      "createSinapsAI requires a SinapsClient instance or SinapsClientOptions with at least one configured provider."
+    );
+  }
+  const client = clientOrOptions instanceof SinapsClient ? clientOrOptions : new SinapsClient(clientOrOptions);
+  const createLanguageModel = (modelId, settings) => new SinapsLanguageModel(client, modelId, settings);
+  const createEmbeddingModel = (modelId, settings) => new SinapsEmbeddingModel(client, modelId, settings);
+  const provider = ((modelId, settings) => createLanguageModel(modelId, settings));
+  provider.languageModel = createLanguageModel;
+  provider.chat = createLanguageModel;
+  provider.textEmbeddingModel = createEmbeddingModel;
+  provider.embedding = createEmbeddingModel;
+  Object.defineProperty(provider, "client", {
+    get() {
+      return client;
+    },
+    enumerable: true
+  });
+  return provider;
+}
+var sinapsai = createSinapsAI;
+
 // src/utils/rateLimit.ts
 function parseDurationMs(durationStr) {
   const trimmed = durationStr.trim();
@@ -3655,7 +4074,47 @@ function createOpenRouterFreeProvider(config) {
  * @copyright 2026 Roedy Rustam
  * @license MIT
  */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Vercel AI SDK EmbeddingModelV1 Implementation
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Vercel AI SDK Prompt & Tool Converter
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Vercel AI SDK LanguageModelV1 Implementation
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Vercel AI SDK v1 Specification Types
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Vercel AI SDK Integration & Provider Adapter
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 
-export { AnthropicProvider, BatchExecutionError, CircuitBreaker, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient, cosineSimilarity, createOpenRouterFreeProvider, executeBatch, extractPromptText, isOpenRouterFreeModel };
+export { AnthropicProvider, BatchExecutionError, CircuitBreaker, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, Router, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, executeBatch, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
