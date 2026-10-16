@@ -299,4 +299,66 @@ describe('PIIGuardrails', () => {
       expect(totalLength).toBeGreaterThan(0);
     });
   });
+
+  describe('Reversible Tokenization and Restoration', () => {
+    it('tokenizes PII into surrogate tokens and builds a vault', () => {
+      const g = new PIIGuardrails({ categories: ['email', 'phone'] });
+      const input = 'Reach out to support@acme.com or call +1-555-019-2834.';
+      const { text, vault } = g.tokenize(input);
+
+      expect(text).not.toContain('support@acme.com');
+      expect(text).not.toContain('555-019-2834');
+      expect(text).toContain('{{PII_EMAIL_');
+      expect(text).toContain('{{PII_PHONE_');
+      expect(vault.size).toBe(2);
+
+      // Restore
+      const restored = g.restore(text, vault);
+      expect(restored).toBe(input);
+    });
+
+    it('reuses tokens for identical values in the same or multiple calls', () => {
+      const g = new PIIGuardrails({ categories: ['email'] });
+      const input = 'Send email to user@test.com and CC user@test.com';
+      const { text, vault } = g.tokenize(input);
+
+      expect(vault.size).toBe(1);
+      const token = Array.from(vault.keys())[0];
+      expect(text).toBe(`Send email to ${token} and CC ${token}`);
+
+      const restored = g.restore(text, vault);
+      expect(restored).toBe(input);
+    });
+
+    it('tokenizes chat messages and restores response choices', () => {
+      const g = new PIIGuardrails({ categories: ['email'] });
+      const messages = [
+        { role: 'user', content: 'My email is bob@example.com, send invoice.' },
+      ];
+      const { messages: tokenizedMsgs, vault } = g.tokenizeMessages(messages);
+
+      expect(tokenizedMsgs[0].content).not.toContain('bob@example.com');
+      expect(tokenizedMsgs[0].content).toContain('{{PII_EMAIL_1}}');
+
+      // Simulate model responding referencing the token
+      const mockResponse = {
+        id: 'resp-1',
+        model: 'test',
+        choices: [
+          {
+            message: {
+              role: 'assistant' as const,
+              content: 'Invoice sent to {{PII_EMAIL_1}} successfully.',
+            },
+            finishReason: 'stop',
+          },
+        ],
+      };
+
+      const restoredRes = g.restoreResponse(mockResponse, vault);
+      expect(restoredRes.choices[0].message.content).toBe(
+        'Invoice sent to bob@example.com successfully.',
+      );
+    });
+  });
 });

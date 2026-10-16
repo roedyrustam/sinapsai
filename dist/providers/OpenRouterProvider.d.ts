@@ -53,7 +53,7 @@ export interface OpenRouterModelInfo {
  * Curated list of verified OpenRouter free models ($0 pricing / :free variant).
  * Reference: https://openrouter.ai/models?variant=free
  */
-export declare const OPENROUTER_FREE_MODELS: readonly ['openrouter/free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3.5-lightning:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'thinkingmachines/inkling:free', 'thinkingmachines/inkling-small:free', 'cohere/north-mini-code:free', 'liquid/lfm-2.5-2.6b:free', 'apodex/apodex-1.1-mini:free'];
+export declare const OPENROUTER_FREE_MODELS: readonly ['openrouter/free', 'meta-llama/llama-3.3-70b-instruct:free', 'meta-llama/llama-3.1-8b-instruct:free', 'meta-llama/llama-3.2-3b-instruct:free', 'deepseek/deepseek-r1:free', 'deepseek/deepseek-chat:free', 'qwen/qwen-2.5-coder-32b-instruct:free', 'mistralai/mistral-7b-instruct:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3.5-lightning:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'thinkingmachines/inkling:free', 'thinkingmachines/inkling-small:free', 'cohere/north-mini-code:free', 'liquid/lfm-2.5-2.6b:free', 'apodex/apodex-1.1-mini:free'];
 /**
  * Checks whether a given model identifier belongs to OpenRouter's free tier.
  */

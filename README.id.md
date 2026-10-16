@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-236%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-255%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -72,6 +72,10 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [17. Adapter Resmi Vercel AI SDK (sinapsai/ai-sdk)](#17-adapter-resmi-vercel-ai-sdk-sinapsaiai-sdk)
   - [18. Adapter Storage Terdistribusi (Cloudflare KV, Redis, D1)](#18-adapter-storage-terdistribusi-cloudflare-kv-redis-d1)
   - [19. Zero-Dependency In-Process PII Guardrails (PIIGuardrails)](#19-zero-dependency-in-process-pii-guardrails-piiguardrails)
+  - [20. Perutean Dinamis Adaptif & Smart-Hybrid](#20-perutean-dinamis-adaptif--smart-hybrid)
+  - [21. Tokenisasi PII Reversibel & Vault Respons](#21-tokenisasi-pii-reversibel--vault-respons)
+  - [22. Akumulasi & Rekonstruksi Streaming Tool Call](#22-akumulasi--rekonstruksi-streaming-tool-call)
+  - [23. Ekstraksi Structured JSON Output yang Tangguh](#23-ekstraksi-structured-json-output-yang-tangguh)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -94,6 +98,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 - 🛠️ **Universal Tool Calling & JSON Mode**: Definisikan fungsi/tools sekali saja dengan format JSON Schema standar (`tools`, `toolChoice`). SinapsAI secara otomatis mengonversikannya ke format XML/tools Anthropic Claude, fungsi Gemini, dan OpenAI.
 - 🛡️ **In-Memory Circuit Breaker**: Mendeteksi lonjakan error provider secara instan dan membuka sirkuit (*Open Circuit*) guna mencegah *cascading failures* dan waktu tunggu (timeout) yang berlebihan.
 - 🔀 **Strategi Perutean Fleksibel**:
+  - `adaptive` / `smart-hybrid`: Menghitung skor gabungan secara dinamis berdasarkan reliabilitas (tingkat keberhasilan Laplace), latensi, dan efisiensi biaya guna mengarahkan trafik ke provider terbaik secara otomatis.
   - `failover`: Otomatis beralih ke provider berikutnya secara instan saat provider utama mengalami error / timeout.
   - `lowest-latency`: Mengurutkan dan mengirimkan permintaan ke provider dengan respon tercepat berdasarkan riwayat latensi rata-rata.
   - `load-balance`: Membagi lalu lintas permintaan secara rotasi (*Round-Robin*) untuk menghindari pembatasan kuota (*Rate Limit 429*).
@@ -853,6 +858,103 @@ console.log(hasilSanitasi);
 // "Hubungi [DISAMARKAN_PHONE] atau email [DISAMARKAN_EMAIL]"
 
 const adaDataSensitif = guardrails.hasPII('Token saya adalah eyJhbGci...'); // true
+```
+
+---
+
+### 20. Perutean Dinamis Adaptif & Smart-Hybrid
+
+Strategi `'adaptive'` (atau `'smart-hybrid'`) secara aktif menghitung skor komposit untuk setiap provider yang tersedia secara real-time berdasarkan:
+1. **Skor Reliabilitas**: Tingkat keberhasilan dengan *Laplace smoothing* ($SR = \frac{\text{successes} + 1}{\text{requests} + 2}$)
+2. **Skor Latensi**: Rata-rata latensi riil bergerak ($S_{\text{lat}} = \frac{1000}{\text{avgLatency}}$)
+3. **Faktor Biaya**: Estimasi biaya token ganda yang memprioritaskan endpoint hemat biaya atau *Free Tier*
+
+```typescript
+import { SinapsClient, OpenAiProvider, GroqProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GroqProvider({ apiKey: process.env.GROQ_API_KEY }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY }),
+  ],
+  strategy: 'adaptive', // Otomatis mengarahkan lalu lintas ke provider paling sehat, cepat, dan hemat biaya
+});
+```
+
+---
+
+### 21. Tokenisasi PII Reversibel & Vault Respons
+
+Saat mengirimkan data pengguna yang sensitif ke LLM, Anda dapat menyamarkan data pribadi menggunakan token unik (misalnya `{{PII_EMAIL_1}}`) sekaligus mempertahankan kemampuan untuk **memulihkan nilai asli secara otomatis** saat LLM memberikan responsnya:
+
+```typescript
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY })],
+  piiGuardrails: {
+    categories: ['email', 'phone', 'credit_card'],
+    reversible: true, // Pesan keluar disamarkan dengan token, respons masuk dipulihkan otomatis!
+  },
+});
+
+const response = await client.chat.completions.create({
+  messages: [{ role: 'user', content: 'Kirimkan invoice ke alice@perusahaan.com' }],
+});
+
+// LLM hanya melihat {{PII_EMAIL_1}}, tetapi respons yang Anda terima otomatis berisi email aslinya!
+console.log(response.choices[0].message.content);
+```
+
+Anda juga dapat mengakses modul guardrails secara langsung via `client.guardrails`:
+
+```typescript
+const { text, vault } = client.guardrails.tokenize('Hubungi ceo@startup.id');
+const dipulihkan = client.guardrails.restore(text, vault);
+```
+
+---
+
+### 22. Akumulasi & Rekonstruksi Streaming Tool Call
+
+Saat mengonsumsi respons streaming dari model yang menggunakan pemanggilan alat (*tool calling*) dan token penalaran (*reasoning*), `accumulateStream` secara transparan merekonstruksi seluruh fragmen potongan chunk menjadi `UnifiedApiResponse` yang utuh:
+
+```typescript
+import { SinapsClient, accumulateStream } from 'sinapsai';
+
+const stream = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Berapa harga saham BBCA saat ini?' }],
+  tools: [sahamTool],
+  stream: true,
+});
+
+// Alirkan token ke UI / terminal secara real-time, lalu akumulasikan:
+const fullResponse = await client.chat.completions.accumulateStream(stream, {
+  onChunk: (chunk) => {
+    process.stdout.write(chunk.choices[0]?.delta?.content || '');
+  },
+});
+
+console.log(fullResponse.choices[0].message.tool_calls);
+```
+
+---
+
+### 23. Ekstraksi Structured JSON Output yang Tangguh
+
+Seringkali model LLM mengembalikan format JSON di dalam blok kode markdown (````json ... ````) atau bercampur dengan kalimat pengantar. `client.extractJson` mengekstrak dan mem-parsing JSON secara aman dengan type safety:
+
+```typescript
+const response = await client.chat.completions.create({
+  messages: [{ role: 'user', content: 'Buat ringkasan profil pengguna dalam format JSON' }],
+});
+
+interface ProfilPengguna {
+  nama: string;
+  peran: string;
+}
+
+const profil = client.extractJson<ProfilPengguna>(response);
+console.log(profil.nama);
 ```
 
 ---

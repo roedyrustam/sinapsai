@@ -359,6 +359,35 @@ export class AnthropicProvider implements Provider {
                       parsed.message.usage.cache_read_input_tokens || undefined;
                   }
                 } catch (_e) {}
+              } else if (msg.event === 'content_block_start') {
+                try {
+                  const parsed = JSON.parse(msg.data);
+                  if (parsed.content_block?.type === 'tool_use') {
+                    yield {
+                      id: messageId,
+                      model: payload.model,
+                      choices: [
+                        {
+                          delta: {
+                            role: 'assistant',
+                            tool_calls: [
+                              {
+                                index: parsed.index,
+                                id: parsed.content_block.id,
+                                type: 'function',
+                                function: {
+                                  name: parsed.content_block.name,
+                                  arguments: '',
+                                },
+                              },
+                            ],
+                          },
+                          finishReason: null,
+                        },
+                      ],
+                    };
+                  }
+                } catch (_e) {}
               } else if (msg.event === 'content_block_delta') {
                 try {
                   const parsed = JSON.parse(msg.data);
@@ -390,6 +419,27 @@ export class AnthropicProvider implements Provider {
                         },
                       ],
                     };
+                  } else if (parsed.delta?.type === 'input_json_delta') {
+                    yield {
+                      id: messageId,
+                      model: payload.model,
+                      choices: [
+                        {
+                          delta: {
+                            role: 'assistant',
+                            tool_calls: [
+                              {
+                                index: parsed.index,
+                                function: {
+                                  arguments: parsed.delta.partial_json || '',
+                                },
+                              },
+                            ],
+                          },
+                          finishReason: null,
+                        },
+                      ],
+                    };
                   }
                 } catch (_e) {}
               } else if (msg.event === 'message_delta') {
@@ -408,6 +458,9 @@ export class AnthropicProvider implements Provider {
                   if (parsed.delta?.stop_reason) {
                     let finishReason = 'stop';
                     switch (parsed.delta.stop_reason) {
+                      case 'tool_use':
+                        finishReason = 'tool_calls';
+                        break;
                       case 'max_tokens':
                         finishReason = 'length';
                         break;

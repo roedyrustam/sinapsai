@@ -1,6 +1,6 @@
 {
   "name": "sinapsai",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Blazing-fast in-process AI Gateway & Control Plane with Universal Reasoning, Circuit Breaker, Lowest-Latency Routing, KV-Cache Tracking, and Unified LLM API for Node.js & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",

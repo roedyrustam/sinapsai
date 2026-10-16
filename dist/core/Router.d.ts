@@ -10,7 +10,7 @@ import type { CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, Create
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
 export type { CacheOptions, SemanticCacheOptions };
-export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency';
+export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency' | 'adaptive' | 'smart-hybrid';
 export interface RouterOptions {
     strategy?: RouterStrategy;
     hooks?: SinapsEventHooks;
@@ -41,6 +41,7 @@ export declare class Router {
     clearCache(): Promise<void>;
     private recordMetrics;
     private estimateRequestCost;
+    calculateAdaptiveScore(provider: Provider, request?: UnifiedApiRequest): number;
     private computeCacheKey;
     private isRetryableError;
     private getCandidateModels;

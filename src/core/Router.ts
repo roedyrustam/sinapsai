@@ -29,7 +29,9 @@ export type RouterStrategy =
   | 'failover'
   | 'load-balance'
   | 'lowest-cost'
-  | 'lowest-latency';
+  | 'lowest-latency'
+  | 'adaptive'
+  | 'smart-hybrid';
 
 export interface RouterOptions {
   strategy?: RouterStrategy;
@@ -221,6 +223,38 @@ export class Router {
     return provider.costPer1kTokens ?? Number.POSITIVE_INFINITY;
   }
 
+  public calculateAdaptiveScore(
+    provider: Provider,
+    request?: UnifiedApiRequest,
+  ): number {
+    const pm = this.metrics.providerMetrics[provider.id];
+
+    // Optimistic baseline for cold-start exploration
+    if (!pm || pm.requests === 0) {
+      return 100;
+    }
+
+    // 1. Reliability (Laplace smoothed success rate)
+    const successRate = (pm.successes + 1) / (pm.requests + 2);
+
+    // 2. Latency score (faster = higher score)
+    const avgLatency = Math.max(30, pm.averageLatencyMs || 200);
+    const latencyScore = 1000 / avgLatency;
+
+    // 3. Cost factor
+    let costFactor = 1.0;
+    if (request) {
+      const estimatedCost = this.estimateRequestCost(provider, request);
+      if (estimatedCost === 0) {
+        costFactor = 1.5; // Free tier bonus
+      } else if (Number.isFinite(estimatedCost) && estimatedCost > 0) {
+        costFactor = 1 / (1 + estimatedCost * 50);
+      }
+    }
+
+    return (successRate ** 2) * latencyScore * costFactor * 100;
+  }
+
   private computeCacheKey(request: UnifiedApiRequest): string {
     const raw = JSON.stringify({
       m: request.model,
@@ -409,6 +443,13 @@ export class Router {
         const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
         if (latA === latB) return 0;
         return latA < latB ? -1 : 1;
+      });
+    } else if (this.strategy === 'adaptive' || this.strategy === 'smart-hybrid') {
+      providersList = [...this.providers].sort((a, b) => {
+        const scoreA = this.calculateAdaptiveScore(a, request);
+        const scoreB = this.calculateAdaptiveScore(b, request);
+        if (scoreA === scoreB) return 0;
+        return scoreA > scoreB ? -1 : 1;
       });
     }
 
@@ -830,6 +871,13 @@ export class Router {
         const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
         if (latA === latB) return 0;
         return latA < latB ? -1 : 1;
+      });
+    } else if (this.strategy === 'adaptive' || this.strategy === 'smart-hybrid') {
+      providersList = [...eligibleProviders].sort((a, b) => {
+        const scoreA = this.calculateAdaptiveScore(a);
+        const scoreB = this.calculateAdaptiveScore(b);
+        if (scoreA === scoreB) return 0;
+        return scoreA > scoreB ? -1 : 1;
       });
     }
 

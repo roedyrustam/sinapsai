@@ -8,9 +8,18 @@
 import type { Provider } from '../providers/Provider.js';
 import type { BatchOptions, BatchResult, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
-import { type PIIGuardrailsOptions } from './PIIGuardrails.js';
+import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
+import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
+export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
+    /**
+     * When true, applies reversible tokenization to outgoing messages and
+     * automatically restores the original PII values into the non-streaming LLM response.
+     * Default: false
+     */
+    reversible?: boolean;
+}
 export interface SinapsClientOptions {
     providers: Provider[];
     strategy?: RouterStrategy;
@@ -23,16 +32,17 @@ export interface SinapsClientOptions {
     cache?: CacheOptions;
     /**
      * Optional PII guardrails configuration.
-     * When enabled, automatically redacts personally identifiable information
+     * When enabled, automatically redacts or tokenizes personally identifiable information
      * (email, phone, credit card, SSN, IP) from all outgoing messages before
      * they are sent to LLM providers.
      */
-    piiGuardrails?: PIIGuardrailsOptions | boolean;
+    piiGuardrails?: ExtendedPIIGuardrailsOptions | boolean;
 }
 export declare class SinapsClient {
     private router;
     private storage;
-    private piiGuardrails?;
+    readonly guardrails?: PIIGuardrails;
+    private isReversiblePII;
     constructor(options: SinapsClientOptions);
     readonly chat: {
         completions: {
@@ -41,8 +51,24 @@ export declare class SinapsClient {
                 (request: CreateChatCompletionRequestNonStreaming): Promise<UnifiedApiResponse>;
                 (request: CreateChatCompletionRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
             };
+            /**
+             * Accumulates a streaming response into a complete UnifiedApiResponse.
+             */
+            accumulateStream: (stream: AsyncIterable<UnifiedApiStreamChunk>, options?: StreamAccumulatorOptions) => Promise<UnifiedApiResponse>;
+            /**
+             * Safely extracts and parses JSON data from a response or text string.
+             */
+            extractJson: <T = unknown>(textOrResponse: string | UnifiedApiResponse) => T;
         };
     };
+    /**
+     * Helper to accumulate streaming chunks into a single UnifiedApiResponse.
+     */
+    accumulateStream(stream: AsyncIterable<UnifiedApiStreamChunk>, options?: StreamAccumulatorOptions): Promise<UnifiedApiResponse>;
+    /**
+     * Helper to safely extract JSON from LLM text responses or response objects.
+     */
+    extractJson<T = unknown>(textOrResponse: string | UnifiedApiResponse): T;
     readonly embeddings: {
         create: (request: CreateEmbeddingRequest) => Promise<CreateEmbeddingResponse>;
     };

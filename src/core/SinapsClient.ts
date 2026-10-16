@@ -32,6 +32,23 @@ import { InMemoryStorage } from './InMemoryStorage.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
 import type { StateStorage } from './StateStorage.js';
+import {
+  accumulateStream,
+  type StreamAccumulatorOptions,
+} from '../utils/streamAccumulator.js';
+import {
+  extractJsonFromText,
+  tryExtractJson,
+} from '../utils/structuredOutput.js';
+
+export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
+  /**
+   * When true, applies reversible tokenization to outgoing messages and
+   * automatically restores the original PII values into the non-streaming LLM response.
+   * Default: false
+   */
+  reversible?: boolean;
+}
 
 export interface SinapsClientOptions {
   providers: Provider[];
@@ -45,27 +62,30 @@ export interface SinapsClientOptions {
   cache?: CacheOptions;
   /**
    * Optional PII guardrails configuration.
-   * When enabled, automatically redacts personally identifiable information
+   * When enabled, automatically redacts or tokenizes personally identifiable information
    * (email, phone, credit card, SSN, IP) from all outgoing messages before
    * they are sent to LLM providers.
    */
-  piiGuardrails?: PIIGuardrailsOptions | boolean;
+  piiGuardrails?: ExtendedPIIGuardrailsOptions | boolean;
 }
 
 export class SinapsClient {
   private router: Router;
   private storage: StateStorage;
-  private piiGuardrails?: PIIGuardrails;
+  public readonly guardrails?: PIIGuardrails;
+  private isReversiblePII = false;
 
   constructor(options: SinapsClientOptions) {
     this.storage = options.storage || new InMemoryStorage();
 
     // Initialize PII guardrails if configured
     if (options.piiGuardrails) {
-      this.piiGuardrails =
-        options.piiGuardrails === true
-          ? new PIIGuardrails()
-          : new PIIGuardrails(options.piiGuardrails);
+      if (options.piiGuardrails === true) {
+        this.guardrails = new PIIGuardrails();
+      } else {
+        this.guardrails = new PIIGuardrails(options.piiGuardrails);
+        this.isReversiblePII = options.piiGuardrails.reversible === true;
+      }
     }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
@@ -98,10 +118,19 @@ export class SinapsClient {
       create: (async (
         request: CreateChatCompletionRequest,
       ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> => {
-        // Apply PII redaction to outgoing messages if guardrails are enabled
-        const messages: ChatMessage[] = this.piiGuardrails
-          ? this.piiGuardrails.redactMessages(request.messages)
-          : request.messages;
+        let messages: ChatMessage[] = request.messages;
+        let piiVault: Map<string, string> | undefined;
+
+        // Apply PII redaction or reversible tokenization if guardrails are enabled
+        if (this.guardrails) {
+          if (this.isReversiblePII && !request.stream) {
+            const tokenized = this.guardrails.tokenizeMessages(request.messages);
+            messages = tokenized.messages;
+            piiVault = tokenized.vault;
+          } else {
+            messages = this.guardrails.redactMessages(request.messages);
+          }
+        }
 
         const fullReq: UnifiedApiRequest = {
           model: request.model || 'default',
@@ -117,7 +146,24 @@ export class SinapsClient {
           thinkingBudget: request.thinkingBudget,
           reasoningEffort: request.reasoningEffort,
         };
-        return this.router.execute(fullReq);
+
+        const res = await this.router.execute(fullReq);
+
+        // Reversibly restore PII values if vault contains tokens
+        if (
+          this.guardrails &&
+          piiVault &&
+          piiVault.size > 0 &&
+          !request.stream &&
+          'choices' in (res as UnifiedApiResponse)
+        ) {
+          return this.guardrails.restoreResponse(
+            res as UnifiedApiResponse,
+            piiVault,
+          );
+        }
+
+        return res;
       }) as {
         (
           request: CreateChatCompletionRequestStreaming,
@@ -129,8 +175,50 @@ export class SinapsClient {
           request: CreateChatCompletionRequest,
         ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
       },
+
+      /**
+       * Accumulates a streaming response into a complete UnifiedApiResponse.
+       */
+      accumulateStream: async (
+        stream: AsyncIterable<UnifiedApiStreamChunk>,
+        options?: StreamAccumulatorOptions,
+      ): Promise<UnifiedApiResponse> => {
+        return accumulateStream(stream, options);
+      },
+
+      /**
+       * Safely extracts and parses JSON data from a response or text string.
+       */
+      extractJson: <T = unknown>(
+        textOrResponse: string | UnifiedApiResponse,
+      ): T => {
+        if (typeof textOrResponse === 'string') {
+          return extractJsonFromText<T>(textOrResponse);
+        }
+        const text = textOrResponse.choices?.[0]?.message?.content || '';
+        return extractJsonFromText<T>(text);
+      },
     },
   };
+
+  /**
+   * Helper to accumulate streaming chunks into a single UnifiedApiResponse.
+   */
+  public async accumulateStream(
+    stream: AsyncIterable<UnifiedApiStreamChunk>,
+    options?: StreamAccumulatorOptions,
+  ): Promise<UnifiedApiResponse> {
+    return accumulateStream(stream, options);
+  }
+
+  /**
+   * Helper to safely extract JSON from LLM text responses or response objects.
+   */
+  public extractJson<T = unknown>(
+    textOrResponse: string | UnifiedApiResponse,
+  ): T {
+    return this.chat.completions.extractJson<T>(textOrResponse);
+  }
 
   public readonly embeddings = {
     create: async (

@@ -185,4 +185,83 @@ describe('SinapsClient', () => {
 
     await expect(client.clearCache()).resolves.toBeUndefined();
   });
+
+  it('should support stream accumulation via chat.completions.accumulateStream', async () => {
+    const client = new SinapsClient({
+      providers: [{ name: 'dummy', generateContent: vi.fn() }],
+    });
+
+    async function* testStream() {
+      yield {
+        id: 'acc-1',
+        model: 'model-a',
+        choices: [{ delta: { role: 'assistant' as const, content: 'Part 1' } }],
+      };
+      yield {
+        id: 'acc-1',
+        model: 'model-a',
+        choices: [{ delta: { content: ' and Part 2' } }],
+      };
+    }
+
+    const accumulated = await client.chat.completions.accumulateStream(testStream());
+    expect(accumulated.choices[0].message.content).toBe('Part 1 and Part 2');
+  });
+
+  it('should support extractJson from response objects or strings', () => {
+    const client = new SinapsClient({
+      providers: [{ name: 'dummy', generateContent: vi.fn() }],
+    });
+
+    const parsed = client.extractJson<{ status: string }>('```json\n{"status": "ok"}\n```');
+    expect(parsed.status).toBe('ok');
+
+    const res: UnifiedApiResponse = {
+      id: '1',
+      model: 'm',
+      choices: [{ message: { role: 'assistant', content: '{"count": 99}' }, finishReason: 'stop' }],
+    };
+    expect(client.extractJson<{ count: number }>(res).count).toBe(99);
+  });
+
+  it('should support reversible PII tokenization and restoration through client', async () => {
+    const mockProvider: Provider = {
+      name: 'mock',
+      generateContent: vi.fn().mockImplementation(async (req) => {
+        // Assert outgoing message received by provider was masked
+        expect(req.messages[0].content).toContain('{{PII_EMAIL_1}}');
+        expect(req.messages[0].content).not.toContain('secret@company.com');
+        return {
+          id: '1',
+          model: 'test',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Confirmed, response sent to {{PII_EMAIL_1}}.',
+              },
+              finishReason: 'stop',
+            },
+          ],
+        };
+      }),
+    };
+
+    const client = new SinapsClient({
+      providers: [mockProvider],
+      piiGuardrails: {
+        categories: ['email'],
+        reversible: true,
+      },
+    });
+
+    const res = await client.chat.completions.create({
+      messages: [{ role: 'user', content: 'Please email secret@company.com' }],
+    });
+
+    // The returned response should have the original email seamlessly restored!
+    expect((res as UnifiedApiResponse).choices[0].message.content).toBe(
+      'Confirmed, response sent to secret@company.com.',
+    );
+  });
 });

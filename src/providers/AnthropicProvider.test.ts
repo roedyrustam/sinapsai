@@ -371,5 +371,61 @@ describe('AnthropicProvider', () => {
       expect(result.usage?.cachedPromptTokens).toBe(1200);
       expect(result.usage?.promptTokens).toBe(1500);
     });
+
+    it('should stream and yield tool calls via SSE events', async () => {
+      const sseBody = [
+        'event: message_start\n',
+        'data: {"type":"message_start","message":{"id":"msg_123","model":"claude-3-7-sonnet"}}\n\n',
+        'event: content_block_start\n',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_weather_1","name":"get_weather"}}\n\n',
+        'event: content_block_delta\n',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\": \\"Tokyo\\"}"}}\n\n',
+        'event: message_delta\n',
+        'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":25}}\n\n',
+      ].join('');
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () =>
+        new Response(sseBody, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+
+      try {
+        const stream = await provider.generateContent({
+          model: 'claude-3-7-sonnet',
+          messages: [{ role: 'user', content: 'What is the weather in Tokyo?' }],
+          stream: true,
+        });
+
+        const chunks: any[] = [];
+        for await (const chunk of stream as AsyncIterable<any>) {
+          chunks.push(chunk);
+        }
+
+        const toolStart = chunks.find(
+          (c) => c.choices[0]?.delta?.tool_calls?.[0]?.function?.name,
+        );
+        expect(toolStart).toBeDefined();
+        expect(toolStart.choices[0].delta.tool_calls[0].function.name).toBe(
+          'get_weather',
+        );
+
+        const toolDelta = chunks.find(
+          (c) => c.choices[0]?.delta?.tool_calls?.[0]?.function?.arguments,
+        );
+        expect(toolDelta).toBeDefined();
+        expect(toolDelta.choices[0].delta.tool_calls[0].function.arguments).toBe(
+          '{"city": "Tokyo"}',
+        );
+
+        const endChunk = chunks.find(
+          (c) => c.choices[0]?.finishReason === 'tool_calls',
+        );
+        expect(endChunk).toBeDefined();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 });

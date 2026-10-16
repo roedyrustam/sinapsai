@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-236%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-255%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -70,6 +70,10 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [17. Vercel AI SDK Official Adapter (sinapsai/ai-sdk)](#17-vercel-ai-sdk-official-adapter-sinapsaiai-sdk)
   - [18. Distributed Storage Adapters (Cloudflare KV, Redis, D1)](#18-distributed-storage-adapters-cloudflare-kv-redis-d1)
   - [19. Zero-Dependency In-Process PII Guardrails (PIIGuardrails)](#19-zero-dependency-in-process-pii-guardrails-piiguardrails)
+  - [20. Adaptive & Smart-Hybrid Dynamic Routing](#20-adaptive--smart-hybrid-dynamic-routing)
+  - [21. Reversible PII Tokenization & Response Vault](#21-reversible-pii-tokenization--response-vault)
+  - [22. Streaming Tool Call Accumulator & Reconstruction](#22-streaming-tool-call-accumulator--reconstruction)
+  - [23. Resilient Structured JSON Output Extraction](#23-resilient-structured-json-output-extraction)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -92,6 +96,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 - 🛠️ **Universal Tool Calling & JSON Mode**: Define tools once with standard JSON Schema (`tools`, `toolChoice`). SinapsAI automatically translates function calls to Anthropic's XML/tool syntax, Gemini's function declarations, and OpenAI formats.
 - 🛡️ **In-Memory Circuit Breaker**: Detects provider outages instantaneously and trips (*Open Circuit*) to prevent cascading latencies and application thread blockage.
 - 🔀 **Flexible Routing Strategies**:
+  - `adaptive` / `smart-hybrid`: Dynamically scores and routes prompts to the healthiest, lowest-latency, and most cost-effective provider using a Laplace-smoothed reliability algorithm.
   - `failover`: Automatically falls back to secondary providers when primary models fail or time out.
   - `lowest-latency`: Dynamically sorts and sends requests to the fastest provider based on running average response latency.
   - `load-balance`: Distributes requests in a round-robin rotation across multiple keys or endpoints to avert rate limiting (HTTP 429).
@@ -849,6 +854,103 @@ console.log(sanitized);
 // "Call [REDACTED_PHONE] or email [REDACTED_EMAIL]"
 
 const hasSensitiveData = guardrails.hasPII('My token is eyJhbGci...'); // true
+```
+
+---
+
+### 20. Adaptive & Smart-Hybrid Dynamic Routing
+
+The `'adaptive'` (or `'smart-hybrid'`) strategy actively computes a composite score for each available provider in real-time based on:
+1. **Reliability Score**: Laplace-smoothed success rate ($SR = \frac{\text{successes} + 1}{\text{requests} + 2}$)
+2. **Latency Score**: Running exponential/average latency ($S_{\text{lat}} = \frac{1000}{\text{avgLatency}}$)
+3. **Cost Factor**: Dual-token cost estimation prioritizing cost-effective and Free Tier endpoints
+
+```typescript
+import { SinapsClient, OpenAiProvider, GroqProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GroqProvider({ apiKey: process.env.GROQ_API_KEY }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY }),
+  ],
+  strategy: 'adaptive', // Automatically shifts traffic to the healthiest, fastest, most cost-effective provider
+});
+```
+
+---
+
+### 21. Reversible PII Tokenization & Response Vault
+
+When sending sensitive user data to LLMs, you may want to mask personal data with unique tokens (e.g. `{{PII_EMAIL_1}}`) while preserving the ability to **automatically restore** the original values when the LLM generates its response:
+
+```typescript
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY })],
+  piiGuardrails: {
+    categories: ['email', 'phone', 'credit_card'],
+    reversible: true, // Outgoing messages are tokenized, incoming responses automatically restored!
+  },
+});
+
+const response = await client.chat.completions.create({
+  messages: [{ role: 'user', content: 'Send the report to alice@company.com' }],
+});
+
+// The LLM only sees {{PII_EMAIL_1}}, but your returned response contains the restored email!
+console.log(response.choices[0].message.content);
+```
+
+You can also use `client.guardrails` directly:
+
+```typescript
+const { text, vault } = client.guardrails.tokenize('Contact ceo@company.com');
+const restored = client.guardrails.restore(text, vault);
+```
+
+---
+
+### 22. Streaming Tool Call Accumulator & Reconstruction
+
+When consuming streaming chunks from models with tools and thinking tokens, `accumulateStream` reconstructs the chunks into a complete `UnifiedApiResponse`:
+
+```typescript
+import { SinapsClient, accumulateStream } from 'sinapsai';
+
+const stream = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'What is the stock price of AAPL?' }],
+  tools: [stockTool],
+  stream: true,
+});
+
+// Stream tokens to terminal or UI in real-time, then accumulate:
+const fullResponse = await client.chat.completions.accumulateStream(stream, {
+  onChunk: (chunk) => {
+    process.stdout.write(chunk.choices[0]?.delta?.content || '');
+  },
+});
+
+console.log(fullResponse.choices[0].message.tool_calls);
+```
+
+---
+
+### 23. Resilient Structured JSON Output Extraction
+
+LLMs often return JSON formatted inside markdown code blocks (````json ... ````) or mixed with conversational text. `client.extractJson` safely parses and type-casts the payload:
+
+```typescript
+const response = await client.chat.completions.create({
+  messages: [{ role: 'user', content: 'Generate a JSON summary of user profile' }],
+});
+
+interface UserProfile {
+  name: string;
+  role: string;
+}
+
+const profile = client.extractJson<UserProfile>(response);
+console.log(profile.name);
 ```
 
 ---

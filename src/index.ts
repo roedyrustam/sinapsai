@@ -20,3 +20,5 @@ export * from './core/StateStorage.js';
 export * from './providers/index.js';
 export * from './types/index.js';
 export * from './utils/similarity.js';
+export * from './utils/streamAccumulator.js';
+export * from './utils/structuredOutput.js';

@@ -95,6 +95,12 @@ export interface CreateChatCompletionRequestStreaming extends Omit<UnifiedApiReq
     stream: true;
 }
 export type CreateChatCompletionRequest = CreateChatCompletionRequestNonStreaming | CreateChatCompletionRequestStreaming;
+export interface ApiUsage {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens?: number;
+}
 export interface UnifiedApiStreamChunk {
     id: string;
     model: string;
@@ -107,12 +113,7 @@ export interface UnifiedApiStreamChunk {
         };
         finishReason: string | null;
     }>;
-    usage?: {
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
-        cachedPromptTokens?: number;
-    };
+    usage?: ApiUsage;
 }
 export interface RateLimitInfo {
     remainingRequests?: number;
@@ -131,12 +132,7 @@ export interface UnifiedApiResponse {
         };
         finishReason: string;
     }>;
-    usage?: {
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
-        cachedPromptTokens?: number;
-    };
+    usage?: ApiUsage;
     rateLimit?: RateLimitInfo;
 }
 export interface ProviderConfig {

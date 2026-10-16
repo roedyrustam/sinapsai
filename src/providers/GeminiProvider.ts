@@ -447,6 +447,7 @@ export class GeminiProvider implements Provider {
                         content: chunk.choices[0].message.content,
                         reasoning_content:
                           chunk.choices[0].message.reasoning_content,
+                        tool_calls: chunk.choices[0].message.tool_calls,
                       },
                       finishReason:
                         chunk.choices[0].finishReason === 'stop' &&
