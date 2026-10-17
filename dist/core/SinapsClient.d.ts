@@ -6,9 +6,10 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { BatchOptions, BatchResult, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
+import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import { SecurityGuardrails } from './SecurityGuardrails.js';
@@ -32,6 +33,11 @@ export interface SinapsClientOptions {
     retryDelayMs?: number;
     cache?: CacheOptions;
     /**
+     * Optional budget options to cap maximum cost (USD) or cumulative tokens,
+     * triggering an error or warning callback when exceeded.
+     */
+    budget?: BudgetOptions;
+    /**
      * Optional PII guardrails configuration.
      * When enabled, automatically redacts or tokenizes personally identifiable information
      * (email, phone, credit card, SSN, IP) from all outgoing messages before
@@ -48,12 +54,18 @@ export interface SinapsClientOptions {
      * Allows incoming requests to specify friendly virtual alias names which get resolved automatically.
      */
     modelAliases?: Record<string, string>;
+    /**
+     * Optional context compression options to truncate conversation turns
+     * (sliding-window or middle-out) when prompt messages exceed maxPromptTokens.
+     */
+    contextCompression?: ContextCompressionOptions;
 }
 export declare class SinapsClient {
     private router;
     private storage;
     readonly guardrails?: PIIGuardrails;
     readonly securityGuardrails?: SecurityGuardrails;
+    readonly contextCompressor?: ContextCompressor;
     private isReversiblePII;
     private modelAliases;
     private hooks?;

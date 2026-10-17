@@ -8,6 +8,7 @@
 
 import type { Provider } from '../providers/Provider.js';
 import type {
+  BudgetOptions,
   CacheOptions,
   CircuitBreakerStatus,
   CreateEmbeddingRequest,
@@ -22,11 +23,13 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { BudgetExceededError } from '../types/index.js';
 import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
 
-export type { CacheOptions, SemanticCacheOptions };
+export type { BudgetOptions, CacheOptions, SemanticCacheOptions };
+export { BudgetExceededError };
 
 export type RouterStrategy =
   | 'failover'
@@ -44,6 +47,7 @@ export interface RouterOptions {
   retryDelayMs?: number;
   cache?: CacheOptions;
   storage?: StateStorage;
+  budget?: BudgetOptions;
 }
 
 interface SemanticCacheEntry {
@@ -65,6 +69,7 @@ export class Router {
   private retryDelayMs: number;
   private cacheOptions?: CacheOptions;
   private storage?: StateStorage;
+  private budgetOptions?: BudgetOptions;
   private semanticEntries: SemanticCacheEntry[] = [];
   private metrics: SinapsMetrics = {
     totalRequests: 0,
@@ -95,6 +100,7 @@ export class Router {
     this.retryDelayMs = options.retryDelayMs ?? 300;
     this.cacheOptions = options.cache;
     this.storage = options.storage;
+    this.budgetOptions = options.budget;
   }
 
   public getProviderById(id: string): Provider | undefined {
@@ -268,6 +274,59 @@ export class Router {
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6),
     );
+
+    if (
+      this.budgetOptions?.action === 'warn' &&
+      this.budgetOptions.onBudgetWarning
+    ) {
+      const costExceeded =
+        this.budgetOptions.maxCostUsd !== undefined &&
+        this.metrics.estimatedCostUsd >= this.budgetOptions.maxCostUsd;
+      const tokensExceeded =
+        this.budgetOptions.maxTotalTokens !== undefined &&
+        this.metrics.totalTokens >= this.budgetOptions.maxTotalTokens;
+      if (costExceeded || tokensExceeded) {
+        this.budgetOptions.onBudgetWarning(
+          this.metrics.estimatedCostUsd,
+          this.budgetOptions.maxCostUsd ?? 0,
+        );
+      }
+    }
+  }
+
+  private checkBudget(): void {
+    if (!this.budgetOptions) return;
+
+    const {
+      maxCostUsd,
+      maxTotalTokens,
+      action = 'block',
+      onBudgetWarning,
+    } = this.budgetOptions;
+
+    const costExceeded =
+      maxCostUsd !== undefined && this.metrics.estimatedCostUsd >= maxCostUsd;
+    const tokensExceeded =
+      maxTotalTokens !== undefined &&
+      this.metrics.totalTokens >= maxTotalTokens;
+
+    if (costExceeded || tokensExceeded) {
+      if (action === 'warn') {
+        if (onBudgetWarning) {
+          onBudgetWarning(this.metrics.estimatedCostUsd, maxCostUsd ?? 0);
+        }
+      } else {
+        const reason = costExceeded
+          ? `Budget cost limit exceeded: $${this.metrics.estimatedCostUsd} >= $${maxCostUsd}`
+          : `Budget token limit exceeded: ${this.metrics.totalTokens} >= ${maxTotalTokens} tokens`;
+        throw new BudgetExceededError(reason, {
+          currentCostUsd: this.metrics.estimatedCostUsd,
+          limitUsd: maxCostUsd,
+          currentTotalTokens: this.metrics.totalTokens,
+          limitTokens: maxTotalTokens,
+        });
+      }
+    }
   }
 
   private estimateRequestCost(
@@ -443,6 +502,7 @@ export class Router {
   async execute(
     request: UnifiedApiRequest,
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> {
+    this.checkBudget();
     this.metrics.totalRequests++;
 
     // 1. Check exact Cache if enabled and not streaming
@@ -909,6 +969,7 @@ export class Router {
   async executeEmbedding(
     request: CreateEmbeddingRequest,
   ): Promise<CreateEmbeddingResponse> {
+    this.checkBudget();
     this.metrics.totalRequests++;
 
     if (this.cacheOptions?.enabled && this.storage) {

@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Provider } from '../providers/Provider.js';
 import type { UnifiedApiRequest, UnifiedApiResponse } from '../types/index.js';
+import { BudgetExceededError } from '../types/index.js';
 import { parseRateLimitHeaders } from '../utils/rateLimit.js';
 import { CircuitBreaker } from './CircuitBreaker.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
@@ -28,6 +29,25 @@ describe('parseRateLimitHeaders', () => {
       remainingTokens: 12500,
       resetMs: 3500,
     });
+  });
+
+  it('should parse retry-after formatted as HTTP-date timestamp', () => {
+    const futureDate = new Date(Date.now() + 60000).toUTCString();
+    const headers = new Headers({
+      'retry-after': futureDate,
+    });
+    const parsed = parseRateLimitHeaders(headers);
+    expect(parsed?.resetMs).toBeDefined();
+    expect(parsed?.resetMs).toBeGreaterThan(50000);
+    expect(parsed?.resetMs).toBeLessThanOrEqual(60000);
+
+    // Past date should clamp to 0
+    const pastDate = new Date(Date.now() - 10000).toUTCString();
+    const pastHeaders = new Headers({
+      'retry-after': pastDate,
+    });
+    const pastParsed = parseRateLimitHeaders(pastHeaders);
+    expect(pastParsed?.resetMs).toBe(0);
   });
 
   it('should parse anthropic ratelimit headers', () => {
@@ -285,5 +305,133 @@ describe('Telemetry Metrics & Dual-Pricing Routing', () => {
     expect(metrics.totalTokens).toBe(100);
     expect(metrics.estimatedCostUsd).toBeGreaterThan(0);
     expect(metrics.providerMetrics['client-p'].successes).toBe(1);
+  });
+});
+
+describe('Budget Enforcement (BudgetOptions)', () => {
+  let storage: InMemoryStorage;
+  let circuitBreaker: CircuitBreaker;
+
+  beforeEach(() => {
+    storage = new InMemoryStorage();
+    circuitBreaker = new CircuitBreaker(storage);
+  });
+
+  it('should block requests when maxCostUsd limit is reached', async () => {
+    const mockResponse: UnifiedApiResponse = {
+      id: 'res-1',
+      model: 'gpt-4o',
+      choices: [{ message: { role: 'assistant', content: 'Costly answer' } }],
+      usage: { promptTokens: 1000, completionTokens: 1000, totalTokens: 2000 },
+    };
+
+    const provider: Provider = {
+      id: 'p1',
+      name: 'ExpensiveProvider',
+      promptCostPer1k: 0.05,
+      completionCostPer1k: 0.1,
+      generateContent: vi.fn().mockResolvedValue(mockResponse),
+    };
+
+    const router = new Router([provider], circuitBreaker, {
+      storage,
+      budget: {
+        maxCostUsd: 0.1, // $0.10 limit
+        action: 'block',
+      },
+    });
+
+    const req: UnifiedApiRequest = {
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hello' }],
+    };
+
+    // First request: cost = (1000/1000)*0.05 + (1000/1000)*0.1 = $0.15
+    await router.execute(req);
+    expect(router.getMetrics().estimatedCostUsd).toBe(0.15);
+
+    // Second request: should throw BudgetExceededError because currentCostUsd (0.15) >= maxCostUsd (0.1)
+    await expect(router.execute(req)).rejects.toThrow(BudgetExceededError);
+    await expect(router.execute(req)).rejects.toThrow(
+      /Budget cost limit exceeded/,
+    );
+  });
+
+  it('should block requests when maxTotalTokens limit is reached', async () => {
+    const mockResponse: UnifiedApiResponse = {
+      id: 'res-tokens',
+      model: 'gpt-4o-mini',
+      choices: [{ message: { role: 'assistant', content: 'tokens' } }],
+      usage: { promptTokens: 60, completionTokens: 50, totalTokens: 110 },
+    };
+
+    const provider: Provider = {
+      id: 'p-tokens',
+      name: 'TokenProvider',
+      generateContent: vi.fn().mockResolvedValue(mockResponse),
+    };
+
+    const router = new Router([provider], circuitBreaker, {
+      storage,
+      budget: {
+        maxTotalTokens: 100,
+        action: 'block',
+      },
+    });
+
+    const req: UnifiedApiRequest = {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'test' }],
+    };
+
+    // First request accumulates 110 tokens
+    await router.execute(req);
+    expect(router.getMetrics().totalTokens).toBe(110);
+
+    // Next request should be blocked
+    await expect(router.execute(req)).rejects.toThrow(BudgetExceededError);
+    await expect(router.execute(req)).rejects.toThrow(
+      /Budget token limit exceeded/,
+    );
+  });
+
+  it('should trigger onBudgetWarning callback when action is warn without blocking', async () => {
+    const mockResponse: UnifiedApiResponse = {
+      id: 'res-warn',
+      model: 'claude-3-haiku',
+      choices: [{ message: { role: 'assistant', content: 'warn' } }],
+      usage: { promptTokens: 100, completionTokens: 100, totalTokens: 200 },
+    };
+
+    const provider: Provider = {
+      id: 'p-warn',
+      name: 'WarnProvider',
+      costPer1kTokens: 0.05,
+      promptCostPer1k: 0.05,
+      completionCostPer1k: 0.05,
+      generateContent: vi.fn().mockResolvedValue(mockResponse),
+    };
+
+    const warningFn = vi.fn();
+
+    const client = new SinapsClient({
+      providers: [provider],
+      storage,
+      budget: {
+        maxCostUsd: 0.005,
+        action: 'warn',
+        onBudgetWarning: warningFn,
+      },
+    });
+
+    // First request: cost = (200/1000)*0.05 = 0.010 USD >= 0.005 USD
+    const res = await client.chat.completions.create({
+      model: 'claude-3-haiku',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+
+    expect(res).toBeDefined();
+    expect(warningFn).toHaveBeenCalled();
+    expect(warningFn).toHaveBeenCalledWith(0.01, 0.005);
   });
 });

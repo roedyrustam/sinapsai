@@ -161,6 +161,38 @@ async function accumulateStream(stream, options) {
 }
 
 // src/utils/structuredOutput.ts
+function extractBalancedJson(text, openChar, closeChar) {
+  const startIdx = text.indexOf(openChar);
+  if (startIdx === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (ch === "\\" && inString) {
+      isEscaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === openChar) depth++;
+      else if (ch === closeChar) {
+        depth--;
+        if (depth === 0) {
+          return text.slice(startIdx, i + 1);
+        }
+      }
+    }
+  }
+  return null;
+}
 function extractJsonFromText(text) {
   if (!text || typeof text !== "string") {
     throw new SyntaxError("Cannot extract JSON from empty or non-string input");
@@ -179,22 +211,41 @@ function extractJsonFromText(text) {
     }
   }
   const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
   const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  const hasObject = firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace;
-  const hasArray = firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket;
-  if (hasObject && (!hasArray || firstBrace < firstBracket)) {
-    try {
-      const candidate = trimmed.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(candidate);
-    } catch (_e) {
+  const checkObjectFirst = firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket);
+  if (checkObjectFirst) {
+    const balancedObj = extractBalancedJson(trimmed, "{", "}");
+    if (balancedObj) {
+      try {
+        return JSON.parse(balancedObj);
+      } catch (_e) {
+      }
     }
-  } else if (hasArray) {
-    try {
-      const candidate = trimmed.substring(firstBracket, lastBracket + 1);
-      return JSON.parse(candidate);
-    } catch (_e) {
+    if (firstBracket !== -1) {
+      const balancedArr = extractBalancedJson(trimmed, "[", "]");
+      if (balancedArr) {
+        try {
+          return JSON.parse(balancedArr);
+        } catch (_e) {
+        }
+      }
+    }
+  } else if (firstBracket !== -1) {
+    const balancedArr = extractBalancedJson(trimmed, "[", "]");
+    if (balancedArr) {
+      try {
+        return JSON.parse(balancedArr);
+      } catch (_e) {
+      }
+    }
+    if (firstBrace !== -1) {
+      const balancedObj = extractBalancedJson(trimmed, "{", "}");
+      if (balancedObj) {
+        try {
+          return JSON.parse(balancedObj);
+        } catch (_e) {
+        }
+      }
     }
   }
   throw new SyntaxError(
@@ -474,6 +525,138 @@ var CircuitBreaker = class {
       }
       throw error;
     }
+  }
+};
+
+// src/core/ContextCompressor.ts
+function estimateMessageTokens(msg) {
+  let chars = 16;
+  if (typeof msg.content === "string") {
+    chars += msg.content.length;
+  } else if (Array.isArray(msg.content)) {
+    for (const part of msg.content) {
+      if (part.type === "text") {
+        chars += part.text.length;
+      } else {
+        chars += 1024;
+      }
+    }
+  }
+  if (msg.reasoning_content) {
+    chars += msg.reasoning_content.length;
+  }
+  if (msg.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      chars += tc.function.name.length + tc.function.arguments.length + 24;
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+function estimateTotalTokens(messages) {
+  let total = 0;
+  for (const m of messages) {
+    total += estimateMessageTokens(m);
+  }
+  return total;
+}
+function groupAtomicUnits(messages) {
+  const units = [];
+  let i = 0;
+  while (i < messages.length) {
+    const current = messages[i];
+    if (current.role === "assistant" && current.tool_calls && current.tool_calls.length > 0) {
+      const group = [current];
+      i++;
+      while (i < messages.length && messages[i].role === "tool") {
+        group.push(messages[i]);
+        i++;
+      }
+      units.push(group);
+    } else {
+      units.push([current]);
+      i++;
+    }
+  }
+  return units;
+}
+var ContextCompressor = class {
+  options;
+  constructor(options) {
+    this.options = {
+      maxPromptTokens: options.maxPromptTokens,
+      strategy: options.strategy ?? "sliding-window",
+      preserveSystemMessages: options.preserveSystemMessages ?? true
+    };
+  }
+  compress(messages) {
+    const originalTokens = estimateTotalTokens(messages);
+    if (originalTokens <= this.options.maxPromptTokens || messages.length <= 1) {
+      return {
+        messages,
+        originalTokens,
+        compressedTokens: originalTokens,
+        droppedCount: 0
+      };
+    }
+    const systemMsgs = [];
+    const conversationMsgs = [];
+    for (const m of messages) {
+      if (this.options.preserveSystemMessages && m.role === "system") {
+        systemMsgs.push(m);
+      } else {
+        conversationMsgs.push(m);
+      }
+    }
+    const systemTokens = estimateTotalTokens(systemMsgs);
+    const availableBudget = Math.max(
+      0,
+      this.options.maxPromptTokens - systemTokens
+    );
+    const units = groupAtomicUnits(conversationMsgs);
+    const unitTokens = units.map((u) => estimateTotalTokens(u));
+    if (this.options.strategy === "middle-out" && units.length > 2) {
+      const firstUnit = units[0];
+      const firstUnitCost = unitTokens[0];
+      const keptTailUnits = [];
+      let currentBudget = availableBudget - firstUnitCost;
+      for (let idx = units.length - 1; idx >= 1; idx--) {
+        if (currentBudget >= unitTokens[idx] || keptTailUnits.length === 0) {
+          keptTailUnits.unshift(units[idx]);
+          currentBudget -= unitTokens[idx];
+        } else {
+          break;
+        }
+      }
+      const finalMessages2 = [
+        ...systemMsgs,
+        ...firstUnitCost <= availableBudget ? firstUnit : [],
+        ...keptTailUnits.flat()
+      ];
+      return {
+        messages: finalMessages2,
+        originalTokens,
+        compressedTokens: estimateTotalTokens(finalMessages2),
+        droppedCount: messages.length - finalMessages2.length
+      };
+    }
+    const keptUnits = [];
+    let usedTokens = 0;
+    for (let idx = units.length - 1; idx >= 0; idx--) {
+      const cost = unitTokens[idx];
+      if (usedTokens + cost <= availableBudget || keptUnits.length === 0) {
+        keptUnits.unshift(units[idx]);
+        usedTokens += cost;
+      } else {
+        break;
+      }
+    }
+    const finalMessages = [...systemMsgs, ...keptUnits.flat()];
+    return {
+      messages: finalMessages,
+      originalTokens,
+      compressedTokens: estimateTotalTokens(finalMessages),
+      droppedCount: messages.length - finalMessages.length
+    };
   }
 };
 
@@ -836,6 +1019,22 @@ var PIIGuardrails = class {
   }
 };
 
+// src/types/index.ts
+var BudgetExceededError = class extends Error {
+  currentCostUsd;
+  limitUsd;
+  currentTotalTokens;
+  limitTokens;
+  constructor(message, details) {
+    super(message);
+    this.name = "BudgetExceededError";
+    this.currentCostUsd = details?.currentCostUsd;
+    this.limitUsd = details?.limitUsd;
+    this.currentTotalTokens = details?.currentTotalTokens;
+    this.limitTokens = details?.limitTokens;
+  }
+};
+
 // src/utils/similarity.ts
 function cosineSimilarity(a, b) {
   if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
@@ -885,6 +1084,7 @@ var Router = class {
   retryDelayMs;
   cacheOptions;
   storage;
+  budgetOptions;
   semanticEntries = [];
   metrics = {
     totalRequests: 0,
@@ -910,6 +1110,7 @@ var Router = class {
     this.retryDelayMs = options.retryDelayMs ?? 300;
     this.cacheOptions = options.cache;
     this.storage = options.storage;
+    this.budgetOptions = options.budget;
   }
   getProviderById(id) {
     return this.providers.find((p) => p.id === id);
@@ -1045,6 +1246,42 @@ var Router = class {
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6)
     );
+    if (this.budgetOptions?.action === "warn" && this.budgetOptions.onBudgetWarning) {
+      const costExceeded = this.budgetOptions.maxCostUsd !== void 0 && this.metrics.estimatedCostUsd >= this.budgetOptions.maxCostUsd;
+      const tokensExceeded = this.budgetOptions.maxTotalTokens !== void 0 && this.metrics.totalTokens >= this.budgetOptions.maxTotalTokens;
+      if (costExceeded || tokensExceeded) {
+        this.budgetOptions.onBudgetWarning(
+          this.metrics.estimatedCostUsd,
+          this.budgetOptions.maxCostUsd ?? 0
+        );
+      }
+    }
+  }
+  checkBudget() {
+    if (!this.budgetOptions) return;
+    const {
+      maxCostUsd,
+      maxTotalTokens,
+      action = "block",
+      onBudgetWarning
+    } = this.budgetOptions;
+    const costExceeded = maxCostUsd !== void 0 && this.metrics.estimatedCostUsd >= maxCostUsd;
+    const tokensExceeded = maxTotalTokens !== void 0 && this.metrics.totalTokens >= maxTotalTokens;
+    if (costExceeded || tokensExceeded) {
+      if (action === "warn") {
+        if (onBudgetWarning) {
+          onBudgetWarning(this.metrics.estimatedCostUsd, maxCostUsd ?? 0);
+        }
+      } else {
+        const reason = costExceeded ? `Budget cost limit exceeded: $${this.metrics.estimatedCostUsd} >= $${maxCostUsd}` : `Budget token limit exceeded: ${this.metrics.totalTokens} >= ${maxTotalTokens} tokens`;
+        throw new BudgetExceededError(reason, {
+          currentCostUsd: this.metrics.estimatedCostUsd,
+          limitUsd: maxCostUsd,
+          currentTotalTokens: this.metrics.totalTokens,
+          limitTokens: maxTotalTokens
+        });
+      }
+    }
   }
   estimateRequestCost(provider, request) {
     if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
@@ -1171,6 +1408,7 @@ var Router = class {
     }
   }
   async execute(request) {
+    this.checkBudget();
     this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
       try {
@@ -1508,6 +1746,7 @@ var Router = class {
     return `cache:emb:${request.model}:${(hash >>> 0).toString(16)}`;
   }
   async executeEmbedding(request) {
+    this.checkBudget();
     this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && this.storage) {
       try {
@@ -1874,6 +2113,7 @@ var SinapsClient = class {
   storage;
   guardrails;
   securityGuardrails;
+  contextCompressor;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
@@ -1902,6 +2142,11 @@ var SinapsClient = class {
         this.isReversiblePII = options.piiGuardrails.reversible === true;
       }
     }
+    if (options.contextCompression) {
+      this.contextCompressor = new ContextCompressor(
+        options.contextCompression
+      );
+    }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId) => {
@@ -1924,7 +2169,8 @@ var SinapsClient = class {
       retries: options.retries,
       retryDelayMs: options.retryDelayMs,
       cache: options.cache,
-      storage: this.storage
+      storage: this.storage,
+      budget: options.budget
     });
   }
   chat = {
@@ -1955,6 +2201,10 @@ var SinapsClient = class {
           } else {
             messages = this.guardrails.redactMessages(messages);
           }
+        }
+        if (this.contextCompressor) {
+          const compressed = this.contextCompressor.compress(messages);
+          messages = compressed.messages;
         }
         const resolvedModel = this.resolveModel(request.model);
         const fullReq = {
@@ -2532,6 +2782,103 @@ function createSinapsAI(clientOrOptions) {
 }
 var sinapsai = createSinapsAI;
 
+// src/core/BudgetGuardrails.ts
+var BudgetExceededError2 = class extends Error {
+  alert;
+  constructor(message, alert) {
+    super(message);
+    this.name = "BudgetExceededError";
+    this.alert = alert;
+  }
+};
+var BudgetGuardrails = class {
+  options;
+  constructor(options = {}) {
+    this.options = {
+      ...options,
+      enabled: options.enabled ?? true,
+      warningThresholdRatio: options.warningThresholdRatio ?? 0.8,
+      action: options.action ?? "block"
+    };
+  }
+  /**
+   * Evaluates current gateway telemetry metrics against configured budget limits.
+   * Throws BudgetExceededError if action is 'block' and hard limits are reached.
+   */
+  evaluate(metrics) {
+    if (!this.options.enabled) return [];
+    const alerts = [];
+    const now = Date.now();
+    if (this.options.maxCostUsd !== void 0 && this.options.maxCostUsd > 0) {
+      const currentCost = metrics.estimatedCostUsd;
+      const limitCost = this.options.maxCostUsd;
+      const ratio = currentCost / limitCost;
+      const percentage = Math.round(ratio * 1e3) / 10;
+      if (currentCost >= limitCost) {
+        const alert = {
+          type: "cost_exceeded",
+          currentValue: currentCost,
+          limitValue: limitCost,
+          percentage,
+          timestamp: now
+        };
+        alerts.push(alert);
+        this.options.onBudgetAlert?.(alert);
+        if (this.options.action === "block") {
+          throw new BudgetExceededError2(
+            `SinapsAI Budget Guardrail: Cumulative cost ($${currentCost.toFixed(4)} USD) exceeded limit ($${limitCost.toFixed(4)} USD).`,
+            alert
+          );
+        }
+      } else if (ratio >= this.options.warningThresholdRatio) {
+        const alert = {
+          type: "cost_warning",
+          currentValue: currentCost,
+          limitValue: limitCost,
+          percentage,
+          timestamp: now
+        };
+        alerts.push(alert);
+        this.options.onBudgetAlert?.(alert);
+      }
+    }
+    if (this.options.maxTotalTokens !== void 0 && this.options.maxTotalTokens > 0) {
+      const currentTokens = metrics.totalTokens;
+      const limitTokens = this.options.maxTotalTokens;
+      const ratio = currentTokens / limitTokens;
+      const percentage = Math.round(ratio * 1e3) / 10;
+      if (currentTokens >= limitTokens) {
+        const alert = {
+          type: "token_exceeded",
+          currentValue: currentTokens,
+          limitValue: limitTokens,
+          percentage,
+          timestamp: now
+        };
+        alerts.push(alert);
+        this.options.onBudgetAlert?.(alert);
+        if (this.options.action === "block") {
+          throw new BudgetExceededError2(
+            `SinapsAI Budget Guardrail: Total token usage (${currentTokens}) exceeded limit (${limitTokens}).`,
+            alert
+          );
+        }
+      } else if (ratio >= this.options.warningThresholdRatio) {
+        const alert = {
+          type: "token_warning",
+          currentValue: currentTokens,
+          limitValue: limitTokens,
+          percentage,
+          timestamp: now
+        };
+        alerts.push(alert);
+        this.options.onBudgetAlert?.(alert);
+      }
+    }
+    return alerts;
+  }
+};
+
 // src/core/CloudflareKVStorage.ts
 var CloudflareKVStorage = class {
   kv;
@@ -2784,9 +3131,16 @@ function parseRateLimitHeaders(headers) {
   }
   let resetMs;
   if (retryAfter) {
-    const parsedSec = Number.parseFloat(retryAfter);
-    if (!Number.isNaN(parsedSec)) {
-      resetMs = Math.round(parsedSec * 1e3);
+    if (/^\d+(\.\d+)?$/.test(retryAfter.trim())) {
+      const parsedSec = Number.parseFloat(retryAfter);
+      if (!Number.isNaN(parsedSec)) {
+        resetMs = Math.round(parsedSec * 1e3);
+      }
+    } else {
+      const retryDateMs = Date.parse(retryAfter);
+      if (!Number.isNaN(retryDateMs)) {
+        resetMs = Math.max(0, retryDateMs - Date.now());
+      }
     }
   } else {
     const resetTokensHeader = headers.get("x-ratelimit-reset-tokens");
@@ -2808,6 +3162,7 @@ function parseRateLimitHeaders(headers) {
 }
 
 // src/providers/AnthropicProvider.ts
+init_stream();
 var AnthropicProvider = class {
   id;
   name = "Anthropic";
@@ -2919,7 +3274,7 @@ var AnthropicProvider = class {
         }
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const contentBlocks = [];
-        if (typeof msg.content === "string") {
+        if (typeof msg.content === "string" && msg.content) {
           contentBlocks.push({ type: "text", text: msg.content });
         } else if (Array.isArray(msg.content)) {
           for (const part of msg.content) {
@@ -2960,30 +3315,28 @@ ${msg.content}`;
         }
       }
     }
+    if (request.responseFormat?.type === "json_object") {
+      systemMessages.push(
+        "Respond strictly with a valid JSON object without markdown wrappers."
+      );
+    } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
+      systemMessages.push(
+        `Respond strictly with valid JSON matching this schema:
+${JSON.stringify(request.responseFormat.json_schema.schema)}`
+      );
+    }
     if (systemMessages.length > 0) {
       payload.system = systemMessages.join("\n");
     }
-    if (request.responseFormat?.type === "json_object") {
-      const jsonInstruction = "Respond strictly with a valid JSON object without markdown wrappers.";
-      payload.system = payload.system ? `${payload.system}
-${jsonInstruction}` : jsonInstruction;
-    } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
-      const schemaInstruction = `Respond strictly with valid JSON matching this schema:
-${JSON.stringify(request.responseFormat.json_schema.schema)}`;
-      payload.system = payload.system ? `${payload.system}
-${schemaInstruction}` : schemaInstruction;
-    }
-    if (request.tools) {
+    if (request.tools && request.toolChoice !== "none") {
       payload.tools = request.tools.map((t) => ({
         name: t.function.name,
         description: t.function.description,
         input_schema: t.function.parameters || { type: "object" }
       }));
     }
-    if (request.toolChoice) {
-      if (request.toolChoice === "none") {
-        delete payload.tools;
-      } else if (request.toolChoice === "auto") {
+    if (request.toolChoice && request.toolChoice !== "none") {
+      if (request.toolChoice === "auto") {
         payload.tool_choice = { type: "auto" };
       } else if (request.toolChoice === "required") {
         payload.tool_choice = { type: "any" };
@@ -3084,7 +3437,7 @@ ${schemaInstruction}` : schemaInstruction;
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": this.config.apiKey,
+          "x-api-key": this.config.apiKey || "",
           "anthropic-version": "2023-06-01"
         },
         body: JSON.stringify(payload),
@@ -3100,12 +3453,11 @@ ${schemaInstruction}` : schemaInstruction;
       }
       if (request.stream) {
         return (async function* () {
-          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
           let messageId = `anthropic-${Date.now()}`;
           let promptTokens = 0;
           let cachedPromptTokens;
           try {
-            for await (const msg of parseSSE2(response)) {
+            for await (const msg of parseSSE(response)) {
               if (msg.event === "message_start") {
                 try {
                   const parsed = JSON.parse(msg.data);
@@ -3263,6 +3615,381 @@ ${schemaInstruction}` : schemaInstruction;
         clearTimeout(timeoutId);
       }
     }
+  }
+};
+
+// src/providers/CohereProvider.ts
+init_stream();
+var COHERE_MODELS = {
+  COMMAND_A: "command-a-03-2025",
+  COMMAND_R_PLUS: "command-r-plus-08-2024",
+  COMMAND_R: "command-r-08-2024",
+  COMMAND_R7B: "command-r7b-12-2024",
+  EMBED_V4: "embed-v4.0",
+  EMBED_MULTILINGUAL_V3: "embed-multilingual-v3.0",
+  EMBED_ENGLISH_V3: "embed-english-v3.0"
+};
+var CohereProvider = class {
+  id;
+  name = "Cohere";
+  config;
+  constructor(config) {
+    this.config = config;
+    this.id = config.id || `cohere-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (!model || model === "default") {
+      return COHERE_MODELS.COMMAND_A;
+    }
+    return model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      let content = m.content;
+      if (Array.isArray(m.content)) {
+        content = m.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+      }
+      const msg = {
+        role: m.role,
+        content: content ?? ""
+      };
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.tools && request.toolChoice !== "none") {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice === "required") {
+      payload.tool_choice = "REQUIRED";
+    } else if (request.toolChoice === "none") {
+      payload.tool_choice = "NONE";
+    }
+    if (request.responseFormat) {
+      if (request.responseFormat.type === "json_object") {
+        payload.response_format = { type: "json_object" };
+      } else if (request.responseFormat.type === "json_schema" && request.responseFormat.json_schema) {
+        payload.response_format = {
+          type: "json_object",
+          json_schema: request.responseFormat.json_schema.schema
+        };
+      }
+    }
+    if (request.stream) {
+      payload.stream = true;
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: cohere v2 response
+  formatResponse(data, requestedModel) {
+    let textContent = "";
+    let reasoningContent = "";
+    if (Array.isArray(data.message?.content)) {
+      for (const block of data.message.content) {
+        if (block.type === "text") {
+          textContent += block.text || "";
+        } else if (block.type === "thinking") {
+          reasoningContent += block.thinking || "";
+        }
+      }
+    } else if (typeof data.message?.content === "string") {
+      textContent = data.message.content;
+    } else if (typeof data.text === "string") {
+      textContent = data.text;
+    }
+    const toolCalls = data.message?.tool_calls?.map(
+      // biome-ignore lint/suspicious/noExplicitAny: tool call item
+      (tc) => ({
+        id: tc.id || `call_${Date.now()}`,
+        type: "function",
+        function: {
+          name: tc.function?.name || "",
+          arguments: typeof tc.function?.arguments === "string" ? tc.function.arguments : JSON.stringify(tc.function?.arguments || {})
+        }
+      })
+    );
+    let finishReason = "stop";
+    if (toolCalls && toolCalls.length > 0) {
+      finishReason = "tool_calls";
+    } else if (data.finish_reason) {
+      switch (data.finish_reason) {
+        case "MAX_TOKENS":
+          finishReason = "length";
+          break;
+        case "TOOL_CALL":
+          finishReason = "tool_calls";
+          break;
+        case "COMPLETE":
+        case "STOP_SEQUENCE":
+          finishReason = "stop";
+          break;
+        default:
+          finishReason = String(data.finish_reason).toLowerCase();
+      }
+    }
+    const promptTokens = data.usage?.tokens?.input_tokens ?? data.usage?.billed_units?.input_tokens ?? 0;
+    const completionTokens = data.usage?.tokens?.output_tokens ?? data.usage?.billed_units?.output_tokens ?? 0;
+    return {
+      id: data.id || `cohere-${Date.now()}`,
+      model: data.model || this.resolveModel(requestedModel),
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: textContent || null,
+            reasoning_content: reasoningContent || null,
+            tool_calls: toolCalls && toolCalls.length > 0 ? toolCalls : void 0
+          },
+          finishReason
+        }
+      ],
+      usage: data.usage ? {
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://api.cohere.com/v2";
+    const url = `${baseUrl}/chat`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey || ""}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Cohere API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          let streamId = `cohere-${Date.now()}`;
+          try {
+            for await (const msg of parseSSE(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const eventType = msg.event || parsed.type;
+                if (eventType === "message-start") {
+                  if (parsed.id) streamId = parsed.id;
+                } else if (eventType === "content-delta") {
+                  const textDelta = parsed.delta?.message?.content?.text ?? parsed.delta?.text ?? "";
+                  const thinkingDelta = parsed.delta?.message?.content?.thinking ?? "";
+                  yield {
+                    id: streamId,
+                    model: payload.model,
+                    choices: [
+                      {
+                        delta: {
+                          role: "assistant",
+                          content: textDelta || void 0,
+                          reasoning_content: thinkingDelta || void 0
+                        },
+                        finishReason: null
+                      }
+                    ]
+                  };
+                } else if (eventType === "tool-call-start") {
+                  const tc = parsed.delta?.message?.tool_calls;
+                  if (tc) {
+                    yield {
+                      id: streamId,
+                      model: payload.model,
+                      choices: [
+                        {
+                          delta: {
+                            role: "assistant",
+                            tool_calls: [
+                              {
+                                index: parsed.index ?? 0,
+                                id: tc.id,
+                                type: "function",
+                                function: {
+                                  name: tc.function?.name || "",
+                                  arguments: tc.function?.arguments || ""
+                                }
+                              }
+                            ]
+                          },
+                          finishReason: null
+                        }
+                      ]
+                    };
+                  }
+                } else if (eventType === "tool-call-delta") {
+                  const argDelta = parsed.delta?.message?.tool_calls?.function?.arguments || "";
+                  yield {
+                    id: streamId,
+                    model: payload.model,
+                    choices: [
+                      {
+                        delta: {
+                          role: "assistant",
+                          tool_calls: [
+                            {
+                              index: parsed.index ?? 0,
+                              function: {
+                                arguments: argDelta
+                              }
+                            }
+                          ]
+                        },
+                        finishReason: null
+                      }
+                    ]
+                  };
+                } else if (eventType === "message-end") {
+                  const rawReason = parsed.delta?.finish_reason;
+                  let finishReason = "stop";
+                  if (rawReason === "TOOL_CALL") finishReason = "tool_calls";
+                  else if (rawReason === "MAX_TOKENS") finishReason = "length";
+                  const inTok = parsed.delta?.usage?.tokens?.input_tokens ?? parsed.delta?.usage?.billed_units?.input_tokens ?? 0;
+                  const outTok = parsed.delta?.usage?.tokens?.output_tokens ?? parsed.delta?.usage?.billed_units?.output_tokens ?? 0;
+                  yield {
+                    id: streamId,
+                    model: payload.model,
+                    choices: [
+                      {
+                        delta: {},
+                        finishReason
+                      }
+                    ],
+                    usage: inTok || outTok ? {
+                      promptTokens: inTok,
+                      completionTokens: outTok,
+                      totalTokens: inTok + outTok
+                    } : void 0
+                  };
+                }
+              } catch (_e) {
+              }
+            }
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data, request.model);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream && timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+  async generateEmbedding(request) {
+    const baseUrl = this.config.baseUrl || "https://api.cohere.com/v2";
+    const url = `${baseUrl}/embed`;
+    const texts = Array.isArray(request.input) ? request.input : [request.input];
+    const targetModel = request.model && request.model !== "default" ? request.model : COHERE_MODELS.EMBED_V4;
+    const payload = {
+      model: targetModel,
+      texts,
+      input_type: "search_document",
+      embedding_types: ["float"]
+    };
+    if (request.dimensions) {
+      payload.output_dimension = request.dimensions;
+    }
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey || ""}`
+      },
+      body: JSON.stringify(payload),
+      signal: request.signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Cohere Embedding API Error (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    const data = await response.json();
+    const floatVectors = data.embeddings?.float || data.embeddings || [];
+    const inputTokens = data.meta?.billed_units?.input_tokens ?? data.usage?.tokens?.input_tokens ?? 0;
+    return {
+      object: "list",
+      data: floatVectors.map((vec, index) => ({
+        index,
+        embedding: vec,
+        object: "embedding"
+      })),
+      model: targetModel,
+      usage: {
+        promptTokens: inputTokens,
+        totalTokens: inputTokens
+      }
+    };
   }
 };
 
@@ -3455,8 +4182,8 @@ var DeepSeekProvider = class {
 };
 
 // src/providers/GeminiProvider.ts
+init_stream();
 var GEMINI_MODELS = {
-  // Flagship & General Multimodal Models
   FLASH_2_5: "gemini-2.5-flash",
   FLASH_LITE_2_5: "gemini-2.5-flash-lite",
   PRO_2_5: "gemini-2.5-pro",
@@ -3464,10 +4191,8 @@ var GEMINI_MODELS = {
   FLASH_3_6: "gemini-3.6-flash",
   FLASH_LITE_3_5: "gemini-3.5-flash-lite",
   PRO_3_1_PREVIEW: "gemini-3.1-pro-preview",
-  // Auto-updating Managed Aliases
   FLASH_LATEST: "gemini-flash-latest",
   PRO_LATEST: "gemini-pro-latest",
-  // Embeddings Models
   EMBEDDING_001: "gemini-embedding-001",
   EMBEDDING_2: "gemini-embedding-2",
   TEXT_EMBEDDING_004: "text-embedding-004"
@@ -3510,7 +4235,6 @@ var GeminiProvider = class {
     }
     return model;
   }
-  // Exposed for testing
   formatRequest(request) {
     const contents = [];
     const systemParts = [];
@@ -3584,13 +4308,13 @@ var GeminiProvider = class {
         }
       } else if (msg.role === "tool") {
         const responseContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
-        const resolvedFunctionName = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : void 0) || "function";
+        const resolvedName = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : void 0) || "function";
         contents.push({
           role: "user",
           parts: [
             {
               functionResponse: {
-                name: resolvedFunctionName,
+                name: resolvedName,
                 response: { content: responseContent }
               }
             }
@@ -3598,7 +4322,7 @@ var GeminiProvider = class {
         });
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const parts = [];
-        if (typeof msg.content === "string") {
+        if (typeof msg.content === "string" && msg.content) {
           parts.push({ text: msg.content });
         } else if (Array.isArray(msg.content)) {
           for (const p of msg.content) {
@@ -3650,9 +4374,9 @@ var GeminiProvider = class {
       generationConfig.responseMimeType = "application/json";
     } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
       generationConfig.responseMimeType = "application/json";
-      const rawSchema = { ...request.responseFormat.json_schema.schema };
-      delete rawSchema.additionalProperties;
-      generationConfig.responseSchema = rawSchema;
+      const cleanSchema = { ...request.responseFormat.json_schema.schema };
+      delete cleanSchema.additionalProperties;
+      generationConfig.responseSchema = cleanSchema;
     }
     const thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
     if (thinkingBudget !== void 0) {
@@ -3699,7 +4423,6 @@ var GeminiProvider = class {
     }
     return payload;
   }
-  // Exposed for testing
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   formatResponse(data, model) {
     const candidate = data.candidates?.[0];
@@ -3770,8 +4493,8 @@ var GeminiProvider = class {
     const payload = this.formatRequest(request);
     const targetModel = this.resolveModel(request.model);
     const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const endpointAction = request.stream ? "streamGenerateContent?alt=sse" : "generateContent";
-    const finalUrl = `${baseUrl}/models/${targetModel}:${endpointAction}`;
+    const action = request.stream ? "streamGenerateContent?alt=sse" : "generateContent";
+    const finalUrl = `${baseUrl}/models/${targetModel}:${action}`;
     const controller = new AbortController();
     let timeoutId;
     if (this.config.timeoutMs) {
@@ -3805,28 +4528,59 @@ var GeminiProvider = class {
         throw err;
       }
       if (request.stream) {
-        return (async function* (self) {
-          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+        return (async function* () {
           try {
-            for await (const msg of parseSSE2(response)) {
+            let chunkIndex = 0;
+            for await (const msg of parseSSE(response)) {
               try {
                 const parsed = JSON.parse(msg.data);
-                const chunk = self.formatResponse(parsed, targetModel);
+                const candidate = parsed.candidates?.[0];
+                let text = "";
+                let reasoning = "";
+                const toolCalls = [];
+                if (candidate?.content?.parts) {
+                  for (const part of candidate.content.parts) {
+                    if (part.thought) {
+                      reasoning += part.text || "";
+                    } else if (part.text) {
+                      text += part.text;
+                    }
+                    if (part.functionCall) {
+                      toolCalls.push({
+                        index: chunkIndex++,
+                        id: `call_${Date.now()}_${chunkIndex}`,
+                        type: "function",
+                        function: {
+                          name: part.functionCall.name,
+                          arguments: JSON.stringify(
+                            part.functionCall.args || {}
+                          )
+                        }
+                      });
+                    }
+                  }
+                }
+                const usage = parsed.usageMetadata ? {
+                  promptTokens: parsed.usageMetadata.promptTokenCount || 0,
+                  completionTokens: parsed.usageMetadata.candidatesTokenCount || 0,
+                  totalTokens: parsed.usageMetadata.totalTokenCount || 0,
+                  cachedPromptTokens: parsed.usageMetadata.cachedContentTokenCount || void 0
+                } : void 0;
                 yield {
-                  id: chunk.id,
-                  model: chunk.model,
+                  id: `gemini-${Date.now()}`,
+                  model: targetModel,
                   choices: [
                     {
                       delta: {
                         role: "assistant",
-                        content: chunk.choices[0].message.content,
-                        reasoning_content: chunk.choices[0].message.reasoning_content,
-                        tool_calls: chunk.choices[0].message.tool_calls
+                        content: text || void 0,
+                        reasoning_content: reasoning || void 0,
+                        tool_calls: toolCalls.length > 0 ? toolCalls : void 0
                       },
-                      finishReason: chunk.choices[0].finishReason === "stop" && !chunk.choices[0].message.content ? "stop" : chunk.choices[0].finishReason !== "stop" ? chunk.choices[0].finishReason : null
+                      finishReason: toolCalls.length > 0 ? "tool_calls" : candidate?.finishReason ? candidate.finishReason.toLowerCase() : null
                     }
                   ],
-                  usage: chunk.usage
+                  usage
                 };
               } catch (_e) {
               }
@@ -3834,7 +4588,7 @@ var GeminiProvider = class {
           } finally {
             if (timeoutId) clearTimeout(timeoutId);
           }
-        })(this);
+        })();
       }
       const data = await response.json();
       const res = this.formatResponse(data, targetModel);
@@ -3853,129 +4607,96 @@ var GeminiProvider = class {
     }
   }
   async generateEmbedding(request) {
-    const targetModel = this.resolveModel(request.model);
+    const targetModel = request.model && request.model !== "default" ? request.model : GEMINI_MODELS.EMBEDDING_001;
     const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
     const isBatch = Array.isArray(request.input);
-    const inputs = Array.isArray(request.input) ? request.input : [request.input];
-    const finalUrl = isBatch ? `${baseUrl}/models/${targetModel}:batchEmbedContents?key=${this.config.apiKey}` : `${baseUrl}/models/${targetModel}:embedContent?key=${this.config.apiKey}`;
-    const controller = new AbortController();
-    let timeoutId;
-    if (this.config.timeoutMs) {
-      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    }
-    if (request.signal) {
-      if (request.signal.aborted) {
-        controller.abort();
-      } else {
-        request.signal.addEventListener("abort", () => controller.abort(), {
-          once: true
-        });
-      }
-    }
-    const payload = isBatch ? {
-      requests: inputs.map((text) => {
-        const reqObj = {
-          model: `models/${targetModel}`,
-          content: { parts: [{ text }] }
-        };
-        if (request.dimensions !== void 0) {
-          reqObj.outputDimensionality = request.dimensions;
-        }
-        return reqObj;
-      })
-    } : {
-      content: { parts: [{ text: inputs[0] }] }
-    };
-    if (!isBatch && request.dimensions !== void 0) {
-      payload.outputDimensionality = request.dimensions;
-    }
-    try {
-      const response = await fetch(finalUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        const err = new Error(
-          `Gemini API Error (${response.status}): ${errorText}`
-        );
-        err.status = response.status;
-        throw err;
-      }
-      const data = await response.json();
-      if (isBatch) {
-        const embeddingsList = (data.embeddings || []).map(
-          // biome-ignore lint/suspicious/noExplicitAny: embedding item
-          (item, idx) => ({
-            object: "embedding",
-            index: idx,
-            embedding: item.values || []
-          })
-        );
-        return {
-          object: "list",
-          model: targetModel,
-          data: embeddingsList,
-          usage: data.usageMetadata ? {
-            promptTokens: data.usageMetadata.promptTokenCount || 0,
-            totalTokens: data.usageMetadata.totalTokenCount || 0
-          } : void 0
-        };
-      }
-      return {
-        object: "list",
-        model: targetModel,
-        data: [
-          {
-            object: "embedding",
-            index: 0,
-            embedding: data.embedding?.values || []
+    const endpoint = isBatch ? "batchEmbedContents" : "embedContent";
+    const keyParam = this.config.apiKey ? `?key=${this.config.apiKey}` : "";
+    const url = `${baseUrl}/models/${targetModel}:${endpoint}${keyParam}`;
+    let bodyPayload;
+    if (isBatch) {
+      bodyPayload = {
+        requests: request.input.map((text) => {
+          const item = {
+            model: `models/${targetModel}`,
+            content: { parts: [{ text }] }
+          };
+          if (request.dimensions) {
+            item.outputDimensionality = request.dimensions;
           }
-        ],
-        usage: data.usageMetadata ? {
-          promptTokens: data.usageMetadata.promptTokenCount || 0,
-          totalTokens: data.usageMetadata.totalTokenCount || 0
-        } : void 0
+          return item;
+        })
       };
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+    } else {
+      bodyPayload = {
+        content: { parts: [{ text: request.input }] }
+      };
+      if (request.dimensions) {
+        bodyPayload.outputDimensionality = request.dimensions;
       }
     }
-  }
-  /**
-   * Fetches all available Gemini models directly from Google Generative Language API.
-   * Corresponds to models listed on https://ai.google.dev/gemini-api/docs/models?hl=id
-   */
-  static async fetchAvailableModels(options) {
-    const baseUrl = options.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const response = await fetch(`${baseUrl}/models?key=${options.apiKey}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-      signal: options.signal
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.config.apiKey || ""
+      },
+      body: JSON.stringify(bodyPayload),
+      signal: request.signal
     });
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `Failed to fetch Gemini models (${response.status}): ${errorText}`
+      const err = new Error(
+        `Gemini Embedding API Error (${response.status}): ${errorText}`
       );
+      err.status = response.status;
+      throw err;
     }
     const data = await response.json();
-    return (data.models || []).map((m) => {
-      const id = m.name.replace(/^models\//, "");
-      return {
-        id,
-        displayName: m.displayName || id,
-        description: m.description,
-        inputTokenLimit: m.inputTokenLimit,
-        outputTokenLimit: m.outputTokenLimit,
-        supportedGenerationMethods: m.supportedGenerationMethods || []
-      };
+    const embeddingsList = isBatch ? (data.embeddings || []).map(
+      // biome-ignore lint/suspicious/noExplicitAny: embedding item
+      (e, idx) => ({
+        index: idx,
+        embedding: e.values || [],
+        object: "embedding"
+      })
+    ) : [
+      {
+        index: 0,
+        embedding: data.embedding?.values || [],
+        object: "embedding"
+      }
+    ];
+    return {
+      object: "list",
+      data: embeddingsList,
+      model: targetModel,
+      usage: data.usageMetadata ? {
+        promptTokens: data.usageMetadata.promptTokenCount || 0,
+        totalTokens: data.usageMetadata.totalTokenCount || 0
+      } : void 0
+    };
+  }
+  static async fetchAvailableModels(options) {
+    const baseUrl = options.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const response = await fetch(`${baseUrl}/models`, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": options.apiKey
+      }
     });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Gemini models (${response.status})`);
+    }
+    const data = await response.json();
+    return (data.models || []).map((m) => ({
+      id: (m.name || "").replace(/^models\//, ""),
+      displayName: m.displayName || m.name,
+      description: m.description,
+      inputTokenLimit: m.inputTokenLimit,
+      outputTokenLimit: m.outputTokenLimit,
+      supportedGenerationMethods: m.supportedGenerationMethods || []
+    }));
   }
 };
 
@@ -5254,9 +5975,266 @@ function createOpenRouterFreeProvider(config) {
     completionCostPer1k: 0
   });
 }
+
+// src/providers/XAiProvider.ts
+init_stream();
+var XAI_MODELS = {
+  GROK_3: "grok-3-beta",
+  GROK_3_FAST: "grok-3-fast-beta",
+  GROK_3_MINI: "grok-3-mini-beta",
+  GROK_3_MINI_FAST: "grok-3-mini-fast-beta",
+  GROK_2_VISION: "grok-2-vision-1212"
+};
+var XAiProvider = class {
+  id;
+  name = "xAI";
+  config;
+  constructor(config) {
+    this.config = config;
+    this.id = config.id || `xai-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (!model || model === "default") {
+      return XAI_MODELS.GROK_3;
+    }
+    return model;
+  }
+  formatRequest(request) {
+    const targetModel = this.resolveModel(request.model);
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+    const payload = {
+      model: targetModel,
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.reasoningEffort) {
+      payload.reasoning_effort = request.reasoningEffort === "medium" ? "high" : request.reasoningEffort;
+    } else if (request.thinkingBudget && request.thinkingBudget > 0) {
+      payload.reasoning_effort = request.thinkingBudget >= 2048 ? "high" : "low";
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    if (request.stream) {
+      payload.stream = true;
+      payload.stream_options = { include_usage: true };
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: xAI response payload
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+    return {
+      id: data.id || `xai-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            reasoning_content: choice?.message?.reasoning_content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: data.usage ? {
+        promptTokens: data.usage.prompt_tokens || 0,
+        completionTokens: data.usage.completion_tokens || 0,
+        totalTokens: data.usage.total_tokens || 0,
+        cachedPromptTokens
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://api.x.ai/v1";
+    const url = `${baseUrl}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", () => controller.abort(), {
+          once: true
+        });
+      }
+    }
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey || ""}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `xAI API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          try {
+            for await (const msg of parseSSE(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                const cachedPromptTokens = parsed.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+                yield {
+                  id: parsed.id || `xai-${Date.now()}`,
+                  model: parsed.model || payload.model,
+                  choices: chunk ? [
+                    {
+                      delta: {
+                        role: chunk.delta?.role,
+                        content: chunk.delta?.content,
+                        reasoning_content: chunk.delta?.reasoning_content,
+                        tool_calls: chunk.delta?.tool_calls
+                      },
+                      finishReason: chunk.finish_reason || null
+                    }
+                  ] : [],
+                  usage: parsed.usage ? {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens
+                  } : void 0
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream && timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+  async generateEmbedding(request) {
+    const baseUrl = this.config.baseUrl || "https://api.x.ai/v1";
+    const url = `${baseUrl}/embeddings`;
+    const payload = {
+      model: request.model || "v1",
+      input: request.input
+    };
+    if (request.dimensions) {
+      payload.dimensions = request.dimensions;
+    }
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey || ""}`
+      },
+      body: JSON.stringify(payload),
+      signal: request.signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `xAI Embedding API Error (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    const data = await response.json();
+    return {
+      object: "list",
+      data: (data.data || []).map(
+        // biome-ignore lint/suspicious/noExplicitAny: embedding item
+        (item, idx) => ({
+          index: item.index ?? idx,
+          embedding: item.embedding || [],
+          object: "embedding"
+        })
+      ),
+      model: data.model || payload.model,
+      usage: data.usage ? {
+        promptTokens: data.usage.prompt_tokens || 0,
+        totalTokens: data.usage.total_tokens || 0
+      } : void 0
+    };
+  }
+};
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
  *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
  * @license MIT
@@ -5340,8 +6318,13 @@ function createOpenRouterFreeProvider(config) {
 
 exports.AnthropicProvider = AnthropicProvider;
 exports.BatchExecutionError = BatchExecutionError;
+exports.BudgetExceededError = BudgetExceededError;
+exports.BudgetGuardrails = BudgetGuardrails;
+exports.COHERE_MODELS = COHERE_MODELS;
 exports.CircuitBreaker = CircuitBreaker;
 exports.CloudflareKVStorage = CloudflareKVStorage;
+exports.CohereProvider = CohereProvider;
+exports.ContextCompressor = ContextCompressor;
 exports.D1Storage = D1Storage;
 exports.DeepSeekProvider = DeepSeekProvider;
 exports.GEMINI_MODELS = GEMINI_MODELS;
@@ -5361,13 +6344,18 @@ exports.SecurityGuardrails = SecurityGuardrails;
 exports.SinapsClient = SinapsClient;
 exports.SinapsEmbeddingModel = SinapsEmbeddingModel;
 exports.SinapsLanguageModel = SinapsLanguageModel;
+exports.XAI_MODELS = XAI_MODELS;
+exports.XAiProvider = XAiProvider;
 exports.accumulateStream = accumulateStream;
 exports.convertPromptToSinapsMessages = convertPromptToSinapsMessages;
 exports.convertToolsAndMode = convertToolsAndMode;
 exports.cosineSimilarity = cosineSimilarity;
 exports.createOpenRouterFreeProvider = createOpenRouterFreeProvider;
 exports.createSinapsAI = createSinapsAI;
+exports.estimateMessageTokens = estimateMessageTokens;
+exports.estimateTotalTokens = estimateTotalTokens;
 exports.executeBatch = executeBatch;
+exports.extractBalancedJson = extractBalancedJson;
 exports.extractJsonFromText = extractJsonFromText;
 exports.extractPromptText = extractPromptText;
 exports.isOpenRouterFreeModel = isOpenRouterFreeModel;

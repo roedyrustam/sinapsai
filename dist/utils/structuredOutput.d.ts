@@ -6,6 +6,11 @@
  * @license MIT
  */
 /**
+ * Finds and extracts the first balanced JSON substring matching openChar and closeChar,
+ * properly respecting string literals and escape sequences.
+ */
+export declare function extractBalancedJson(text: string, openChar: '{' | '[', closeChar: '}' | ']'): string | null;
+/**
  * Resiliently extracts and parses JSON data from LLM text responses.
  *
  * Handles:

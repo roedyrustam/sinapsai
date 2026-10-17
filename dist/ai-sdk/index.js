@@ -93,6 +93,38 @@ async function accumulateStream(stream, options) {
 }
 
 // src/utils/structuredOutput.ts
+function extractBalancedJson(text, openChar, closeChar) {
+  const startIdx = text.indexOf(openChar);
+  if (startIdx === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (ch === "\\" && inString) {
+      isEscaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === openChar) depth++;
+      else if (ch === closeChar) {
+        depth--;
+        if (depth === 0) {
+          return text.slice(startIdx, i + 1);
+        }
+      }
+    }
+  }
+  return null;
+}
 function extractJsonFromText(text) {
   if (!text || typeof text !== "string") {
     throw new SyntaxError("Cannot extract JSON from empty or non-string input");
@@ -111,22 +143,41 @@ function extractJsonFromText(text) {
     }
   }
   const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
   const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  const hasObject = firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace;
-  const hasArray = firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket;
-  if (hasObject && (!hasArray || firstBrace < firstBracket)) {
-    try {
-      const candidate = trimmed.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(candidate);
-    } catch (_e) {
+  const checkObjectFirst = firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket);
+  if (checkObjectFirst) {
+    const balancedObj = extractBalancedJson(trimmed, "{", "}");
+    if (balancedObj) {
+      try {
+        return JSON.parse(balancedObj);
+      } catch (_e) {
+      }
     }
-  } else if (hasArray) {
-    try {
-      const candidate = trimmed.substring(firstBracket, lastBracket + 1);
-      return JSON.parse(candidate);
-    } catch (_e) {
+    if (firstBracket !== -1) {
+      const balancedArr = extractBalancedJson(trimmed, "[", "]");
+      if (balancedArr) {
+        try {
+          return JSON.parse(balancedArr);
+        } catch (_e) {
+        }
+      }
+    }
+  } else if (firstBracket !== -1) {
+    const balancedArr = extractBalancedJson(trimmed, "[", "]");
+    if (balancedArr) {
+      try {
+        return JSON.parse(balancedArr);
+      } catch (_e) {
+      }
+    }
+    if (firstBrace !== -1) {
+      const balancedObj = extractBalancedJson(trimmed, "{", "}");
+      if (balancedObj) {
+        try {
+          return JSON.parse(balancedObj);
+        } catch (_e) {
+        }
+      }
     }
   }
   throw new SyntaxError(
@@ -406,6 +457,138 @@ var CircuitBreaker = class {
       }
       throw error;
     }
+  }
+};
+
+// src/core/ContextCompressor.ts
+function estimateMessageTokens(msg) {
+  let chars = 16;
+  if (typeof msg.content === "string") {
+    chars += msg.content.length;
+  } else if (Array.isArray(msg.content)) {
+    for (const part of msg.content) {
+      if (part.type === "text") {
+        chars += part.text.length;
+      } else {
+        chars += 1024;
+      }
+    }
+  }
+  if (msg.reasoning_content) {
+    chars += msg.reasoning_content.length;
+  }
+  if (msg.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      chars += tc.function.name.length + tc.function.arguments.length + 24;
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+function estimateTotalTokens(messages) {
+  let total = 0;
+  for (const m of messages) {
+    total += estimateMessageTokens(m);
+  }
+  return total;
+}
+function groupAtomicUnits(messages) {
+  const units = [];
+  let i = 0;
+  while (i < messages.length) {
+    const current = messages[i];
+    if (current.role === "assistant" && current.tool_calls && current.tool_calls.length > 0) {
+      const group = [current];
+      i++;
+      while (i < messages.length && messages[i].role === "tool") {
+        group.push(messages[i]);
+        i++;
+      }
+      units.push(group);
+    } else {
+      units.push([current]);
+      i++;
+    }
+  }
+  return units;
+}
+var ContextCompressor = class {
+  options;
+  constructor(options) {
+    this.options = {
+      maxPromptTokens: options.maxPromptTokens,
+      strategy: options.strategy ?? "sliding-window",
+      preserveSystemMessages: options.preserveSystemMessages ?? true
+    };
+  }
+  compress(messages) {
+    const originalTokens = estimateTotalTokens(messages);
+    if (originalTokens <= this.options.maxPromptTokens || messages.length <= 1) {
+      return {
+        messages,
+        originalTokens,
+        compressedTokens: originalTokens,
+        droppedCount: 0
+      };
+    }
+    const systemMsgs = [];
+    const conversationMsgs = [];
+    for (const m of messages) {
+      if (this.options.preserveSystemMessages && m.role === "system") {
+        systemMsgs.push(m);
+      } else {
+        conversationMsgs.push(m);
+      }
+    }
+    const systemTokens = estimateTotalTokens(systemMsgs);
+    const availableBudget = Math.max(
+      0,
+      this.options.maxPromptTokens - systemTokens
+    );
+    const units = groupAtomicUnits(conversationMsgs);
+    const unitTokens = units.map((u) => estimateTotalTokens(u));
+    if (this.options.strategy === "middle-out" && units.length > 2) {
+      const firstUnit = units[0];
+      const firstUnitCost = unitTokens[0];
+      const keptTailUnits = [];
+      let currentBudget = availableBudget - firstUnitCost;
+      for (let idx = units.length - 1; idx >= 1; idx--) {
+        if (currentBudget >= unitTokens[idx] || keptTailUnits.length === 0) {
+          keptTailUnits.unshift(units[idx]);
+          currentBudget -= unitTokens[idx];
+        } else {
+          break;
+        }
+      }
+      const finalMessages2 = [
+        ...systemMsgs,
+        ...firstUnitCost <= availableBudget ? firstUnit : [],
+        ...keptTailUnits.flat()
+      ];
+      return {
+        messages: finalMessages2,
+        originalTokens,
+        compressedTokens: estimateTotalTokens(finalMessages2),
+        droppedCount: messages.length - finalMessages2.length
+      };
+    }
+    const keptUnits = [];
+    let usedTokens = 0;
+    for (let idx = units.length - 1; idx >= 0; idx--) {
+      const cost = unitTokens[idx];
+      if (usedTokens + cost <= availableBudget || keptUnits.length === 0) {
+        keptUnits.unshift(units[idx]);
+        usedTokens += cost;
+      } else {
+        break;
+      }
+    }
+    const finalMessages = [...systemMsgs, ...keptUnits.flat()];
+    return {
+      messages: finalMessages,
+      originalTokens,
+      compressedTokens: estimateTotalTokens(finalMessages),
+      droppedCount: messages.length - finalMessages.length
+    };
   }
 };
 
@@ -768,6 +951,22 @@ var PIIGuardrails = class {
   }
 };
 
+// src/types/index.ts
+var BudgetExceededError = class extends Error {
+  currentCostUsd;
+  limitUsd;
+  currentTotalTokens;
+  limitTokens;
+  constructor(message, details) {
+    super(message);
+    this.name = "BudgetExceededError";
+    this.currentCostUsd = details?.currentCostUsd;
+    this.limitUsd = details?.limitUsd;
+    this.currentTotalTokens = details?.currentTotalTokens;
+    this.limitTokens = details?.limitTokens;
+  }
+};
+
 // src/utils/similarity.ts
 function cosineSimilarity(a, b) {
   if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
@@ -817,6 +1016,7 @@ var Router = class {
   retryDelayMs;
   cacheOptions;
   storage;
+  budgetOptions;
   semanticEntries = [];
   metrics = {
     totalRequests: 0,
@@ -842,6 +1042,7 @@ var Router = class {
     this.retryDelayMs = options.retryDelayMs ?? 300;
     this.cacheOptions = options.cache;
     this.storage = options.storage;
+    this.budgetOptions = options.budget;
   }
   getProviderById(id) {
     return this.providers.find((p) => p.id === id);
@@ -977,6 +1178,42 @@ var Router = class {
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6)
     );
+    if (this.budgetOptions?.action === "warn" && this.budgetOptions.onBudgetWarning) {
+      const costExceeded = this.budgetOptions.maxCostUsd !== void 0 && this.metrics.estimatedCostUsd >= this.budgetOptions.maxCostUsd;
+      const tokensExceeded = this.budgetOptions.maxTotalTokens !== void 0 && this.metrics.totalTokens >= this.budgetOptions.maxTotalTokens;
+      if (costExceeded || tokensExceeded) {
+        this.budgetOptions.onBudgetWarning(
+          this.metrics.estimatedCostUsd,
+          this.budgetOptions.maxCostUsd ?? 0
+        );
+      }
+    }
+  }
+  checkBudget() {
+    if (!this.budgetOptions) return;
+    const {
+      maxCostUsd,
+      maxTotalTokens,
+      action = "block",
+      onBudgetWarning
+    } = this.budgetOptions;
+    const costExceeded = maxCostUsd !== void 0 && this.metrics.estimatedCostUsd >= maxCostUsd;
+    const tokensExceeded = maxTotalTokens !== void 0 && this.metrics.totalTokens >= maxTotalTokens;
+    if (costExceeded || tokensExceeded) {
+      if (action === "warn") {
+        if (onBudgetWarning) {
+          onBudgetWarning(this.metrics.estimatedCostUsd, maxCostUsd ?? 0);
+        }
+      } else {
+        const reason = costExceeded ? `Budget cost limit exceeded: $${this.metrics.estimatedCostUsd} >= $${maxCostUsd}` : `Budget token limit exceeded: ${this.metrics.totalTokens} >= ${maxTotalTokens} tokens`;
+        throw new BudgetExceededError(reason, {
+          currentCostUsd: this.metrics.estimatedCostUsd,
+          limitUsd: maxCostUsd,
+          currentTotalTokens: this.metrics.totalTokens,
+          limitTokens: maxTotalTokens
+        });
+      }
+    }
   }
   estimateRequestCost(provider, request) {
     if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
@@ -1103,6 +1340,7 @@ var Router = class {
     }
   }
   async execute(request) {
+    this.checkBudget();
     this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && !request.stream && this.storage) {
       try {
@@ -1440,6 +1678,7 @@ var Router = class {
     return `cache:emb:${request.model}:${(hash >>> 0).toString(16)}`;
   }
   async executeEmbedding(request) {
+    this.checkBudget();
     this.metrics.totalRequests++;
     if (this.cacheOptions?.enabled && this.storage) {
       try {
@@ -1806,6 +2045,7 @@ var SinapsClient = class {
   storage;
   guardrails;
   securityGuardrails;
+  contextCompressor;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
@@ -1834,6 +2074,11 @@ var SinapsClient = class {
         this.isReversiblePII = options.piiGuardrails.reversible === true;
       }
     }
+    if (options.contextCompression) {
+      this.contextCompressor = new ContextCompressor(
+        options.contextCompression
+      );
+    }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId) => {
@@ -1856,7 +2101,8 @@ var SinapsClient = class {
       retries: options.retries,
       retryDelayMs: options.retryDelayMs,
       cache: options.cache,
-      storage: this.storage
+      storage: this.storage,
+      budget: options.budget
     });
   }
   chat = {
@@ -1887,6 +2133,10 @@ var SinapsClient = class {
           } else {
             messages = this.guardrails.redactMessages(messages);
           }
+        }
+        if (this.contextCompressor) {
+          const compressed = this.contextCompressor.compress(messages);
+          messages = compressed.messages;
         }
         const resolvedModel = this.resolveModel(request.model);
         const fullReq = {
@@ -2466,6 +2716,12 @@ var sinapsai = createSinapsAI;
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
  *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
  * @license MIT

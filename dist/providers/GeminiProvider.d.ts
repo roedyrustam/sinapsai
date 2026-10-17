@@ -1,16 +1,11 @@
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
- *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
  * @license MIT
  */
 import type { CreateEmbeddingRequest, CreateEmbeddingResponse, ProviderConfig, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { Provider } from './Provider.js';
-/**
- * Canonical Gemini Model identifiers as documented in Google AI developer documentation:
- * Reference: https://ai.google.dev/gemini-api/docs/models?hl=id
- */
 export declare const GEMINI_MODELS: {
     readonly FLASH_2_5: 'gemini-2.5-flash';
     readonly FLASH_LITE_2_5: 'gemini-2.5-flash-lite';
@@ -38,14 +33,7 @@ export interface GeminiModelInfo {
     supportedGenerationMethods: string[];
 }
 export interface GeminiProviderConfig extends ProviderConfig {
-    /**
-     * Optional safety settings to enforce content moderation thresholds.
-     */
     safetySettings?: GeminiSafetySetting[];
-    /**
-     * Optional default thinking budget in tokens for extended reasoning models
-     * (e.g. Gemini 2.5 Pro / Flash Thinking). Set to 0 to disable thinking.
-     */
     thinkingBudget?: number;
 }
 export declare class GeminiProvider implements Provider {
@@ -64,14 +52,9 @@ export declare class GeminiProvider implements Provider {
     formatResponse(data: any, model: string): UnifiedApiResponse;
     generateContent(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
     generateEmbedding(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;
-    /**
-     * Fetches all available Gemini models directly from Google Generative Language API.
-     * Corresponds to models listed on https://ai.google.dev/gemini-api/docs/models?hl=id
-     */
     static fetchAvailableModels(options: {
         apiKey: string;
         baseUrl?: string;
-        signal?: AbortSignal;
     }): Promise<GeminiModelInfo[]>;
 }
 //# sourceMappingURL=GeminiProvider.d.ts.map

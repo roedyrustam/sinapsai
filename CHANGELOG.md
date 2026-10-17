@@ -1,5 +1,44 @@
 # Changelog
 
+## [2.5.0] - 2026-10-17
+### Added
+- **In-Process Dynamic Context Compressor (`ContextCompressor`)**:
+  - Zero-dependency token estimation (`estimateMessageTokens`, `estimateTotalTokens`) and atomic tool-call group preservation.
+  - Supports `'sliding-window'` and `'middle-out'` context truncation strategies while preserving `system` instructions and preventing orphaned `tool` messages.
+- **FinOps Budget Enforcement & Spend Guardrails (`BudgetOptions`, `BudgetExceededError`)**:
+  - Configurable hard limits (`maxCostUsd`, `maxTotalTokens`) with automatic pre-flight request blocking (`action: 'block'`) and dynamic warning callbacks (`action: 'warn'`, `onBudgetWarning`).
+- **Gemini Provider Security & Structured Outputs Hardening**:
+  - Migrated API key authentication from URL query string (`?key=`) to secure `x-goog-api-key` HTTP header across chat, streaming, embeddings, and model discovery.
+  - Added full `json_schema` support mapped to `generationConfig.responseSchema` (with automatic `additionalProperties` sanitization).
+  - Added `toolChoice` mapping (`auto`, `none`, `required`, and named function) to `toolConfig.functionCallingConfig`.
+  - Added automatic `tool_call_id` to function name resolution from assistant history when `msg.name` is omitted.
+- **Anthropic Provider Multi-Tool & JSON Schema Enhancements**:
+  - Automatically merges consecutive `role: 'tool'` results into a single `user` message content array to prevent HTTP 400 alternation errors during parallel tool execution.
+  - Added native `responseFormat` (`json_object` and `json_schema`) system prompt enforcement and `toolChoice: 'none'` handling.
+- **DeepSeek Streaming Telemetry & SSE Buffer Flushing**:
+  - Enabled `stream_options: { include_usage: true }` and usage chunk extraction (`cachedPromptTokens`) in `DeepSeekProvider` streams.
+  - Enhanced `parseSSE` in `src/utils/stream.ts` to flush trailing buffered lines on stream completion.
+  - Enhanced `extractJsonFromText` in `src/utils/structuredOutput.ts` with a string-aware balanced bracket scanner.
+  - Added RFC 7231 HTTP-date parsing support to `Retry-After` in `parseRateLimitHeaders`.
+
+## [2.4.0] - 2026-10-16
+### Added
+- **Virtual Model Aliases (`modelAliases`)**: Decouple application logic from vendor strings via runtime alias mapping (`setModelAlias`, `getModelAliases`).
+- **Gateway Health Checks & Liveness Probes (`client.checkHealth`)**: Passive circuit state inspection and active 1-token heartbeat pings for Kubernetes/microservices readiness.
+- **In-Process Security Guardrails (`SecurityGuardrails`)**: Zero-dependency prompt injection, jailbreak (DAN), delimiter hijacking, and system prompt exfiltration defense (`block`, `sanitize`, `warn`).
+
+## [2.3.0] - 2026-10-16
+### Added
+- **Adaptive & Smart-Hybrid Dynamic Routing (`strategy: 'adaptive'`)**: Real-time composite provider scoring combining Laplace-smoothed reliability, moving-average latency, and dual-token cost efficiency.
+- **Reversible PII Tokenization & Response Vault (`reversible: true`)**: Replaces sensitive PII with deterministic placeholders (`{{PII_EMAIL_1}}`) before LLM dispatch and automatically restores original values in responses.
+- **Streaming Tool Call Accumulator (`accumulateStream`)**: Reconstructs streamed text, reasoning tokens, and chunked multi-tool calls into a complete `UnifiedApiResponse`.
+- **Resilient Structured JSON Output Extraction (`extractJsonFromText`, `tryExtractJson`)**: Extracts and parses JSON payloads from markdown code blocks and conversational responses.
+
+## [2.2.0] - 2026-10-15
+### Added
+- **Distributed Edge & Cluster Storage Adapters**: Zero-dependency `CloudflareKVStorage`, `RedisStorage` (Redis/Upstash/Valkey), and `D1Storage` (Cloudflare D1 SQL with auto-migration).
+- **Zero-Dependency In-Process PII Guardrails (`PIIGuardrails`)**: Automatic detection and redaction for email, phone, Luhn-validated credit cards, SSN, IP address, IBAN, passport, JWT, and URLs.
+
 ## [2.1.0] - 2026-10-15
 ### Added
 - **Official Vercel AI SDK Ecosystem Adapter (`sinapsai/ai-sdk`)**:

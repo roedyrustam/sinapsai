@@ -288,6 +288,37 @@ export interface CacheOptions {
   semantic?: SemanticCacheOptions | boolean;
 }
 
+export interface BudgetOptions {
+  maxCostUsd?: number;
+  maxTotalTokens?: number;
+  action?: 'block' | 'warn';
+  onBudgetWarning?: (currentCostUsd: number, limitUsd: number) => void;
+}
+
+export class BudgetExceededError extends Error {
+  public readonly currentCostUsd?: number;
+  public readonly limitUsd?: number;
+  public readonly currentTotalTokens?: number;
+  public readonly limitTokens?: number;
+
+  constructor(
+    message: string,
+    details?: {
+      currentCostUsd?: number;
+      limitUsd?: number;
+      currentTotalTokens?: number;
+      limitTokens?: number;
+    },
+  ) {
+    super(message);
+    this.name = 'BudgetExceededError';
+    this.currentCostUsd = details?.currentCostUsd;
+    this.limitUsd = details?.limitUsd;
+    this.currentTotalTokens = details?.currentTotalTokens;
+    this.limitTokens = details?.limitTokens;
+  }
+}
+
 import type { Provider } from '../providers/Provider.js';
 
 export interface SinapsEventHooks {

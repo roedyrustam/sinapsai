@@ -6,10 +6,12 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BudgetOptions, CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import { BudgetExceededError } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
-export type { CacheOptions, SemanticCacheOptions };
+export type { BudgetOptions, CacheOptions, SemanticCacheOptions };
+export { BudgetExceededError };
 export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency' | 'adaptive' | 'smart-hybrid';
 export interface RouterOptions {
     strategy?: RouterStrategy;
@@ -19,6 +21,7 @@ export interface RouterOptions {
     retryDelayMs?: number;
     cache?: CacheOptions;
     storage?: StateStorage;
+    budget?: BudgetOptions;
 }
 export declare class Router {
     private providers;
@@ -31,6 +34,7 @@ export declare class Router {
     private retryDelayMs;
     private cacheOptions?;
     private storage?;
+    private budgetOptions?;
     private semanticEntries;
     private metrics;
     constructor(providers: Provider[], circuitBreaker: CircuitBreaker, options?: RouterOptions);
@@ -46,6 +50,7 @@ export declare class Router {
      */
     checkHealth(options?: HealthCheckOptions): Promise<GatewayHealthReport>;
     private recordMetrics;
+    private checkBudget;
     private estimateRequestCost;
     calculateAdaptiveScore(provider: Provider, request?: UnifiedApiRequest): number;
     private computeCacheKey;

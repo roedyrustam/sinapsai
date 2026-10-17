@@ -250,6 +250,24 @@ export interface CacheOptions {
      */
     semantic?: SemanticCacheOptions | boolean;
 }
+export interface BudgetOptions {
+    maxCostUsd?: number;
+    maxTotalTokens?: number;
+    action?: 'block' | 'warn';
+    onBudgetWarning?: (currentCostUsd: number, limitUsd: number) => void;
+}
+export declare class BudgetExceededError extends Error {
+    readonly currentCostUsd?: number;
+    readonly limitUsd?: number;
+    readonly currentTotalTokens?: number;
+    readonly limitTokens?: number;
+    constructor(message: string, details?: {
+        currentCostUsd?: number;
+        limitUsd?: number;
+        currentTotalTokens?: number;
+        limitTokens?: number;
+    });
+}
 import type { Provider } from '../providers/Provider.js';
 export interface SinapsEventHooks {
     onSuccess?: (provider: Provider, response: UnifiedApiResponse, latencyMs: number) => void;

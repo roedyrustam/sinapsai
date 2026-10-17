@@ -10,6 +10,7 @@ import type { Provider } from '../providers/Provider.js';
 import type {
   BatchOptions,
   BatchResult,
+  BudgetOptions,
   ChatMessage,
   CircuitBreakerStatus,
   CreateChatCompletionRequest,
@@ -39,6 +40,10 @@ import {
   CircuitBreaker,
   type CircuitBreakerOptions,
 } from './CircuitBreaker.js';
+import {
+  type ContextCompressionOptions,
+  ContextCompressor,
+} from './ContextCompressor.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
@@ -68,6 +73,11 @@ export interface SinapsClientOptions {
   retryDelayMs?: number;
   cache?: CacheOptions;
   /**
+   * Optional budget options to cap maximum cost (USD) or cumulative tokens,
+   * triggering an error or warning callback when exceeded.
+   */
+  budget?: BudgetOptions;
+  /**
    * Optional PII guardrails configuration.
    * When enabled, automatically redacts or tokenizes personally identifiable information
    * (email, phone, credit card, SSN, IP) from all outgoing messages before
@@ -84,6 +94,11 @@ export interface SinapsClientOptions {
    * Allows incoming requests to specify friendly virtual alias names which get resolved automatically.
    */
   modelAliases?: Record<string, string>;
+  /**
+   * Optional context compression options to truncate conversation turns
+   * (sliding-window or middle-out) when prompt messages exceed maxPromptTokens.
+   */
+  contextCompression?: ContextCompressionOptions;
 }
 
 export class SinapsClient {
@@ -91,6 +106,7 @@ export class SinapsClient {
   private storage: StateStorage;
   public readonly guardrails?: PIIGuardrails;
   public readonly securityGuardrails?: SecurityGuardrails;
+  public readonly contextCompressor?: ContextCompressor;
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
   private hooks?: SinapsEventHooks;
@@ -125,6 +141,13 @@ export class SinapsClient {
         this.isReversiblePII = options.piiGuardrails.reversible === true;
       }
     }
+
+    // Initialize Context Compressor if configured
+    if (options.contextCompression) {
+      this.contextCompressor = new ContextCompressor(
+        options.contextCompression,
+      );
+    }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId: string) => {
@@ -148,6 +171,7 @@ export class SinapsClient {
       retryDelayMs: options.retryDelayMs,
       cache: options.cache,
       storage: this.storage,
+      budget: options.budget,
     });
   }
 
@@ -185,6 +209,12 @@ export class SinapsClient {
           } else {
             messages = this.guardrails.redactMessages(messages);
           }
+        }
+
+        // Apply context compression if configured
+        if (this.contextCompressor) {
+          const compressed = this.contextCompressor.compress(messages);
+          messages = compressed.messages;
         }
 
         const resolvedModel = this.resolveModel(request.model);

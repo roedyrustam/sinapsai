@@ -79,9 +79,16 @@ export function parseRateLimitHeaders(
 
   let resetMs: number | undefined;
   if (retryAfter) {
-    const parsedSec = Number.parseFloat(retryAfter);
-    if (!Number.isNaN(parsedSec)) {
-      resetMs = Math.round(parsedSec * 1000);
+    if (/^\d+(\.\d+)?$/.test(retryAfter.trim())) {
+      const parsedSec = Number.parseFloat(retryAfter);
+      if (!Number.isNaN(parsedSec)) {
+        resetMs = Math.round(parsedSec * 1000);
+      }
+    } else {
+      const retryDateMs = Date.parse(retryAfter);
+      if (!Number.isNaN(retryDateMs)) {
+        resetMs = Math.max(0, retryDateMs - Date.now());
+      }
     }
   } else {
     const resetTokensHeader = headers.get('x-ratelimit-reset-tokens');

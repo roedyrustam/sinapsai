@@ -7,7 +7,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { extractJsonFromText, tryExtractJson } from './structuredOutput.js';
+import {
+  extractBalancedJson,
+  extractJsonFromText,
+  tryExtractJson,
+} from './structuredOutput.js';
 
 describe('structuredOutput', () => {
   it('extracts direct raw JSON object', () => {
@@ -51,6 +55,18 @@ Let me know if you need more help!`;
     expect(parsed).toEqual({ valid: true, code: 200 });
   });
 
+  it('correctly handles conversational text with braces in strings and trailing braces', () => {
+    const input =
+      'Sure! Here is the config: {"title": "Hello {world}", "items": [1, 2]}. Hope {this} helps!';
+    const parsed = extractJsonFromText<{ title: string; items: number[] }>(
+      input,
+    );
+    expect(parsed).toEqual({
+      title: 'Hello {world}',
+      items: [1, 2],
+    });
+  });
+
   it('tryExtractJson returns null on invalid text instead of throwing', () => {
     expect(tryExtractJson('just random plain text')).toBeNull();
     expect(tryExtractJson('')).toBeNull();
@@ -60,5 +76,32 @@ Let me know if you need more help!`;
     expect(() => extractJsonFromText('Hello, this is just plain text')).toThrow(
       SyntaxError,
     );
+  });
+});
+
+describe('extractBalancedJson', () => {
+  it('extracts balanced object with nested braces and escaped quotes', () => {
+    const text = 'prefix {"a": {"b": "c \\"with } braces\\""}, "d": 1} suffix';
+    const extracted = extractBalancedJson(text, '{', '}');
+    expect(extracted).toBe('{"a": {"b": "c \\"with } braces\\""}, "d": 1}');
+    expect(JSON.parse(extracted || '{}')).toEqual({
+      a: { b: 'c "with } braces"' },
+      d: 1,
+    });
+  });
+
+  it('extracts balanced array with nested brackets', () => {
+    const text = 'Items: [[1, 2], ["nested [bracket]"]] done';
+    const extracted = extractBalancedJson(text, '[', ']');
+    expect(extracted).toBe('[[1, 2], ["nested [bracket]"]]');
+    expect(JSON.parse(extracted || '[]')).toEqual([
+      [1, 2],
+      ['nested [bracket]'],
+    ]);
+  });
+
+  it('returns null if start character not found or unbalanced', () => {
+    expect(extractBalancedJson('no brackets here', '{', '}')).toBeNull();
+    expect(extractBalancedJson('unclosed { foo: 1', '{', '}')).toBeNull();
   });
 });

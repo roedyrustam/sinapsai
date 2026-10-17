@@ -1,6 +1,5 @@
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
- *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
  * @license MIT
@@ -15,6 +14,7 @@ import type {
   UnifiedApiStreamChunk,
 } from '../types/index.js';
 import { parseRateLimitHeaders } from '../utils/rateLimit.js';
+import { parseSSE } from '../utils/stream.js';
 import type { Provider } from './Provider.js';
 
 export class AnthropicProvider implements Provider {
@@ -139,7 +139,6 @@ export class AnthropicProvider implements Provider {
           tool_use_id: msg.tool_call_id,
           content: toolContent,
         };
-
         const lastMsg = payload.messages[payload.messages.length - 1];
         if (
           lastMsg &&
@@ -160,7 +159,7 @@ export class AnthropicProvider implements Provider {
       ) {
         // biome-ignore lint/suspicious/noExplicitAny: anthropic content blocks
         const contentBlocks: any[] = [];
-        if (typeof msg.content === 'string') {
+        if (typeof msg.content === 'string' && msg.content) {
           contentBlocks.push({ type: 'text', text: msg.content });
         } else if (Array.isArray(msg.content)) {
           for (const part of msg.content) {
@@ -205,28 +204,24 @@ export class AnthropicProvider implements Provider {
       }
     }
 
-    if (systemMessages.length > 0) {
-      payload.system = systemMessages.join('\n');
-    }
-
-    // Dukungan responseFormat (JSON Mode / JSON Schema) pada Anthropic
     if (request.responseFormat?.type === 'json_object') {
-      const jsonInstruction =
-        'Respond strictly with a valid JSON object without markdown wrappers.';
-      payload.system = payload.system
-        ? `${payload.system}\n${jsonInstruction}`
-        : jsonInstruction;
+      systemMessages.push(
+        'Respond strictly with a valid JSON object without markdown wrappers.',
+      );
     } else if (
       request.responseFormat?.type === 'json_schema' &&
       request.responseFormat.json_schema
     ) {
-      const schemaInstruction = `Respond strictly with valid JSON matching this schema:\n${JSON.stringify(request.responseFormat.json_schema.schema)}`;
-      payload.system = payload.system
-        ? `${payload.system}\n${schemaInstruction}`
-        : schemaInstruction;
+      systemMessages.push(
+        `Respond strictly with valid JSON matching this schema:\n${JSON.stringify(request.responseFormat.json_schema.schema)}`,
+      );
     }
 
-    if (request.tools) {
+    if (systemMessages.length > 0) {
+      payload.system = systemMessages.join('\n');
+    }
+
+    if (request.tools && request.toolChoice !== 'none') {
       payload.tools = request.tools.map((t) => ({
         name: t.function.name,
         description: t.function.description,
@@ -234,10 +229,8 @@ export class AnthropicProvider implements Provider {
       }));
     }
 
-    if (request.toolChoice) {
-      if (request.toolChoice === 'none') {
-        delete payload.tools;
-      } else if (request.toolChoice === 'auto') {
+    if (request.toolChoice && request.toolChoice !== 'none') {
+      if (request.toolChoice === 'auto') {
         payload.tool_choice = { type: 'auto' };
       } else if (request.toolChoice === 'required') {
         payload.tool_choice = { type: 'any' };
@@ -335,9 +328,11 @@ export class AnthropicProvider implements Provider {
 
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
+
     if (request.signal) {
       if (request.signal.aborted) {
         controller.abort();
@@ -353,7 +348,7 @@ export class AnthropicProvider implements Provider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.config.apiKey,
+          'x-api-key': this.config.apiKey || '',
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
@@ -371,7 +366,6 @@ export class AnthropicProvider implements Provider {
 
       if (request.stream) {
         return (async function* () {
-          const { parseSSE } = await import('../utils/stream.js');
           let messageId = `anthropic-${Date.now()}`;
           let promptTokens = 0;
           let cachedPromptTokens: number | undefined;
@@ -483,6 +477,7 @@ export class AnthropicProvider implements Provider {
                           cachedPromptTokens,
                         }
                       : undefined;
+
                   if (parsed.delta?.stop_reason) {
                     let finishReason = 'stop';
                     switch (parsed.delta.stop_reason) {

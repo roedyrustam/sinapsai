@@ -8,8 +8,10 @@
 
 export * from './ai-sdk/index.js';
 export * from './core/BatchExecutor.js';
+export * from './core/BudgetGuardrails.js';
 export * from './core/CircuitBreaker.js';
 export * from './core/CloudflareKVStorage.js';
+export * from './core/ContextCompressor.js';
 export * from './core/D1Storage.js';
 export * from './core/InMemoryStorage.js';
 export * from './core/PIIGuardrails.js';
@@ -20,6 +22,7 @@ export * from './core/SinapsClient.js';
 export * from './core/StateStorage.js';
 export * from './providers/index.js';
 export * from './types/index.js';
+export { BudgetExceededError } from './types/index.js';
 export * from './utils/similarity.js';
 export * from './utils/streamAccumulator.js';
 export * from './utils/structuredOutput.js';

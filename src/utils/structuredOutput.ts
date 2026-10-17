@@ -7,6 +7,51 @@
  */
 
 /**
+ * Finds and extracts the first balanced JSON substring matching openChar and closeChar,
+ * properly respecting string literals and escape sequences.
+ */
+export function extractBalancedJson(
+  text: string,
+  openChar: '{' | '[',
+  closeChar: '}' | ']',
+): string | null {
+  const startIdx = text.indexOf(openChar);
+  if (startIdx === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (ch === '\\' && inString) {
+      isEscaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString) {
+      if (ch === openChar) depth++;
+      else if (ch === closeChar) {
+        depth--;
+        if (depth === 0) {
+          return text.slice(startIdx, i + 1);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Resiliently extracts and parses JSON data from LLM text responses.
  *
  * Handles:
@@ -41,28 +86,43 @@ export function extractJsonFromText<T = unknown>(text: string): T {
     }
   }
 
-  // 3. Search for outermost JSON object { ... } or array [ ... ]
+  // 3. Search for balanced JSON object { ... } or array [ ... ]
   const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
   const firstBracket = trimmed.indexOf('[');
-  const lastBracket = trimmed.lastIndexOf(']');
 
-  // Determine whether object or array appears first
-  const hasObject =
-    firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace;
-  const hasArray =
-    firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket;
+  const checkObjectFirst =
+    firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket);
 
-  if (hasObject && (!hasArray || firstBrace < firstBracket)) {
-    try {
-      const candidate = trimmed.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(candidate) as T;
-    } catch (_e) {}
-  } else if (hasArray) {
-    try {
-      const candidate = trimmed.substring(firstBracket, lastBracket + 1);
-      return JSON.parse(candidate) as T;
-    } catch (_e) {}
+  if (checkObjectFirst) {
+    const balancedObj = extractBalancedJson(trimmed, '{', '}');
+    if (balancedObj) {
+      try {
+        return JSON.parse(balancedObj) as T;
+      } catch (_e) {}
+    }
+    if (firstBracket !== -1) {
+      const balancedArr = extractBalancedJson(trimmed, '[', ']');
+      if (balancedArr) {
+        try {
+          return JSON.parse(balancedArr) as T;
+        } catch (_e) {}
+      }
+    }
+  } else if (firstBracket !== -1) {
+    const balancedArr = extractBalancedJson(trimmed, '[', ']');
+    if (balancedArr) {
+      try {
+        return JSON.parse(balancedArr) as T;
+      } catch (_e) {}
+    }
+    if (firstBrace !== -1) {
+      const balancedObj = extractBalancedJson(trimmed, '{', '}');
+      if (balancedObj) {
+        try {
+          return JSON.parse(balancedObj) as T;
+        } catch (_e) {}
+      }
+    }
   }
 
   throw new SyntaxError(

@@ -1,6 +1,5 @@
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
- *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
  * @license MIT
@@ -16,14 +15,10 @@ import type {
   UnifiedApiStreamChunk,
 } from '../types/index.js';
 import { parseRateLimitHeaders } from '../utils/rateLimit.js';
+import { parseSSE } from '../utils/stream.js';
 import type { Provider } from './Provider.js';
 
-/**
- * Canonical Gemini Model identifiers as documented in Google AI developer documentation:
- * Reference: https://ai.google.dev/gemini-api/docs/models?hl=id
- */
 export const GEMINI_MODELS = {
-  // Flagship & General Multimodal Models
   FLASH_2_5: 'gemini-2.5-flash',
   FLASH_LITE_2_5: 'gemini-2.5-flash-lite',
   PRO_2_5: 'gemini-2.5-pro',
@@ -31,12 +26,8 @@ export const GEMINI_MODELS = {
   FLASH_3_6: 'gemini-3.6-flash',
   FLASH_LITE_3_5: 'gemini-3.5-flash-lite',
   PRO_3_1_PREVIEW: 'gemini-3.1-pro-preview',
-
-  // Auto-updating Managed Aliases
   FLASH_LATEST: 'gemini-flash-latest',
   PRO_LATEST: 'gemini-pro-latest',
-
-  // Embeddings Models
   EMBEDDING_001: 'gemini-embedding-001',
   EMBEDDING_2: 'gemini-embedding-2',
   TEXT_EMBEDDING_004: 'text-embedding-004',
@@ -68,15 +59,7 @@ export interface GeminiModelInfo {
 }
 
 export interface GeminiProviderConfig extends ProviderConfig {
-  /**
-   * Optional safety settings to enforce content moderation thresholds.
-   */
   safetySettings?: GeminiSafetySetting[];
-
-  /**
-   * Optional default thinking budget in tokens for extended reasoning models
-   * (e.g. Gemini 2.5 Pro / Flash Thinking). Set to 0 to disable thinking.
-   */
   thinkingBudget?: number;
 }
 
@@ -129,14 +112,13 @@ export class GeminiProvider implements Provider {
     return model;
   }
 
-  // Exposed for testing
   public formatRequest(request: UnifiedApiRequest) {
     // biome-ignore lint/suspicious/noExplicitAny: complex gemini payload
     const contents: any[] = [];
     // biome-ignore lint/suspicious/noExplicitAny: complex gemini parts
     const systemParts: any[] = [];
 
-    // 1. Resolusi nama fungsi otomatis untuk role === 'tool' jika msg.name kosong
+    // Petakan tool_call_id ke nama fungsi dari riwayat assistant
     const toolCallIdToName = new Map<string, string>();
     for (const m of request.messages) {
       if (m.role === 'assistant' && m.tool_calls) {
@@ -216,19 +198,18 @@ export class GeminiProvider implements Provider {
           typeof msg.content === 'string'
             ? msg.content
             : JSON.stringify(msg.content ?? '');
-        const resolvedFunctionName =
+        const resolvedName =
           msg.name ||
           (msg.tool_call_id
             ? toolCallIdToName.get(msg.tool_call_id)
             : undefined) ||
           'function';
-
         contents.push({
           role: 'user',
           parts: [
             {
               functionResponse: {
-                name: resolvedFunctionName,
+                name: resolvedName,
                 response: { content: responseContent },
               },
             },
@@ -241,7 +222,7 @@ export class GeminiProvider implements Provider {
       ) {
         // biome-ignore lint/suspicious/noExplicitAny: gemini parts
         const parts: any[] = [];
-        if (typeof msg.content === 'string') {
+        if (typeof msg.content === 'string' && msg.content) {
           parts.push({ text: msg.content });
         } else if (Array.isArray(msg.content)) {
           for (const p of msg.content) {
@@ -291,7 +272,6 @@ export class GeminiProvider implements Provider {
     if (request.maxTokens !== undefined) {
       generationConfig.maxOutputTokens = request.maxTokens;
     }
-    // 2. Dukungan penuh JSON Schema (Structured Outputs) di generationConfig
     if (request.responseFormat?.type === 'json_object') {
       generationConfig.responseMimeType = 'application/json';
     } else if (
@@ -299,13 +279,11 @@ export class GeminiProvider implements Provider {
       request.responseFormat.json_schema
     ) {
       generationConfig.responseMimeType = 'application/json';
-      const rawSchema = { ...request.responseFormat.json_schema.schema };
-      // Hapus field additionalProperties karena Gemini API v1beta sering menolak properti ini
-      delete (rawSchema as Record<string, unknown>).additionalProperties;
-      generationConfig.responseSchema = rawSchema;
+      const cleanSchema = { ...request.responseFormat.json_schema.schema };
+      delete (cleanSchema as Record<string, unknown>).additionalProperties;
+      generationConfig.responseSchema = cleanSchema;
     }
 
-    // Extended Thinking / Reasoning configuration
     const thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
     if (thinkingBudget !== undefined) {
       generationConfig.thinkingConfig = {
@@ -335,7 +313,6 @@ export class GeminiProvider implements Provider {
         },
       ];
     }
-    // 3. Pemetaan toolChoice ke Gemini toolConfig
     if (request.toolChoice) {
       if (request.toolChoice === 'auto') {
         payload.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
@@ -356,7 +333,6 @@ export class GeminiProvider implements Provider {
     return payload;
   }
 
-  // Exposed for testing
   // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
   public formatResponse(data: any, model: string): UnifiedApiResponse {
     const candidate = data.candidates?.[0];
@@ -436,19 +412,20 @@ export class GeminiProvider implements Provider {
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> {
     const payload = this.formatRequest(request);
     const targetModel = this.resolveModel(request.model);
-
     const baseUrl =
       this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
-    const endpointAction = request.stream
+    const action = request.stream
       ? 'streamGenerateContent?alt=sse'
       : 'generateContent';
-    const finalUrl = `${baseUrl}/models/${targetModel}:${endpointAction}`;
+    const finalUrl = `${baseUrl}/models/${targetModel}:${action}`;
 
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
+
     if (request.signal) {
       if (request.signal.aborted) {
         controller.abort();
@@ -480,42 +457,81 @@ export class GeminiProvider implements Provider {
       }
 
       if (request.stream) {
-        return (async function* (self) {
-          const { parseSSE } = await import('../utils/stream.js');
+        return (async function* () {
           try {
+            let chunkIndex = 0;
             for await (const msg of parseSSE(response)) {
               try {
                 const parsed = JSON.parse(msg.data);
-                const chunk = self.formatResponse(parsed, targetModel);
+                const candidate = parsed.candidates?.[0];
+                let text = '';
+                let reasoning = '';
+                // biome-ignore lint/suspicious/noExplicitAny: gemini tool calls
+                const toolCalls: any[] = [];
+
+                if (candidate?.content?.parts) {
+                  for (const part of candidate.content.parts) {
+                    if (part.thought) {
+                      reasoning += part.text || '';
+                    } else if (part.text) {
+                      text += part.text;
+                    }
+                    if (part.functionCall) {
+                      toolCalls.push({
+                        index: chunkIndex++,
+                        id: `call_${Date.now()}_${chunkIndex}`,
+                        type: 'function',
+                        function: {
+                          name: part.functionCall.name,
+                          arguments: JSON.stringify(
+                            part.functionCall.args || {},
+                          ),
+                        },
+                      });
+                    }
+                  }
+                }
+
+                const usage = parsed.usageMetadata
+                  ? {
+                      promptTokens: parsed.usageMetadata.promptTokenCount || 0,
+                      completionTokens:
+                        parsed.usageMetadata.candidatesTokenCount || 0,
+                      totalTokens: parsed.usageMetadata.totalTokenCount || 0,
+                      cachedPromptTokens:
+                        parsed.usageMetadata.cachedContentTokenCount ||
+                        undefined,
+                    }
+                  : undefined;
+
                 yield {
-                  id: chunk.id,
-                  model: chunk.model,
+                  id: `gemini-${Date.now()}`,
+                  model: targetModel,
                   choices: [
                     {
                       delta: {
                         role: 'assistant',
-                        content: chunk.choices[0].message.content,
-                        reasoning_content:
-                          chunk.choices[0].message.reasoning_content,
-                        tool_calls: chunk.choices[0].message.tool_calls,
+                        content: text || undefined,
+                        reasoning_content: reasoning || undefined,
+                        tool_calls:
+                          toolCalls.length > 0 ? toolCalls : undefined,
                       },
                       finishReason:
-                        chunk.choices[0].finishReason === 'stop' &&
-                        !chunk.choices[0].message.content
-                          ? 'stop'
-                          : chunk.choices[0].finishReason !== 'stop'
-                            ? chunk.choices[0].finishReason
+                        toolCalls.length > 0
+                          ? 'tool_calls'
+                          : candidate?.finishReason
+                            ? candidate.finishReason.toLowerCase()
                             : null,
                     },
                   ],
-                  usage: chunk.usage,
+                  usage,
                 };
               } catch (_e) {}
             }
           } finally {
             if (timeoutId) clearTimeout(timeoutId);
           }
-        })(this);
+        })();
       }
 
       const data = await response.json();
@@ -538,173 +554,121 @@ export class GeminiProvider implements Provider {
   async generateEmbedding(
     request: CreateEmbeddingRequest,
   ): Promise<CreateEmbeddingResponse> {
-    const targetModel = this.resolveModel(request.model);
+    const targetModel =
+      request.model && request.model !== 'default'
+        ? request.model
+        : GEMINI_MODELS.EMBEDDING_001;
     const baseUrl =
       this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
 
     const isBatch = Array.isArray(request.input);
-    const inputs = Array.isArray(request.input)
-      ? request.input
-      : [request.input];
+    const endpoint = isBatch ? 'batchEmbedContents' : 'embedContent';
+    const keyParam = this.config.apiKey ? `?key=${this.config.apiKey}` : '';
+    const url = `${baseUrl}/models/${targetModel}:${endpoint}${keyParam}`;
 
-    const finalUrl = isBatch
-      ? `${baseUrl}/models/${targetModel}:batchEmbedContents?key=${this.config.apiKey}`
-      : `${baseUrl}/models/${targetModel}:embedContent?key=${this.config.apiKey}`;
-
-    const controller = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    if (this.config.timeoutMs) {
-      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    }
-    if (request.signal) {
-      if (request.signal.aborted) {
-        controller.abort();
-      } else {
-        request.signal.addEventListener('abort', () => controller.abort(), {
-          once: true,
-        });
-      }
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: Gemini embedding payload
-    const payload: any = isBatch
-      ? {
-          requests: inputs.map((text) => {
-            // biome-ignore lint/suspicious/noExplicitAny: request item
-            const reqObj: any = {
-              model: `models/${targetModel}`,
-              content: { parts: [{ text }] },
-            };
-            if (request.dimensions !== undefined) {
-              reqObj.outputDimensionality = request.dimensions;
-            }
-            return reqObj;
-          }),
-        }
-      : {
-          content: { parts: [{ text: inputs[0] }] },
-        };
-
-    if (!isBatch && request.dimensions !== undefined) {
-      payload.outputDimensionality = request.dimensions;
-    }
-
-    try {
-      const response = await fetch(finalUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        const err = new Error(
-          `Gemini API Error (${response.status}): ${errorText}`,
-        ) as Error & { status?: number };
-        err.status = response.status;
-        throw err;
-      }
-
-      // biome-ignore lint/suspicious/noExplicitAny: Gemini embeddings response
-      const data: any = await response.json();
-
-      if (isBatch) {
-        const embeddingsList = (data.embeddings || []).map(
-          // biome-ignore lint/suspicious/noExplicitAny: embedding item
-          (item: any, idx: number) => ({
-            object: 'embedding' as const,
-            index: idx,
-            embedding: item.values || [],
-          }),
-        );
-        return {
-          object: 'list',
-          model: targetModel,
-          data: embeddingsList,
-          usage: data.usageMetadata
-            ? {
-                promptTokens: data.usageMetadata.promptTokenCount || 0,
-                totalTokens: data.usageMetadata.totalTokenCount || 0,
-              }
-            : undefined,
-        };
-      }
-
-      return {
-        object: 'list',
-        model: targetModel,
-        data: [
-          {
-            object: 'embedding',
-            index: 0,
-            embedding: data.embedding?.values || [],
-          },
-        ],
-        usage: data.usageMetadata
-          ? {
-              promptTokens: data.usageMetadata.promptTokenCount || 0,
-              totalTokens: data.usageMetadata.totalTokenCount || 0,
-            }
-          : undefined,
+    // biome-ignore lint/suspicious/noExplicitAny: gemini embedding payload
+    let bodyPayload: any;
+    if (isBatch) {
+      bodyPayload = {
+        requests: (request.input as string[]).map((text) => {
+          // biome-ignore lint/suspicious/noExplicitAny: batch item
+          const item: any = {
+            model: `models/${targetModel}`,
+            content: { parts: [{ text }] },
+          };
+          if (request.dimensions) {
+            item.outputDimensionality = request.dimensions;
+          }
+          return item;
+        }),
       };
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+    } else {
+      bodyPayload = {
+        content: { parts: [{ text: request.input as string }] },
+      };
+      if (request.dimensions) {
+        bodyPayload.outputDimensionality = request.dimensions;
       }
     }
-  }
 
-  /**
-   * Fetches all available Gemini models directly from Google Generative Language API.
-   * Corresponds to models listed on https://ai.google.dev/gemini-api/docs/models?hl=id
-   */
-  static async fetchAvailableModels(options: {
-    apiKey: string;
-    baseUrl?: string;
-    signal?: AbortSignal;
-  }): Promise<GeminiModelInfo[]> {
-    const baseUrl =
-      options.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
-    const response = await fetch(`${baseUrl}/models?key=${options.apiKey}`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      signal: options.signal,
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': this.config.apiKey || '',
+      },
+      body: JSON.stringify(bodyPayload),
+      signal: request.signal,
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `Failed to fetch Gemini models (${response.status}): ${errorText}`,
-      );
+      const err = new Error(
+        `Gemini Embedding API Error (${response.status}): ${errorText}`,
+      ) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
     }
 
-    const data = (await response.json()) as {
-      models?: Array<{
-        name: string;
-        baseModelId?: string;
-        version?: string;
-        displayName?: string;
-        description?: string;
-        inputTokenLimit?: number;
-        outputTokenLimit?: number;
-        supportedGenerationMethods?: string[];
-        temperature?: number;
-      }>;
-    };
+    // biome-ignore lint/suspicious/noExplicitAny: response json
+    const data = (await response.json()) as any;
+    const embeddingsList = isBatch
+      ? (data.embeddings || []).map(
+          // biome-ignore lint/suspicious/noExplicitAny: embedding item
+          (e: any, idx: number) => ({
+            index: idx,
+            embedding: e.values || [],
+            object: 'embedding' as const,
+          }),
+        )
+      : [
+          {
+            index: 0,
+            embedding: data.embedding?.values || [],
+            object: 'embedding' as const,
+          },
+        ];
 
-    return (data.models || []).map((m) => {
-      const id = m.name.replace(/^models\//, '');
-      return {
-        id,
-        displayName: m.displayName || id,
-        description: m.description,
-        inputTokenLimit: m.inputTokenLimit,
-        outputTokenLimit: m.outputTokenLimit,
-        supportedGenerationMethods: m.supportedGenerationMethods || [],
-      };
+    return {
+      object: 'list',
+      data: embeddingsList,
+      model: targetModel,
+      usage: data.usageMetadata
+        ? {
+            promptTokens: data.usageMetadata.promptTokenCount || 0,
+            totalTokens: data.usageMetadata.totalTokenCount || 0,
+          }
+        : undefined,
+    };
+  }
+
+  static async fetchAvailableModels(options: {
+    apiKey: string;
+    baseUrl?: string;
+  }): Promise<GeminiModelInfo[]> {
+    const baseUrl =
+      options.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+    const response = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: {
+        'x-goog-api-key': options.apiKey,
+      },
     });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Gemini models (${response.status})`);
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: response json
+    const data = (await response.json()) as any;
+    // biome-ignore lint/suspicious/noExplicitAny: model list item
+    return (data.models || []).map((m: any) => ({
+      id: (m.name || '').replace(/^models\//, ''),
+      displayName: m.displayName || m.name,
+      description: m.description,
+      inputTokenLimit: m.inputTokenLimit,
+      outputTokenLimit: m.outputTokenLimit,
+      supportedGenerationMethods: m.supportedGenerationMethods || [],
+    }));
   }
 }
