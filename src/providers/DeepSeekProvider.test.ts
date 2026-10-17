@@ -6,7 +6,7 @@
  * @license MIT
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
 import { DeepSeekProvider } from './DeepSeekProvider.js';
 
@@ -172,6 +172,108 @@ describe('DeepSeekProvider', () => {
       const result = provider.formatResponse(response);
       expect(result.choices[0].message.content).toBe('Simple reply.');
       expect(result.usage).toBeUndefined();
+    });
+  });
+
+  describe('generateContent (streaming)', () => {
+    it('should include stream_options when stream is true in formatRequest', () => {
+      const result = provider.formatRequest({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: 'Stream test' }],
+        stream: true,
+      });
+
+      expect(result.stream).toBe(true);
+      expect(result.stream_options).toEqual({ include_usage: true });
+    });
+
+    it('should parse streaming SSE chunks and extract usage with cachedPromptTokens', async () => {
+      const sseChunks = [
+        `data: ${JSON.stringify({
+          id: 'chunk-1',
+          model: 'deepseek-reasoner',
+          choices: [
+            {
+              delta: {
+                role: 'assistant',
+                reasoning_content: 'Analyzing problem...',
+              },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          id: 'chunk-2',
+          model: 'deepseek-reasoner',
+          choices: [
+            {
+              delta: {
+                content: 'The answer is 42.',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          id: 'chunk-3',
+          model: 'deepseek-reasoner',
+          choices: [],
+          usage: {
+            prompt_tokens: 30,
+            completion_tokens: 15,
+            total_tokens: 45,
+            prompt_cache_hit_tokens: 24,
+          },
+        })}\n\n`,
+        'data: [DONE]\n\n',
+      ];
+
+      const sseStream = new ReadableStream({
+        start(controller) {
+          for (const c of sseChunks) {
+            controller.enqueue(new TextEncoder().encode(c));
+          }
+          controller.close();
+        },
+      });
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        body: sseStream,
+        headers: new Headers(),
+      });
+
+      const stream = await provider.generateContent({
+        model: 'deepseek-reasoner',
+        messages: [{ role: 'user', content: 'What is 6x7?' }],
+        stream: true,
+      });
+
+      const collected = [];
+      // biome-ignore lint/suspicious/noExplicitAny: stream iteration
+      for await (const chunk of stream as AsyncIterable<any>) {
+        collected.push(chunk);
+      }
+
+      expect(collected).toHaveLength(3);
+
+      // First chunk: reasoning content
+      expect(collected[0].choices[0].delta.reasoning_content).toBe(
+        'Analyzing problem...',
+      );
+
+      // Second chunk: main content
+      expect(collected[1].choices[0].delta.content).toBe('The answer is 42.');
+      expect(collected[1].choices[0].finishReason).toBe('stop');
+
+      // Third chunk: usage metadata chunk with empty choices
+      expect(collected[2].choices).toEqual([]);
+      expect(collected[2].usage).toEqual({
+        promptTokens: 30,
+        completionTokens: 15,
+        totalTokens: 45,
+        cachedPromptTokens: 24,
+      });
     });
   });
 });

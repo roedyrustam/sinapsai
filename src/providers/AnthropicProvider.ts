@@ -134,16 +134,25 @@ export class AnthropicProvider implements Provider {
           typeof msg.content === 'string'
             ? msg.content
             : JSON.stringify(msg.content || '');
-        payload.messages.push({
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: msg.tool_call_id,
-              content: toolContent,
-            },
-          ],
-        });
+        const toolResultBlock = {
+          type: 'tool_result',
+          tool_use_id: msg.tool_call_id,
+          content: toolContent,
+        };
+
+        const lastMsg = payload.messages[payload.messages.length - 1];
+        if (
+          lastMsg &&
+          lastMsg.role === 'user' &&
+          Array.isArray(lastMsg.content)
+        ) {
+          lastMsg.content.push(toolResultBlock);
+        } else {
+          payload.messages.push({
+            role: 'user',
+            content: [toolResultBlock],
+          });
+        }
       } else if (
         msg.role === 'assistant' &&
         msg.tool_calls &&
@@ -200,6 +209,23 @@ export class AnthropicProvider implements Provider {
       payload.system = systemMessages.join('\n');
     }
 
+    // Dukungan responseFormat (JSON Mode / JSON Schema) pada Anthropic
+    if (request.responseFormat?.type === 'json_object') {
+      const jsonInstruction =
+        'Respond strictly with a valid JSON object without markdown wrappers.';
+      payload.system = payload.system
+        ? `${payload.system}\n${jsonInstruction}`
+        : jsonInstruction;
+    } else if (
+      request.responseFormat?.type === 'json_schema' &&
+      request.responseFormat.json_schema
+    ) {
+      const schemaInstruction = `Respond strictly with valid JSON matching this schema:\n${JSON.stringify(request.responseFormat.json_schema.schema)}`;
+      payload.system = payload.system
+        ? `${payload.system}\n${schemaInstruction}`
+        : schemaInstruction;
+    }
+
     if (request.tools) {
       payload.tools = request.tools.map((t) => ({
         name: t.function.name,
@@ -209,7 +235,9 @@ export class AnthropicProvider implements Provider {
     }
 
     if (request.toolChoice) {
-      if (request.toolChoice === 'auto') {
+      if (request.toolChoice === 'none') {
+        delete payload.tools;
+      } else if (request.toolChoice === 'auto') {
         payload.tool_choice = { type: 'auto' };
       } else if (request.toolChoice === 'required') {
         payload.tool_choice = { type: 'any' };

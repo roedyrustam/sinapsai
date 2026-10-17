@@ -86,6 +86,7 @@ export class DeepSeekProvider implements Provider {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -182,23 +183,38 @@ export class DeepSeekProvider implements Provider {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                const cachedPromptTokens =
+                  parsed.usage?.prompt_cache_hit_tokens ??
+                  parsed.usage?.prompt_tokens_details?.cached_tokens ??
+                  undefined;
+
                 yield {
                   id: parsed.id || `deepseek-${Date.now()}`,
                   model: parsed.model,
-                  choices: [
-                    {
-                      delta: {
-                        role: chunk?.delta?.role,
-                        content: chunk?.delta?.content,
-                        reasoning_content: chunk?.delta?.reasoning_content,
-                        tool_calls: chunk?.delta?.tool_calls,
-                      },
-                      finishReason: chunk?.finish_reason || null,
-                    },
-                  ],
+                  choices: chunk
+                    ? [
+                        {
+                          delta: {
+                            role: chunk.delta?.role,
+                            content: chunk.delta?.content,
+                            reasoning_content: chunk.delta?.reasoning_content,
+                            tool_calls: chunk.delta?.tool_calls,
+                          },
+                          finishReason: chunk.finish_reason || null,
+                        },
+                      ]
+                    : [],
+                  usage: parsed.usage
+                    ? {
+                        promptTokens: parsed.usage.prompt_tokens || 0,
+                        completionTokens: parsed.usage.completion_tokens || 0,
+                        totalTokens: parsed.usage.total_tokens || 0,
+                        cachedPromptTokens,
+                      }
+                    : undefined,
                 };
               } catch (_e) {
-                // ignore invalid individual chunks
+                // ignore malformed SSE chunk
               }
             }
           } finally {

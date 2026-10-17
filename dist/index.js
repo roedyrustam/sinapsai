@@ -2885,16 +2885,20 @@ var AnthropicProvider = class {
         }
       } else if (msg.role === "tool") {
         const toolContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content || "");
-        payload.messages.push({
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: msg.tool_call_id,
-              content: toolContent
-            }
-          ]
-        });
+        const toolResultBlock = {
+          type: "tool_result",
+          tool_use_id: msg.tool_call_id,
+          content: toolContent
+        };
+        const lastMsg = payload.messages[payload.messages.length - 1];
+        if (lastMsg && lastMsg.role === "user" && Array.isArray(lastMsg.content)) {
+          lastMsg.content.push(toolResultBlock);
+        } else {
+          payload.messages.push({
+            role: "user",
+            content: [toolResultBlock]
+          });
+        }
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const contentBlocks = [];
         if (typeof msg.content === "string") {
@@ -2941,6 +2945,16 @@ ${msg.content}`;
     if (systemMessages.length > 0) {
       payload.system = systemMessages.join("\n");
     }
+    if (request.responseFormat?.type === "json_object") {
+      const jsonInstruction = "Respond strictly with a valid JSON object without markdown wrappers.";
+      payload.system = payload.system ? `${payload.system}
+${jsonInstruction}` : jsonInstruction;
+    } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
+      const schemaInstruction = `Respond strictly with valid JSON matching this schema:
+${JSON.stringify(request.responseFormat.json_schema.schema)}`;
+      payload.system = payload.system ? `${payload.system}
+${schemaInstruction}` : schemaInstruction;
+    }
     if (request.tools) {
       payload.tools = request.tools.map((t) => ({
         name: t.function.name,
@@ -2949,7 +2963,9 @@ ${msg.content}`;
       }));
     }
     if (request.toolChoice) {
-      if (request.toolChoice === "auto") {
+      if (request.toolChoice === "none") {
+        delete payload.tools;
+      } else if (request.toolChoice === "auto") {
         payload.tool_choice = { type: "auto" };
       } else if (request.toolChoice === "required") {
         payload.tool_choice = { type: "any" };
@@ -3289,6 +3305,7 @@ var DeepSeekProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -3371,20 +3388,27 @@ var DeepSeekProvider = class {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                const cachedPromptTokens = parsed.usage?.prompt_cache_hit_tokens ?? parsed.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
                 yield {
                   id: parsed.id || `deepseek-${Date.now()}`,
                   model: parsed.model,
-                  choices: [
+                  choices: chunk ? [
                     {
                       delta: {
-                        role: chunk?.delta?.role,
-                        content: chunk?.delta?.content,
-                        reasoning_content: chunk?.delta?.reasoning_content,
-                        tool_calls: chunk?.delta?.tool_calls
+                        role: chunk.delta?.role,
+                        content: chunk.delta?.content,
+                        reasoning_content: chunk.delta?.reasoning_content,
+                        tool_calls: chunk.delta?.tool_calls
                       },
-                      finishReason: chunk?.finish_reason || null
+                      finishReason: chunk.finish_reason || null
                     }
-                  ]
+                  ] : [],
+                  usage: parsed.usage ? {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens
+                  } : void 0
                 };
               } catch (_e) {
               }

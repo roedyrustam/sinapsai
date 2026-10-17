@@ -313,6 +313,120 @@ describe('AnthropicProvider', () => {
       ]);
     });
 
+    it('should merge consecutive tool messages into a single user message block', () => {
+      const toolReq = provider.formatRequest({
+        model: 'claude-3-7-sonnet-20250219',
+        messages: [
+          { role: 'user', content: 'What is the weather in Tokyo and Paris?' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: {
+                  name: 'get_weather',
+                  arguments: JSON.stringify({ city: 'Tokyo' }),
+                },
+              },
+              {
+                id: 'call_2',
+                type: 'function',
+                function: {
+                  name: 'get_weather',
+                  arguments: JSON.stringify({ city: 'Paris' }),
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: 'Tokyo: 20C',
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_2',
+            content: 'Paris: 15C',
+          },
+        ],
+      });
+
+      expect(toolReq.messages).toHaveLength(3);
+      expect(toolReq.messages[2].role).toBe('user');
+      expect(toolReq.messages[2].content).toEqual([
+        {
+          type: 'tool_result',
+          tool_use_id: 'call_1',
+          content: 'Tokyo: 20C',
+        },
+        {
+          type: 'tool_result',
+          tool_use_id: 'call_2',
+          content: 'Paris: 15C',
+        },
+      ]);
+    });
+
+    it('should delete payload.tools when toolChoice is "none"', () => {
+      const req = provider.formatRequest({
+        model: 'claude-3-5-sonnet-20241022',
+        messages: [{ role: 'user', content: 'Do not use tools' }],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'calculator',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+        toolChoice: 'none',
+      });
+
+      expect(req.tools).toBeUndefined();
+      expect(req.tool_choice).toBeUndefined();
+    });
+
+    it('should inject JSON instructions into system prompt for responseFormat json_object and json_schema', () => {
+      // 1. json_object with existing system message
+      const jsonObjectReq = provider.formatRequest({
+        model: 'claude-3-5-sonnet-20241022',
+        messages: [
+          { role: 'system', content: 'You are an assistant.' },
+          { role: 'user', content: 'Get user info' },
+        ],
+        responseFormat: { type: 'json_object' },
+      });
+
+      expect(jsonObjectReq.system).toBe(
+        'You are an assistant.\nRespond strictly with a valid JSON object without markdown wrappers.',
+      );
+
+      // 2. json_schema without existing system message
+      const jsonSchemaReq = provider.formatRequest({
+        model: 'claude-3-5-sonnet-20241022',
+        messages: [{ role: 'user', content: 'Extract profile' }],
+        responseFormat: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'Profile',
+            schema: {
+              type: 'object',
+              properties: {
+                username: { type: 'string' },
+              },
+            },
+          },
+        },
+      });
+
+      expect(jsonSchemaReq.system).toContain(
+        'Respond strictly with valid JSON matching this schema:\n{"type":"object","properties":{"username":{"type":"string"}}}',
+      );
+    });
+
     it('should parse tool_use response into tool_calls with finishReason tool_calls', () => {
       const anthropicToolResponse = {
         id: 'msg_tool_1',
