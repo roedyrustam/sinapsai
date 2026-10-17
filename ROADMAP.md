@@ -75,11 +75,32 @@
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 16 (`examples/16-vercel-ai-sdk-adapter.ts`) dan pengujian komprehensif di `src/ai-sdk/index.test.ts`.
 - [x] 182/182 Tests Passed di 18 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.1.0.
 
-## Phase 9: Distributed Edge Synchronization & Advanced Control Plane (Upcoming / v2.2.0)
-- [ ] **Cross-Worker / Distributed Storage Adapter**: Adaptasi state circuit breaker dan cache metadata untuk Cloudflare KV, D1, dan Redis Cluster tanpa mengorbankan mode in-process native.
-- [ ] **In-Process Zero-Dependency PII Guardrails**: Redaksi otomatis data sensitif (email, nomor telepon, kartu kredit) sebelum payload keluar ke jaringan.
-- [ ] **Dynamic Prompt Compression & Context Sliding Window**: Pengurangan token prompt secara otomatis saat mendekati batas konteks model menggunakan ekstraksi semantik in-process.
-- [ ] **Real-Time Voice & Bidirectional Audio Streaming**: Abstraksi unified WebSocket/WebRTC untuk model multimodal real-time (OpenAI Realtime API & Gemini Multimodal Live API).
+## Phase 9: Distributed Edge Synchronization & In-Process PII Guardrails (v2.2.0) - *Completed*
+- [x] **Cross-Worker / Distributed Storage Adapters**: Integrasi state circuit breaker dan cache metadata untuk Cloudflare KV (`CloudflareKVStorage`), Cloudflare D1 (`D1Storage`), dan Redis Cluster (`RedisStorage`) tanpa dependensi runtime eksternal.
+- [x] **In-Process Zero-Dependency PII Guardrails (`PIIGuardrails`)**: Redaksi otomatis data sensitif (email, nomor telepon, kartu kredit dengan algoritma Luhn, SSN, IPv4/IPv6, nomor paspor, IBAN, JWT, dan URL).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 17 (`examples/17-distributed-storage-adapters.ts`), 25 unit test storage baru, 29 unit test PII baru, total 236/236 tes lulus.
 
+## Phase 10: Adaptive Smart-Hybrid Routing & Reversible PII Vault (v2.3.0) - *Completed*
+- [x] **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'` / `'smart-hybrid'`)**: Algoritma perutean cerdas multi-faktor memadukan reliability (Laplace smoothed), moving latency, dan estimasi biaya per request secara real-time.
+- [x] **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang secara otomatis mendekripsi dan mengembalikan entitas PII asli ke dalam respons LLM non-streaming.
+- [x] **Universal Text + Multi-Modal Part Helper (`client.chat.completions.createTextWithParts`)**: Helper pembantu perakitan pesan multimodal tanpa boilerplate.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 18 (`examples/18-adaptive-smart-hybrid-routing.ts`) dan contoh 19 (`examples/19-reversible-pii-vault.ts`), total 241/241 tes lulus.
 
+## Phase 11: Security Guardrails, Model Aliases, Health Probes & Stream Accumulator (v2.4.0) - *Completed*
+- [x] **In-Process Security Guardrails (`SecurityGuardrails`)**: Pertahanan lokal dari prompt injection, jailbreak ("DAN", "evil confidant"), manipulasi system role, delimiter hijacking, dan secret exfiltration (`block`, `sanitize`, `warn`).
+- [x] **Dynamic Virtual Model Aliases (`modelAliases`)**: Pemetaan nama alias virtual ramah developer (misal: `{ 'fast': 'gpt-4o-mini', 'smart': 'claude-3-7-sonnet' }`).
+- [x] **Proactive Gateway Health Probes (`client.checkHealth()`)**: Evaluasi liveness dan kesehatan provider secara pasif (circuit state, success rate) dan aktif (`ping: true`).
+- [x] **Streaming Tool-Call Accumulator & Balanced JSON Extractor (`accumulateStream`, `extractJson`)**: Rekonstruksi otomatis aliran delta streaming SSE ke dalam objek respons lengkap dan parser JSON tahan-kesalahan (*fault-tolerant*).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 20, 21, dan 22; total 283/283 tes lulus.
 
+## Phase 12: Context Compression, FinOps Budget Caps, Speculative Hedging & Frontier Providers (v2.5.0) - *Completed*
+- [x] **In-Process Dynamic Context Compressor (`ContextCompressor`)**: Estimasi token zero-dependency (~4 chars per token) dan pemotongan percakapan otomatis (`sliding-window` & `middle-out`) dengan preservasi atomik grup `tool_calls` & `tool`.
+- [x] **FinOps Spend & Token Guardrails (`BudgetGuardrails`)**: Pelacakan dan pembatasan batas kumulatif USD (`maxCostUsd`) dan volume token (`maxTotalTokens`) dengan mode `block` (`BudgetExceededError`) atau `warn`.
+- [x] **Speculative Hedged Requests (`HedgedExecutor` & Client Option `hedging`)**: Luncurkan permintaan cadangan setelah ambang batas jeda delay (`delayMs`) guna memangkas latensi ekor (P99/P99.9) pada provider redundan, dengan pembatalan otomatis bagi request yang kalah cepat.
+- [x] **Provider Frontier Baru (xAI Grok & Cohere v2)**: Integrasi kelas satu untuk xAI Grok (dengan `reasoningEffort`) dan Cohere v2 (Command A, Embed v4).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 23, 24, dan 25; total 319/319 tes lulus di 29 test suites, 100% Biome Clean.
+
+## Phase 13: Real-Time Multimodal Voice & Native Observability Exporters (Upcoming / v3.0.0)
+- [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
+- [ ] **OpenTelemetry & Prometheus Native Metrics Exporter (`client.toPrometheusMetrics()`)**: Helper tanpa dependensi untuk mengekspor metrik internal SinapsAI ke format OpenTelemetry / Prometheus scrape endpoint.
+- [ ] **MCP (Model Context Protocol) Local Tool Bridge**: Server/Client MCP terpadu in-process untuk menghubungkan LLM dengan tools lokal secara dinamis.

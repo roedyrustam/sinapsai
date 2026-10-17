@@ -1072,6 +1072,127 @@ function extractPromptText(messages) {
   }).join("\n");
 }
 
+// src/core/HedgedExecutor.ts
+var HedgedExecutor = class {
+  options;
+  constructor(options = {}) {
+    this.options = {
+      ...options,
+      enabled: options.enabled ?? true,
+      delayMs: options.delayMs ?? 1500,
+      maxHedges: options.maxHedges ?? 1
+    };
+  }
+  /**
+   * Executes a request against the primary provider and races up to `maxHedges`
+   * secondary providers if the primary exceeds `delayMs`.
+   * Automatically aborts all losing in-flight requests once a winner resolves.
+   */
+  async execute(providers, request, dispatcher) {
+    if (providers.length === 0) {
+      throw new Error(
+        "HedgedExecutor: No available providers to execute request."
+      );
+    }
+    const startTime = Date.now();
+    if (!this.options.enabled || request.stream || providers.length === 1) {
+      const primary = providers[0];
+      const response = await dispatcher(primary, request);
+      return {
+        response,
+        winnerProvider: primary,
+        wasHedged: false,
+        elapsedMs: Date.now() - startTime
+      };
+    }
+    const candidateCount = Math.min(
+      providers.length,
+      1 + Math.max(1, this.options.maxHedges)
+    );
+    const selectedProviders = providers.slice(0, candidateCount);
+    const controllers = [];
+    const timers = [];
+    let settled = false;
+    const cleanup = (winnerIndex) => {
+      for (const t of timers) {
+        clearTimeout(t);
+      }
+      controllers.forEach((ctrl, idx) => {
+        if (idx !== winnerIndex && !ctrl.signal.aborted) {
+          ctrl.abort();
+        }
+      });
+    };
+    if (request.signal) {
+      if (request.signal.aborted) {
+        throw new Error("Request aborted by caller");
+      }
+      request.signal.addEventListener(
+        "abort",
+        () => {
+          settled = true;
+          cleanup();
+        },
+        { once: true }
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const errors = [];
+      let completedCount = 0;
+      const launchAttempt = (provider, index) => {
+        if (settled) return;
+        const ctrl = new AbortController();
+        controllers[index] = ctrl;
+        const hedgedReq = {
+          ...request,
+          signal: ctrl.signal
+        };
+        dispatcher(provider, hedgedReq).then((response) => {
+          if (settled) return;
+          settled = true;
+          const elapsedMs = Date.now() - startTime;
+          cleanup(index);
+          if (index > 0) {
+            this.options.onHedgeWon?.(provider, elapsedMs);
+          }
+          resolve({
+            response,
+            winnerProvider: provider,
+            wasHedged: index > 0,
+            elapsedMs
+          });
+        }).catch((err) => {
+          if (settled) return;
+          errors.push(err instanceof Error ? err : new Error(String(err)));
+          completedCount++;
+          if (completedCount >= selectedProviders.length) {
+            settled = true;
+            cleanup();
+            reject(
+              errors[0] || new Error("All hedged provider attempts failed.")
+            );
+          }
+        });
+      };
+      launchAttempt(selectedProviders[0], 0);
+      for (let i = 1; i < selectedProviders.length; i++) {
+        const delay = this.options.delayMs * i;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            this.options.onHedgeFired?.(
+              selectedProviders[0],
+              selectedProviders[i],
+              delay
+            );
+            launchAttempt(selectedProviders[i], i);
+          }
+        }, delay);
+        timers.push(timer);
+      }
+    });
+  }
+};
+
 // src/core/Router.ts
 var Router = class {
   providers;
@@ -1085,6 +1206,8 @@ var Router = class {
   cacheOptions;
   storage;
   budgetOptions;
+  hedgingOptions;
+  hedgedExecutor;
   semanticEntries = [];
   metrics = {
     totalRequests: 0,
@@ -1111,9 +1234,23 @@ var Router = class {
     this.cacheOptions = options.cache;
     this.storage = options.storage;
     this.budgetOptions = options.budget;
+    this.hedgingOptions = options.hedging;
+    if (options.hedging && options.hedging.enabled !== false) {
+      this.hedgedExecutor = new HedgedExecutor({
+        ...options.hedging,
+        onHedgeFired: options.hedging.onHedgeFired || options.hooks?.onHedgeFired,
+        onHedgeWon: options.hedging.onHedgeWon || options.hooks?.onHedgeWon
+      });
+    }
   }
   getProviderById(id) {
     return this.providers.find((p) => p.id === id);
+  }
+  getProviders() {
+    return [...this.providers];
+  }
+  getHedgedExecutor() {
+    return this.hedgedExecutor;
   }
   getMetrics() {
     return {
@@ -1493,6 +1630,38 @@ var Router = class {
       this.currentProviderIndex = (this.currentProviderIndex + 1) % providersList.length;
     }
     const errors = [];
+    if (this.hedgedExecutor && this.hedgingOptions?.enabled !== false && !request.stream && providersList.length > 1) {
+      const availableProviders = [];
+      for (const p of providersList) {
+        if (this.storage) {
+          const throttled = await this.storage.get(`rl:req:${p.id}`);
+          if (throttled !== null && throttled <= 0) continue;
+        }
+        if (await this.circuitBreaker.isAvailable(p.id)) {
+          availableProviders.push(p);
+        }
+      }
+      if (availableProviders.length > 1) {
+        try {
+          const raceResult = await this.hedgedExecutor.execute(
+            availableProviders,
+            request,
+            async (p, reqWithSignal) => {
+              return this.executeSingleProvider(p, reqWithSignal);
+            }
+          );
+          await this.saveResponseToCache(
+            request,
+            raceResult.response,
+            queryEmbedding,
+            semanticConfig
+          );
+          return raceResult.response;
+        } catch (hedgeErr) {
+          errors.push(hedgeErr);
+        }
+      }
+    }
     let previousProvider = null;
     let previousError = null;
     for (let i = 0; i < maxAttempts; i++) {
@@ -1527,203 +1696,148 @@ var Router = class {
       }
       const candidateModels = this.getCandidateModels(provider, request);
       let lastModelError = null;
-      for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
-        const isStillAvailable = await this.circuitBreaker.isAvailable(
-          provider.id
-        );
-        if (!isStillAvailable) {
-          break;
+      if (!request.stream) {
+        try {
+          const apiRes = await this.executeSingleProvider(provider, request);
+          await this.saveResponseToCache(
+            request,
+            apiRes,
+            queryEmbedding,
+            semanticConfig
+          );
+          return apiRes;
+        } catch (err) {
+          lastModelError = err;
         }
-        const currentModel = candidateModels[mIdx];
-        const currentRequest = currentModel === request.model ? request : { ...request, model: currentModel };
-        const maxRetries = provider.retries ?? this.retries;
-        const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
-        let attempt = 0;
-        while (true) {
-          const startTime = Date.now();
-          try {
-            const res = await this.circuitBreaker.execute(
-              provider,
-              currentRequest
-            );
-            const latencyMs = Date.now() - startTime;
-            if (currentRequest.stream && res != null && typeof res === "object" && Symbol.asyncIterator in res) {
-              const self = this;
-              const iterable = res;
-              let firstChunkTime = 0;
-              let collectedPromptTokens = 0;
-              let collectedCompletionTokens = 0;
-              let collectedCachedPromptTokens = 0;
-              return (async function* () {
-                try {
-                  for await (const chunk of iterable) {
-                    if (!firstChunkTime) {
-                      firstChunkTime = Date.now();
-                    }
-                    if (chunk.usage) {
-                      collectedPromptTokens = chunk.usage.promptTokens || collectedPromptTokens;
-                      collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
-                      collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
-                    }
-                    yield chunk;
-                  }
-                  const totalLatencyMs = Date.now() - startTime;
-                  const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
-                  let costUsd = 0;
-                  if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
-                    costUsd = collectedPromptTokens / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
-                  } else if (provider.costPer1kTokens !== void 0) {
-                    costUsd = (collectedPromptTokens + collectedCompletionTokens) / 1e3 * provider.costPer1kTokens;
-                  }
-                  self.recordMetrics(
-                    provider.id,
-                    true,
-                    totalLatencyMs,
-                    collectedPromptTokens,
-                    collectedCompletionTokens,
-                    costUsd,
-                    collectedCachedPromptTokens
-                  );
-                  self.hooks?.onStreamSuccess?.(
-                    provider,
-                    ttftMs,
-                    totalLatencyMs
-                  );
-                } catch (streamError) {
-                  const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
-                  if (!isAbort) {
-                    self.recordMetrics(
-                      provider.id,
-                      false,
-                      Date.now() - startTime,
-                      0,
-                      0,
-                      0
-                    );
-                  }
-                  throw streamError;
-                }
-              })();
-            }
-            if (!currentRequest.stream && "choices" in res) {
-              const apiRes = res;
-              this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
-              const promptTokens = apiRes.usage?.promptTokens ?? 0;
-              const completionTokens = apiRes.usage?.completionTokens ?? 0;
-              let costUsd = 0;
-              if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
-                costUsd = promptTokens / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
-              } else if (provider.costPer1kTokens !== void 0) {
-                costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
-              }
-              const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
-              this.recordMetrics(
-                provider.id,
-                true,
-                latencyMs,
-                promptTokens,
-                completionTokens,
-                costUsd,
-                cachedPromptTokens
-              );
-              if (apiRes.rateLimit) {
-                if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
-                  this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
-                  if (this.storage) {
-                    const ttlSec = apiRes.rateLimit.resetMs ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1e3)) : 10;
-                    await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
-                  }
-                }
-              }
-              if (this.cacheOptions?.enabled && this.storage) {
-                try {
-                  const cacheKey = this.computeCacheKey(request);
-                  await this.storage.set(
-                    cacheKey,
-                    apiRes,
-                    this.cacheOptions.ttlSeconds ?? 300
-                  );
-                } catch (_e) {
-                }
-              }
-              if (this.cacheOptions?.enabled && semanticConfig?.enabled && !currentRequest.stream) {
-                try {
-                  const promptText = extractPromptText(request.messages);
-                  if (!queryEmbedding) {
-                    queryEmbedding = await this.getEmbeddingForText(
-                      promptText,
-                      semanticConfig
-                    );
-                  }
-                  if (queryEmbedding && queryEmbedding.length > 0) {
-                    const maxEntries = semanticConfig.maxEntries ?? 1e3;
-                    const ttlMs = (this.cacheOptions.ttlSeconds ?? 300) * 1e3;
-                    if (this.semanticEntries.length >= maxEntries) {
-                      this.semanticEntries.shift();
-                    }
-                    this.semanticEntries.push({
-                      model: request.model,
-                      prompt: promptText,
-                      embedding: queryEmbedding,
-                      response: apiRes,
-                      expiresAt: Date.now() + ttlMs
-                    });
-                  }
-                } catch (_e) {
-                }
-              }
-            }
-            return res;
-          } catch (error) {
-            const err = error;
-            if (request.signal?.aborted) {
-              throw err;
-            }
-            if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
-              this.hooks?.onRateLimit?.(provider, err);
-              if (this.storage) {
-                await this.storage.set(`rl:req:${provider.id}`, 0, 10);
-              }
-            }
-            if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
-              attempt++;
-              const jitter = Math.random() * 50;
-              const delay = Math.min(
-                baseDelay * 2 ** (attempt - 1) + jitter,
-                1e4
-              );
-              this.hooks?.onRetry?.(provider, err, attempt, delay);
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              continue;
-            }
-            this.recordMetrics(
-              provider.id,
-              false,
-              Date.now() - startTime,
-              0,
-              0,
-              0
-            );
-            lastModelError = err;
-            const isAuthError2 = err.status === 401 || err.message.toLowerCase().includes("unauthorized") || err.message.toLowerCase().includes("invalid api key");
-            if (isAuthError2) {
-              break;
-            }
-            if (mIdx + 1 < candidateModels.length) {
-              const nextModel = candidateModels[mIdx + 1];
-              this.hooks?.onModelFallback?.(
-                err,
-                provider,
-                currentModel,
-                nextModel
-              );
-            }
+      } else {
+        for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+          const isStillAvailable = await this.circuitBreaker.isAvailable(
+            provider.id
+          );
+          if (!isStillAvailable) {
             break;
           }
-        }
-        const isAuthError = lastModelError?.status === 401 || lastModelError?.message?.toLowerCase().includes("unauthorized") || lastModelError?.message?.toLowerCase().includes("invalid api key");
-        if (isAuthError) {
-          break;
+          const currentModel = candidateModels[mIdx];
+          const currentRequest = currentModel === request.model ? request : { ...request, model: currentModel };
+          const maxRetries = provider.retries ?? this.retries;
+          const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+          let attempt = 0;
+          while (true) {
+            const startTime = Date.now();
+            try {
+              const res = await this.circuitBreaker.execute(
+                provider,
+                currentRequest
+              );
+              if (res != null && typeof res === "object" && Symbol.asyncIterator in res) {
+                const self = this;
+                const iterable = res;
+                let firstChunkTime = 0;
+                let collectedPromptTokens = 0;
+                let collectedCompletionTokens = 0;
+                let collectedCachedPromptTokens = 0;
+                return (async function* () {
+                  try {
+                    for await (const chunk of iterable) {
+                      if (!firstChunkTime) {
+                        firstChunkTime = Date.now();
+                      }
+                      if (chunk.usage) {
+                        collectedPromptTokens = chunk.usage.promptTokens || collectedPromptTokens;
+                        collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
+                        collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
+                      }
+                      yield chunk;
+                    }
+                    const totalLatencyMs = Date.now() - startTime;
+                    const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
+                    let costUsd = 0;
+                    if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+                      costUsd = collectedPromptTokens / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
+                    } else if (provider.costPer1kTokens !== void 0) {
+                      costUsd = (collectedPromptTokens + collectedCompletionTokens) / 1e3 * provider.costPer1kTokens;
+                    }
+                    self.recordMetrics(
+                      provider.id,
+                      true,
+                      totalLatencyMs,
+                      collectedPromptTokens,
+                      collectedCompletionTokens,
+                      costUsd,
+                      collectedCachedPromptTokens
+                    );
+                    self.hooks?.onStreamSuccess?.(
+                      provider,
+                      ttftMs,
+                      totalLatencyMs
+                    );
+                  } catch (streamError) {
+                    const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
+                    if (!isAbort) {
+                      self.recordMetrics(
+                        provider.id,
+                        false,
+                        Date.now() - startTime,
+                        0,
+                        0,
+                        0
+                      );
+                    }
+                    throw streamError;
+                  }
+                })();
+              }
+            } catch (error) {
+              const err = error;
+              if (request.signal?.aborted) {
+                throw err;
+              }
+              if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
+                this.hooks?.onRateLimit?.(provider, err);
+                if (this.storage) {
+                  await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+                }
+              }
+              if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
+                attempt++;
+                const jitter = Math.random() * 50;
+                const delay = Math.min(
+                  baseDelay * 2 ** (attempt - 1) + jitter,
+                  1e4
+                );
+                this.hooks?.onRetry?.(provider, err, attempt, delay);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+                continue;
+              }
+              this.recordMetrics(
+                provider.id,
+                false,
+                Date.now() - startTime,
+                0,
+                0,
+                0
+              );
+              lastModelError = err;
+              const isAuthError2 = err.status === 401 || err.message.toLowerCase().includes("unauthorized") || err.message.toLowerCase().includes("invalid api key");
+              if (isAuthError2) {
+                break;
+              }
+              if (mIdx + 1 < candidateModels.length) {
+                const nextModel = candidateModels[mIdx + 1];
+                this.hooks?.onModelFallback?.(
+                  err,
+                  provider,
+                  currentModel,
+                  nextModel
+                );
+              }
+              break;
+            }
+          }
+          const isAuthError = lastModelError?.status === 401 || lastModelError?.message?.toLowerCase().includes("unauthorized") || lastModelError?.message?.toLowerCase().includes("invalid api key");
+          if (isAuthError) {
+            break;
+          }
         }
       }
       if (lastModelError) {
@@ -1733,6 +1847,156 @@ var Router = class {
       }
     }
     throw new AggregateError(errors, "All providers failed or are unavailable");
+  }
+  async executeSingleProvider(provider, request) {
+    const candidateModels = this.getCandidateModels(provider, request);
+    let lastModelError = null;
+    for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+      const isStillAvailable = await this.circuitBreaker.isAvailable(
+        provider.id
+      );
+      if (!isStillAvailable) {
+        break;
+      }
+      const currentModel = candidateModels[mIdx];
+      const currentRequest = currentModel === request.model ? request : { ...request, model: currentModel };
+      const maxRetries = provider.retries ?? this.retries;
+      const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+      let attempt = 0;
+      while (true) {
+        const startTime = Date.now();
+        try {
+          const res = await this.circuitBreaker.execute(
+            provider,
+            currentRequest
+          );
+          const latencyMs = Date.now() - startTime;
+          if ("choices" in res) {
+            const apiRes = res;
+            this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
+            const promptTokens = apiRes.usage?.promptTokens ?? 0;
+            const completionTokens = apiRes.usage?.completionTokens ?? 0;
+            let costUsd = 0;
+            if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
+              costUsd = promptTokens / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
+            } else if (provider.costPer1kTokens !== void 0) {
+              costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
+            }
+            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
+            this.recordMetrics(
+              provider.id,
+              true,
+              latencyMs,
+              promptTokens,
+              completionTokens,
+              costUsd,
+              cachedPromptTokens
+            );
+            if (apiRes.rateLimit) {
+              if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
+                this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
+                if (this.storage) {
+                  const ttlSec = apiRes.rateLimit.resetMs ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1e3)) : 10;
+                  await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
+                }
+              }
+            }
+            return apiRes;
+          }
+          throw new Error("Invalid response structure received from provider");
+        } catch (error) {
+          const err = error;
+          if (request.signal?.aborted) {
+            throw err;
+          }
+          if (err.status === 429 || err.message.includes("429") || err.message.toLowerCase().includes("rate limit")) {
+            this.hooks?.onRateLimit?.(provider, err);
+            if (this.storage) {
+              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+            }
+          }
+          if (attempt < maxRetries && this.isRetryableError(err) && !request.signal?.aborted && await this.circuitBreaker.isAvailable(provider.id)) {
+            attempt++;
+            const jitter = Math.random() * 50;
+            const delay = Math.min(
+              baseDelay * 2 ** (attempt - 1) + jitter,
+              1e4
+            );
+            this.hooks?.onRetry?.(provider, err, attempt, delay);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          const isAbort = request.signal?.aborted || err?.name === "AbortError" || err?.message?.toLowerCase().includes("aborted");
+          if (!isAbort) {
+            this.recordMetrics(
+              provider.id,
+              false,
+              Date.now() - startTime,
+              0,
+              0,
+              0
+            );
+          }
+          lastModelError = err;
+          const isAuthError2 = err.status === 401 || err.message.toLowerCase().includes("unauthorized") || err.message.toLowerCase().includes("invalid api key");
+          if (isAuthError2) {
+            break;
+          }
+          if (mIdx + 1 < candidateModels.length) {
+            const nextModel = candidateModels[mIdx + 1];
+            this.hooks?.onModelFallback?.(
+              err,
+              provider,
+              currentModel,
+              nextModel
+            );
+          }
+          break;
+        }
+      }
+      const isAuthError = lastModelError?.status === 401 || lastModelError?.message?.toLowerCase().includes("unauthorized") || lastModelError?.message?.toLowerCase().includes("invalid api key");
+      if (isAuthError) {
+        break;
+      }
+    }
+    throw lastModelError || new Error(`Provider ${provider.id} failed to execute request`);
+  }
+  async saveResponseToCache(request, apiRes, queryEmbedding, semanticConfig) {
+    if (this.cacheOptions?.enabled && this.storage) {
+      try {
+        const cacheKey = this.computeCacheKey(request);
+        await this.storage.set(
+          cacheKey,
+          apiRes,
+          this.cacheOptions.ttlSeconds ?? 300
+        );
+      } catch (_e) {
+      }
+    }
+    if (this.cacheOptions?.enabled && semanticConfig?.enabled && !request.stream) {
+      try {
+        const promptText = extractPromptText(request.messages);
+        let emb = queryEmbedding;
+        if (!emb) {
+          emb = await this.getEmbeddingForText(promptText, semanticConfig);
+        }
+        if (emb && emb.length > 0) {
+          const maxEntries = semanticConfig.maxEntries ?? 1e3;
+          const ttlMs = (this.cacheOptions.ttlSeconds ?? 300) * 1e3;
+          if (this.semanticEntries.length >= maxEntries) {
+            this.semanticEntries.shift();
+          }
+          this.semanticEntries.push({
+            model: request.model,
+            prompt: promptText,
+            embedding: emb,
+            response: apiRes,
+            expiresAt: Date.now() + ttlMs
+          });
+        }
+      } catch (_e) {
+      }
+    }
   }
   computeEmbeddingCacheKey(request) {
     const raw = JSON.stringify({
@@ -2114,6 +2378,7 @@ var SinapsClient = class {
   guardrails;
   securityGuardrails;
   contextCompressor;
+  hedgedExecutor;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
@@ -2170,8 +2435,10 @@ var SinapsClient = class {
       retryDelayMs: options.retryDelayMs,
       cache: options.cache,
       storage: this.storage,
-      budget: options.budget
+      budget: options.budget,
+      hedging: options.hedging
     });
+    this.hedgedExecutor = this.router.getHedgedExecutor();
   }
   chat = {
     completions: {
@@ -3013,127 +3280,6 @@ var D1Storage = class {
     await this.db.prepare(
       `DELETE FROM ${this.tableName} WHERE expires_at IS NOT NULL AND expires_at <= ?`
     ).bind(now).run();
-  }
-};
-
-// src/core/HedgedExecutor.ts
-var HedgedExecutor = class {
-  options;
-  constructor(options = {}) {
-    this.options = {
-      ...options,
-      enabled: options.enabled ?? true,
-      delayMs: options.delayMs ?? 1500,
-      maxHedges: options.maxHedges ?? 1
-    };
-  }
-  /**
-   * Executes a request against the primary provider and races up to `maxHedges`
-   * secondary providers if the primary exceeds `delayMs`.
-   * Automatically aborts all losing in-flight requests once a winner resolves.
-   */
-  async execute(providers, request, dispatcher) {
-    if (providers.length === 0) {
-      throw new Error(
-        "HedgedExecutor: No available providers to execute request."
-      );
-    }
-    const startTime = Date.now();
-    if (!this.options.enabled || request.stream || providers.length === 1) {
-      const primary = providers[0];
-      const response = await dispatcher(primary, request);
-      return {
-        response,
-        winnerProvider: primary,
-        wasHedged: false,
-        elapsedMs: Date.now() - startTime
-      };
-    }
-    const candidateCount = Math.min(
-      providers.length,
-      1 + Math.max(1, this.options.maxHedges)
-    );
-    const selectedProviders = providers.slice(0, candidateCount);
-    const controllers = [];
-    const timers = [];
-    let settled = false;
-    const cleanup = (winnerIndex) => {
-      for (const t of timers) {
-        clearTimeout(t);
-      }
-      controllers.forEach((ctrl, idx) => {
-        if (idx !== winnerIndex && !ctrl.signal.aborted) {
-          ctrl.abort();
-        }
-      });
-    };
-    if (request.signal) {
-      if (request.signal.aborted) {
-        throw new Error("Request aborted by caller");
-      }
-      request.signal.addEventListener(
-        "abort",
-        () => {
-          settled = true;
-          cleanup();
-        },
-        { once: true }
-      );
-    }
-    return new Promise((resolve, reject) => {
-      const errors = [];
-      let completedCount = 0;
-      const launchAttempt = (provider, index) => {
-        if (settled) return;
-        const ctrl = new AbortController();
-        controllers[index] = ctrl;
-        const hedgedReq = {
-          ...request,
-          signal: ctrl.signal
-        };
-        dispatcher(provider, hedgedReq).then((response) => {
-          if (settled) return;
-          settled = true;
-          const elapsedMs = Date.now() - startTime;
-          cleanup(index);
-          if (index > 0) {
-            this.options.onHedgeWon?.(provider, elapsedMs);
-          }
-          resolve({
-            response,
-            winnerProvider: provider,
-            wasHedged: index > 0,
-            elapsedMs
-          });
-        }).catch((err) => {
-          if (settled) return;
-          errors.push(err instanceof Error ? err : new Error(String(err)));
-          completedCount++;
-          if (completedCount >= selectedProviders.length) {
-            settled = true;
-            cleanup();
-            reject(
-              errors[0] || new Error("All hedged provider attempts failed.")
-            );
-          }
-        });
-      };
-      launchAttempt(selectedProviders[0], 0);
-      for (let i = 1; i < selectedProviders.length; i++) {
-        const delay = this.options.delayMs * i;
-        const timer = setTimeout(() => {
-          if (!settled) {
-            this.options.onHedgeFired?.(
-              selectedProviders[0],
-              selectedProviders[i],
-              delay
-            );
-            launchAttempt(selectedProviders[i], i);
-          }
-        }, delay);
-        timers.push(timer);
-      }
-    });
   }
 };
 

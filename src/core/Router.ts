@@ -26,9 +26,15 @@ import type {
 import { BudgetExceededError } from '../types/index.js';
 import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
+import { HedgedExecutor, type HedgingOptions } from './HedgedExecutor.js';
 import type { StateStorage } from './StateStorage.js';
 
-export type { BudgetOptions, CacheOptions, SemanticCacheOptions };
+export type {
+  BudgetOptions,
+  CacheOptions,
+  HedgingOptions,
+  SemanticCacheOptions,
+};
 export { BudgetExceededError };
 
 export type RouterStrategy =
@@ -48,6 +54,7 @@ export interface RouterOptions {
   cache?: CacheOptions;
   storage?: StateStorage;
   budget?: BudgetOptions;
+  hedging?: HedgingOptions;
 }
 
 interface SemanticCacheEntry {
@@ -70,6 +77,8 @@ export class Router {
   private cacheOptions?: CacheOptions;
   private storage?: StateStorage;
   private budgetOptions?: BudgetOptions;
+  private hedgingOptions?: HedgingOptions;
+  private hedgedExecutor?: HedgedExecutor;
   private semanticEntries: SemanticCacheEntry[] = [];
   private metrics: SinapsMetrics = {
     totalRequests: 0,
@@ -101,10 +110,27 @@ export class Router {
     this.cacheOptions = options.cache;
     this.storage = options.storage;
     this.budgetOptions = options.budget;
+    this.hedgingOptions = options.hedging;
+    if (options.hedging && options.hedging.enabled !== false) {
+      this.hedgedExecutor = new HedgedExecutor({
+        ...options.hedging,
+        onHedgeFired:
+          options.hedging.onHedgeFired || options.hooks?.onHedgeFired,
+        onHedgeWon: options.hedging.onHedgeWon || options.hooks?.onHedgeWon,
+      });
+    }
   }
 
   public getProviderById(id: string): Provider | undefined {
     return this.providers.find((p) => p.id === id);
+  }
+
+  public getProviders(): Provider[] {
+    return [...this.providers];
+  }
+
+  public getHedgedExecutor(): HedgedExecutor | undefined {
+    return this.hedgedExecutor;
   }
 
   public getMetrics(): SinapsMetrics {
@@ -609,6 +635,49 @@ export class Router {
     }
 
     const errors: Error[] = [];
+
+    // Speculative Hedging: Race primary and backup providers if enabled for non-streaming requests
+    if (
+      this.hedgedExecutor &&
+      this.hedgingOptions?.enabled !== false &&
+      !request.stream &&
+      providersList.length > 1
+    ) {
+      const availableProviders: Provider[] = [];
+      for (const p of providersList) {
+        if (this.storage) {
+          const throttled = await this.storage.get<number>(`rl:req:${p.id}`);
+          if (throttled !== null && throttled <= 0) continue;
+        }
+        if (await this.circuitBreaker.isAvailable(p.id)) {
+          availableProviders.push(p);
+        }
+      }
+
+      if (availableProviders.length > 1) {
+        try {
+          const raceResult = await this.hedgedExecutor.execute(
+            availableProviders,
+            request,
+            async (p, reqWithSignal) => {
+              return this.executeSingleProvider(p, reqWithSignal);
+            },
+          );
+
+          await this.saveResponseToCache(
+            request,
+            raceResult.response,
+            queryEmbedding,
+            semanticConfig,
+          );
+
+          return raceResult.response;
+        } catch (hedgeErr) {
+          errors.push(hedgeErr as Error);
+        }
+      }
+    }
+
     let previousProvider: Provider | null = null;
     let previousError: Error | null = null;
 
@@ -651,296 +720,210 @@ export class Router {
       const candidateModels = this.getCandidateModels(provider, request);
       let lastModelError: Error | null = null;
 
-      for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
-        const isStillAvailable = await this.circuitBreaker.isAvailable(
-          provider.id,
-        );
-        if (!isStillAvailable) {
-          break;
+      // For non-streaming requests, execute with candidate fallback models and retries
+      if (!request.stream) {
+        try {
+          const apiRes = await this.executeSingleProvider(provider, request);
+          await this.saveResponseToCache(
+            request,
+            apiRes,
+            queryEmbedding,
+            semanticConfig,
+          );
+          return apiRes;
+        } catch (err) {
+          lastModelError = err as Error;
         }
-
-        const currentModel = candidateModels[mIdx];
-        const currentRequest: UnifiedApiRequest =
-          currentModel === request.model
-            ? request
-            : { ...request, model: currentModel };
-
-        const maxRetries = provider.retries ?? this.retries;
-        const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
-        let attempt = 0;
-
-        while (true) {
-          const startTime = Date.now();
-          try {
-            const res = await this.circuitBreaker.execute(
-              provider,
-              currentRequest,
-            );
-            const latencyMs = Date.now() - startTime;
-
-            if (
-              currentRequest.stream &&
-              res != null &&
-              typeof res === 'object' &&
-              Symbol.asyncIterator in res
-            ) {
-              const self = this;
-              const iterable = res as AsyncIterable<UnifiedApiStreamChunk>;
-              let firstChunkTime = 0;
-              let collectedPromptTokens = 0;
-              let collectedCompletionTokens = 0;
-              let collectedCachedPromptTokens = 0;
-
-              return (async function* () {
-                try {
-                  for await (const chunk of iterable) {
-                    if (!firstChunkTime) {
-                      firstChunkTime = Date.now();
-                    }
-                    if (chunk.usage) {
-                      collectedPromptTokens =
-                        chunk.usage.promptTokens || collectedPromptTokens;
-                      collectedCompletionTokens =
-                        chunk.usage.completionTokens ||
-                        collectedCompletionTokens;
-                      collectedCachedPromptTokens =
-                        chunk.usage.cachedPromptTokens ||
-                        collectedCachedPromptTokens;
-                    }
-                    yield chunk;
-                  }
-                  const totalLatencyMs = Date.now() - startTime;
-                  const ttftMs = firstChunkTime
-                    ? firstChunkTime - startTime
-                    : totalLatencyMs;
-
-                  let costUsd = 0;
-                  if (
-                    provider.promptCostPer1k !== undefined &&
-                    provider.completionCostPer1k !== undefined
-                  ) {
-                    costUsd =
-                      (collectedPromptTokens / 1000) *
-                        provider.promptCostPer1k +
-                      (collectedCompletionTokens / 1000) *
-                        provider.completionCostPer1k;
-                  } else if (provider.costPer1kTokens !== undefined) {
-                    costUsd =
-                      ((collectedPromptTokens + collectedCompletionTokens) /
-                        1000) *
-                      provider.costPer1kTokens;
-                  }
-
-                  self.recordMetrics(
-                    provider.id,
-                    true,
-                    totalLatencyMs,
-                    collectedPromptTokens,
-                    collectedCompletionTokens,
-                    costUsd,
-                    collectedCachedPromptTokens,
-                  );
-
-                  self.hooks?.onStreamSuccess?.(
-                    provider,
-                    ttftMs,
-                    totalLatencyMs,
-                  );
-                } catch (streamError) {
-                  const isAbort =
-                    request.signal?.aborted ||
-                    (streamError as Error)?.name === 'AbortError' ||
-                    (streamError as Error)?.message
-                      ?.toLowerCase()
-                      .includes('aborted');
-                  if (!isAbort) {
-                    self.recordMetrics(
-                      provider.id,
-                      false,
-                      Date.now() - startTime,
-                      0,
-                      0,
-                      0,
-                    );
-                  }
-                  throw streamError;
-                }
-              })();
-            }
-
-            if (
-              !currentRequest.stream &&
-              'choices' in (res as UnifiedApiResponse)
-            ) {
-              const apiRes = res as UnifiedApiResponse;
-              this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
-
-              const promptTokens = apiRes.usage?.promptTokens ?? 0;
-              const completionTokens = apiRes.usage?.completionTokens ?? 0;
-              let costUsd = 0;
-              if (
-                provider.promptCostPer1k !== undefined &&
-                provider.completionCostPer1k !== undefined
-              ) {
-                costUsd =
-                  (promptTokens / 1000) * provider.promptCostPer1k +
-                  (completionTokens / 1000) * provider.completionCostPer1k;
-              } else if (provider.costPer1kTokens !== undefined) {
-                costUsd =
-                  ((promptTokens + completionTokens) / 1000) *
-                  provider.costPer1kTokens;
-              }
-
-              const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
-              this.recordMetrics(
-                provider.id,
-                true,
-                latencyMs,
-                promptTokens,
-                completionTokens,
-                costUsd,
-                cachedPromptTokens,
-              );
-
-              // Adaptive rate-limit handling
-              if (apiRes.rateLimit) {
-                if (
-                  apiRes.rateLimit.remainingRequests !== undefined &&
-                  apiRes.rateLimit.remainingRequests <= 1
-                ) {
-                  this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
-                  if (this.storage) {
-                    const ttlSec = apiRes.rateLimit.resetMs
-                      ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1000))
-                      : 10;
-                    await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
-                  }
-                }
-              }
-
-              if (this.cacheOptions?.enabled && this.storage) {
-                try {
-                  const cacheKey = this.computeCacheKey(request);
-                  await this.storage.set(
-                    cacheKey,
-                    apiRes,
-                    this.cacheOptions.ttlSeconds ?? 300,
-                  );
-                } catch (_e) {
-                  // Ignore cache set error
-                }
-              }
-
-              if (
-                this.cacheOptions?.enabled &&
-                semanticConfig?.enabled &&
-                !currentRequest.stream
-              ) {
-                try {
-                  const promptText = extractPromptText(request.messages);
-                  if (!queryEmbedding) {
-                    queryEmbedding = await this.getEmbeddingForText(
-                      promptText,
-                      semanticConfig,
-                    );
-                  }
-                  if (queryEmbedding && queryEmbedding.length > 0) {
-                    const maxEntries = semanticConfig.maxEntries ?? 1000;
-                    const ttlMs = (this.cacheOptions.ttlSeconds ?? 300) * 1000;
-                    if (this.semanticEntries.length >= maxEntries) {
-                      this.semanticEntries.shift();
-                    }
-                    this.semanticEntries.push({
-                      model: request.model,
-                      prompt: promptText,
-                      embedding: queryEmbedding,
-                      response: apiRes,
-                      expiresAt: Date.now() + ttlMs,
-                    });
-                  }
-                } catch (_e) {
-                  // Ignore semantic cache set error
-                }
-              }
-            }
-
-            return res;
-          } catch (error) {
-            const err = error as Error;
-
-            if (request.signal?.aborted) {
-              throw err;
-            }
-
-            // Simple rate limit heuristic
-            if (
-              (err as Error & { status?: number }).status === 429 ||
-              err.message.includes('429') ||
-              err.message.toLowerCase().includes('rate limit')
-            ) {
-              this.hooks?.onRateLimit?.(provider, err);
-              if (this.storage) {
-                await this.storage.set(`rl:req:${provider.id}`, 0, 10);
-              }
-            }
-
-            if (
-              attempt < maxRetries &&
-              this.isRetryableError(err) &&
-              !request.signal?.aborted &&
-              (await this.circuitBreaker.isAvailable(provider.id))
-            ) {
-              attempt++;
-              const jitter = Math.random() * 50;
-              const delay = Math.min(
-                baseDelay * 2 ** (attempt - 1) + jitter,
-                10000,
-              );
-              this.hooks?.onRetry?.(provider, err, attempt, delay);
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              continue;
-            }
-
-            this.recordMetrics(
-              provider.id,
-              false,
-              Date.now() - startTime,
-              0,
-              0,
-              0,
-            );
-            lastModelError = err;
-
-            // If error is unauthorized / invalid api key, don't try other models on this provider
-            const isAuthError =
-              (err as Error & { status?: number }).status === 401 ||
-              err.message.toLowerCase().includes('unauthorized') ||
-              err.message.toLowerCase().includes('invalid api key');
-
-            if (isAuthError) {
-              break;
-            }
-
-            // If there is another candidate model available for this provider, try it!
-            if (mIdx + 1 < candidateModels.length) {
-              const nextModel = candidateModels[mIdx + 1];
-              this.hooks?.onModelFallback?.(
-                err,
-                provider,
-                currentModel,
-                nextModel,
-              );
-            }
+      } else {
+        // Candidate models for streaming requests
+        for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+          const isStillAvailable = await this.circuitBreaker.isAvailable(
+            provider.id,
+          );
+          if (!isStillAvailable) {
             break;
           }
-        }
 
-        const isAuthError =
-          (lastModelError as Error & { status?: number })?.status === 401 ||
-          lastModelError?.message?.toLowerCase().includes('unauthorized') ||
-          lastModelError?.message?.toLowerCase().includes('invalid api key');
-        if (isAuthError) {
-          break;
+          const currentModel = candidateModels[mIdx];
+          const currentRequest: UnifiedApiRequest =
+            currentModel === request.model
+              ? request
+              : { ...request, model: currentModel };
+
+          const maxRetries = provider.retries ?? this.retries;
+          const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+          let attempt = 0;
+
+          while (true) {
+            const startTime = Date.now();
+            try {
+              const res = await this.circuitBreaker.execute(
+                provider,
+                currentRequest,
+              );
+
+              if (
+                res != null &&
+                typeof res === 'object' &&
+                Symbol.asyncIterator in res
+              ) {
+                const self = this;
+                const iterable = res as AsyncIterable<UnifiedApiStreamChunk>;
+                let firstChunkTime = 0;
+                let collectedPromptTokens = 0;
+                let collectedCompletionTokens = 0;
+                let collectedCachedPromptTokens = 0;
+
+                return (async function* () {
+                  try {
+                    for await (const chunk of iterable) {
+                      if (!firstChunkTime) {
+                        firstChunkTime = Date.now();
+                      }
+                      if (chunk.usage) {
+                        collectedPromptTokens =
+                          chunk.usage.promptTokens || collectedPromptTokens;
+                        collectedCompletionTokens =
+                          chunk.usage.completionTokens ||
+                          collectedCompletionTokens;
+                        collectedCachedPromptTokens =
+                          chunk.usage.cachedPromptTokens ||
+                          collectedCachedPromptTokens;
+                      }
+                      yield chunk;
+                    }
+                    const totalLatencyMs = Date.now() - startTime;
+                    const ttftMs = firstChunkTime
+                      ? firstChunkTime - startTime
+                      : totalLatencyMs;
+
+                    let costUsd = 0;
+                    if (
+                      provider.promptCostPer1k !== undefined &&
+                      provider.completionCostPer1k !== undefined
+                    ) {
+                      costUsd =
+                        (collectedPromptTokens / 1000) *
+                          provider.promptCostPer1k +
+                        (collectedCompletionTokens / 1000) *
+                          provider.completionCostPer1k;
+                    } else if (provider.costPer1kTokens !== undefined) {
+                      costUsd =
+                        ((collectedPromptTokens + collectedCompletionTokens) /
+                          1000) *
+                        provider.costPer1kTokens;
+                    }
+
+                    self.recordMetrics(
+                      provider.id,
+                      true,
+                      totalLatencyMs,
+                      collectedPromptTokens,
+                      collectedCompletionTokens,
+                      costUsd,
+                      collectedCachedPromptTokens,
+                    );
+
+                    self.hooks?.onStreamSuccess?.(
+                      provider,
+                      ttftMs,
+                      totalLatencyMs,
+                    );
+                  } catch (streamError) {
+                    const isAbort =
+                      request.signal?.aborted ||
+                      (streamError as Error)?.name === 'AbortError' ||
+                      (streamError as Error)?.message
+                        ?.toLowerCase()
+                        .includes('aborted');
+                    if (!isAbort) {
+                      self.recordMetrics(
+                        provider.id,
+                        false,
+                        Date.now() - startTime,
+                        0,
+                        0,
+                        0,
+                      );
+                    }
+                    throw streamError;
+                  }
+                })();
+              }
+            } catch (error) {
+              const err = error as Error;
+
+              if (request.signal?.aborted) {
+                throw err;
+              }
+
+              if (
+                (err as Error & { status?: number }).status === 429 ||
+                err.message.includes('429') ||
+                err.message.toLowerCase().includes('rate limit')
+              ) {
+                this.hooks?.onRateLimit?.(provider, err);
+                if (this.storage) {
+                  await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+                }
+              }
+
+              if (
+                attempt < maxRetries &&
+                this.isRetryableError(err) &&
+                !request.signal?.aborted &&
+                (await this.circuitBreaker.isAvailable(provider.id))
+              ) {
+                attempt++;
+                const jitter = Math.random() * 50;
+                const delay = Math.min(
+                  baseDelay * 2 ** (attempt - 1) + jitter,
+                  10000,
+                );
+                this.hooks?.onRetry?.(provider, err, attempt, delay);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+                continue;
+              }
+
+              this.recordMetrics(
+                provider.id,
+                false,
+                Date.now() - startTime,
+                0,
+                0,
+                0,
+              );
+              lastModelError = err;
+
+              const isAuthError =
+                (err as Error & { status?: number }).status === 401 ||
+                err.message.toLowerCase().includes('unauthorized') ||
+                err.message.toLowerCase().includes('invalid api key');
+
+              if (isAuthError) {
+                break;
+              }
+
+              if (mIdx + 1 < candidateModels.length) {
+                const nextModel = candidateModels[mIdx + 1];
+                this.hooks?.onModelFallback?.(
+                  err,
+                  provider,
+                  currentModel,
+                  nextModel,
+                );
+              }
+              break;
+            }
+          }
+
+          const isAuthError =
+            (lastModelError as Error & { status?: number })?.status === 401 ||
+            lastModelError?.message?.toLowerCase().includes('unauthorized') ||
+            lastModelError?.message?.toLowerCase().includes('invalid api key');
+          if (isAuthError) {
+            break;
+          }
         }
       }
 
@@ -952,6 +935,230 @@ export class Router {
     }
 
     throw new AggregateError(errors, 'All providers failed or are unavailable');
+  }
+
+  private async executeSingleProvider(
+    provider: Provider,
+    request: UnifiedApiRequest,
+  ): Promise<UnifiedApiResponse> {
+    const candidateModels = this.getCandidateModels(provider, request);
+    let lastModelError: Error | null = null;
+
+    for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+      const isStillAvailable = await this.circuitBreaker.isAvailable(
+        provider.id,
+      );
+      if (!isStillAvailable) {
+        break;
+      }
+
+      const currentModel = candidateModels[mIdx];
+      const currentRequest: UnifiedApiRequest =
+        currentModel === request.model
+          ? request
+          : { ...request, model: currentModel };
+
+      const maxRetries = provider.retries ?? this.retries;
+      const baseDelay = provider.retryDelayMs ?? this.retryDelayMs;
+      let attempt = 0;
+
+      while (true) {
+        const startTime = Date.now();
+        try {
+          const res = await this.circuitBreaker.execute(
+            provider,
+            currentRequest,
+          );
+          const latencyMs = Date.now() - startTime;
+
+          if ('choices' in (res as UnifiedApiResponse)) {
+            const apiRes = res as UnifiedApiResponse;
+            this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
+
+            const promptTokens = apiRes.usage?.promptTokens ?? 0;
+            const completionTokens = apiRes.usage?.completionTokens ?? 0;
+            let costUsd = 0;
+            if (
+              provider.promptCostPer1k !== undefined &&
+              provider.completionCostPer1k !== undefined
+            ) {
+              costUsd =
+                (promptTokens / 1000) * provider.promptCostPer1k +
+                (completionTokens / 1000) * provider.completionCostPer1k;
+            } else if (provider.costPer1kTokens !== undefined) {
+              costUsd =
+                ((promptTokens + completionTokens) / 1000) *
+                provider.costPer1kTokens;
+            }
+
+            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
+            this.recordMetrics(
+              provider.id,
+              true,
+              latencyMs,
+              promptTokens,
+              completionTokens,
+              costUsd,
+              cachedPromptTokens,
+            );
+
+            // Adaptive rate-limit handling
+            if (apiRes.rateLimit) {
+              if (
+                apiRes.rateLimit.remainingRequests !== undefined &&
+                apiRes.rateLimit.remainingRequests <= 1
+              ) {
+                this.hooks?.onRateLimitWarning?.(provider, apiRes.rateLimit);
+                if (this.storage) {
+                  const ttlSec = apiRes.rateLimit.resetMs
+                    ? Math.max(1, Math.ceil(apiRes.rateLimit.resetMs / 1000))
+                    : 10;
+                  await this.storage.set(`rl:req:${provider.id}`, 0, ttlSec);
+                }
+              }
+            }
+
+            return apiRes;
+          }
+          throw new Error('Invalid response structure received from provider');
+        } catch (error) {
+          const err = error as Error;
+
+          if (request.signal?.aborted) {
+            throw err;
+          }
+
+          if (
+            (err as Error & { status?: number }).status === 429 ||
+            err.message.includes('429') ||
+            err.message.toLowerCase().includes('rate limit')
+          ) {
+            this.hooks?.onRateLimit?.(provider, err);
+            if (this.storage) {
+              await this.storage.set(`rl:req:${provider.id}`, 0, 10);
+            }
+          }
+
+          if (
+            attempt < maxRetries &&
+            this.isRetryableError(err) &&
+            !request.signal?.aborted &&
+            (await this.circuitBreaker.isAvailable(provider.id))
+          ) {
+            attempt++;
+            const jitter = Math.random() * 50;
+            const delay = Math.min(
+              baseDelay * 2 ** (attempt - 1) + jitter,
+              10000,
+            );
+            this.hooks?.onRetry?.(provider, err, attempt, delay);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+
+          const isAbort =
+            request.signal?.aborted ||
+            err?.name === 'AbortError' ||
+            err?.message?.toLowerCase().includes('aborted');
+
+          if (!isAbort) {
+            this.recordMetrics(
+              provider.id,
+              false,
+              Date.now() - startTime,
+              0,
+              0,
+              0,
+            );
+          }
+
+          lastModelError = err;
+
+          const isAuthError =
+            (err as Error & { status?: number }).status === 401 ||
+            err.message.toLowerCase().includes('unauthorized') ||
+            err.message.toLowerCase().includes('invalid api key');
+
+          if (isAuthError) {
+            break;
+          }
+
+          if (mIdx + 1 < candidateModels.length) {
+            const nextModel = candidateModels[mIdx + 1];
+            this.hooks?.onModelFallback?.(
+              err,
+              provider,
+              currentModel,
+              nextModel,
+            );
+          }
+          break;
+        }
+      }
+
+      const isAuthError =
+        (lastModelError as Error & { status?: number })?.status === 401 ||
+        lastModelError?.message?.toLowerCase().includes('unauthorized') ||
+        lastModelError?.message?.toLowerCase().includes('invalid api key');
+      if (isAuthError) {
+        break;
+      }
+    }
+
+    throw (
+      lastModelError ||
+      new Error(`Provider ${provider.id} failed to execute request`)
+    );
+  }
+
+  private async saveResponseToCache(
+    request: UnifiedApiRequest,
+    apiRes: UnifiedApiResponse,
+    queryEmbedding: number[] | null,
+    semanticConfig?: SemanticCacheOptions | null,
+  ): Promise<void> {
+    if (this.cacheOptions?.enabled && this.storage) {
+      try {
+        const cacheKey = this.computeCacheKey(request);
+        await this.storage.set(
+          cacheKey,
+          apiRes,
+          this.cacheOptions.ttlSeconds ?? 300,
+        );
+      } catch (_e) {
+        // Ignore cache set error
+      }
+    }
+
+    if (
+      this.cacheOptions?.enabled &&
+      semanticConfig?.enabled &&
+      !request.stream
+    ) {
+      try {
+        const promptText = extractPromptText(request.messages);
+        let emb = queryEmbedding;
+        if (!emb) {
+          emb = await this.getEmbeddingForText(promptText, semanticConfig);
+        }
+        if (emb && emb.length > 0) {
+          const maxEntries = semanticConfig.maxEntries ?? 1000;
+          const ttlMs = (this.cacheOptions.ttlSeconds ?? 300) * 1000;
+          if (this.semanticEntries.length >= maxEntries) {
+            this.semanticEntries.shift();
+          }
+          this.semanticEntries.push({
+            model: request.model,
+            prompt: promptText,
+            embedding: emb,
+            response: apiRes,
+            expiresAt: Date.now() + ttlMs,
+          });
+        }
+      } catch (_e) {
+        // Ignore semantic cache update error
+      }
+    }
   }
 
   private computeEmbeddingCacheKey(request: CreateEmbeddingRequest): string {

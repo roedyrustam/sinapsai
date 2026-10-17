@@ -9,8 +9,9 @@ import type { Provider } from '../providers/Provider.js';
 import type { BudgetOptions, CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { BudgetExceededError } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
+import { HedgedExecutor, type HedgingOptions } from './HedgedExecutor.js';
 import type { StateStorage } from './StateStorage.js';
-export type { BudgetOptions, CacheOptions, SemanticCacheOptions };
+export type { BudgetOptions, CacheOptions, HedgingOptions, SemanticCacheOptions, };
 export { BudgetExceededError };
 export type RouterStrategy = 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency' | 'adaptive' | 'smart-hybrid';
 export interface RouterOptions {
@@ -22,6 +23,7 @@ export interface RouterOptions {
     cache?: CacheOptions;
     storage?: StateStorage;
     budget?: BudgetOptions;
+    hedging?: HedgingOptions;
 }
 export declare class Router {
     private providers;
@@ -35,10 +37,14 @@ export declare class Router {
     private cacheOptions?;
     private storage?;
     private budgetOptions?;
+    private hedgingOptions?;
+    private hedgedExecutor?;
     private semanticEntries;
     private metrics;
     constructor(providers: Provider[], circuitBreaker: CircuitBreaker, options?: RouterOptions);
     getProviderById(id: string): Provider | undefined;
+    getProviders(): Provider[];
+    getHedgedExecutor(): HedgedExecutor | undefined;
     getMetrics(): SinapsMetrics;
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
     resetCircuitBreaker(providerId?: string): Promise<void>;
@@ -59,6 +65,8 @@ export declare class Router {
     private getSemanticCacheConfig;
     private getEmbeddingForText;
     execute(request: UnifiedApiRequest): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>>;
+    private executeSingleProvider;
+    private saveResponseToCache;
     private computeEmbeddingCacheKey;
     executeEmbedding(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;
 }

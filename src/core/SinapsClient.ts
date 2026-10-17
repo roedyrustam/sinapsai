@@ -44,6 +44,7 @@ import {
   type ContextCompressionOptions,
   ContextCompressor,
 } from './ContextCompressor.js';
+import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
@@ -99,6 +100,11 @@ export interface SinapsClientOptions {
    * (sliding-window or middle-out) when prompt messages exceed maxPromptTokens.
    */
   contextCompression?: ContextCompressionOptions;
+  /**
+   * Optional speculative hedged requests configuration to eliminate P99 tail latency.
+   * Automatically fires backup requests after delayMs if primary provider has not responded yet.
+   */
+  hedging?: HedgingOptions;
 }
 
 export class SinapsClient {
@@ -107,6 +113,7 @@ export class SinapsClient {
   public readonly guardrails?: PIIGuardrails;
   public readonly securityGuardrails?: SecurityGuardrails;
   public readonly contextCompressor?: ContextCompressor;
+  public readonly hedgedExecutor?: HedgedExecutor;
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
   private hooks?: SinapsEventHooks;
@@ -172,7 +179,9 @@ export class SinapsClient {
       cache: options.cache,
       storage: this.storage,
       budget: options.budget,
+      hedging: options.hedging,
     });
+    this.hedgedExecutor = this.router.getHedgedExecutor();
   }
 
   public readonly chat = {

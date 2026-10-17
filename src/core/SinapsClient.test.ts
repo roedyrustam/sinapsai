@@ -440,4 +440,130 @@ describe('SinapsClient', () => {
       expect(passedReq.messages[0].content).toContain('and write a poem.');
     });
   });
+
+  describe('Speculative Hedging Integration', () => {
+    it('should initialize hedgedExecutor when hedging options are provided', () => {
+      const client = new SinapsClient({
+        providers: [
+          { id: 'p1', name: 'p1', generateContent: vi.fn() },
+          { id: 'p2', name: 'p2', generateContent: vi.fn() },
+        ],
+        hedging: {
+          enabled: true,
+          delayMs: 200,
+          maxHedges: 1,
+        },
+      });
+
+      expect(client.hedgedExecutor).toBeDefined();
+    });
+
+    it('should fire backup hedged provider when primary exceeds delayMs threshold', async () => {
+      const hedgeFiredSpy = vi.fn();
+      const hedgeWonSpy = vi.fn();
+
+      const primaryProvider: Provider = {
+        id: 'primary-slow',
+        name: 'primary-slow',
+        generateContent: vi.fn().mockImplementation(async () => {
+          // Takes 250ms (exceeds 50ms delay)
+          await new Promise((r) => setTimeout(r, 250));
+          return {
+            id: 'slow-res',
+            model: 'slow-m',
+            choices: [
+              {
+                message: { role: 'assistant', content: 'slow' },
+                finishReason: 'stop',
+              },
+            ],
+          };
+        }),
+      };
+
+      const backupProvider: Provider = {
+        id: 'backup-fast',
+        name: 'backup-fast',
+        generateContent: vi.fn().mockImplementation(async () => {
+          // Takes 10ms
+          await new Promise((r) => setTimeout(r, 10));
+          return {
+            id: 'fast-res',
+            model: 'fast-m',
+            choices: [
+              {
+                message: { role: 'assistant', content: 'fast hedge won' },
+                finishReason: 'stop',
+              },
+            ],
+          };
+        }),
+      };
+
+      const client = new SinapsClient({
+        providers: [primaryProvider, backupProvider],
+        hedging: {
+          enabled: true,
+          delayMs: 40,
+          maxHedges: 1,
+          onHedgeFired: hedgeFiredSpy,
+          onHedgeWon: hedgeWonSpy,
+        },
+      });
+
+      const response = (await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'test latency hedging' }],
+      })) as UnifiedApiResponse;
+
+      expect(response.choices[0].message.content).toBe('fast hedge won');
+      expect(hedgeFiredSpy).toHaveBeenCalled();
+      expect(hedgeWonSpy).toHaveBeenCalled();
+    });
+
+    it('should complete with primary provider when primary responds faster than delayMs', async () => {
+      const hedgeFiredSpy = vi.fn();
+
+      const primaryProvider: Provider = {
+        id: 'primary-fast',
+        name: 'primary-fast',
+        generateContent: vi.fn().mockImplementation(async () => {
+          // Fast primary: 10ms
+          await new Promise((r) => setTimeout(r, 10));
+          return {
+            id: 'primary-res',
+            model: 'primary-m',
+            choices: [
+              {
+                message: { role: 'assistant', content: 'primary direct' },
+                finishReason: 'stop',
+              },
+            ],
+          };
+        }),
+      };
+
+      const backupProvider: Provider = {
+        id: 'backup-never',
+        name: 'backup-never',
+        generateContent: vi.fn(),
+      };
+
+      const client = new SinapsClient({
+        providers: [primaryProvider, backupProvider],
+        hedging: {
+          enabled: true,
+          delayMs: 80,
+          onHedgeFired: hedgeFiredSpy,
+        },
+      });
+
+      const response = (await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'fast test' }],
+      })) as UnifiedApiResponse;
+
+      expect(response.choices[0].message.content).toBe('primary direct');
+      expect(hedgeFiredSpy).not.toHaveBeenCalled();
+      expect(backupProvider.generateContent).not.toHaveBeenCalled();
+    });
+  });
 });

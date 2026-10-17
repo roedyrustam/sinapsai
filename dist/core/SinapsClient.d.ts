@@ -10,6 +10,7 @@ import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, Cr
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
+import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import { SecurityGuardrails } from './SecurityGuardrails.js';
@@ -59,6 +60,11 @@ export interface SinapsClientOptions {
      * (sliding-window or middle-out) when prompt messages exceed maxPromptTokens.
      */
     contextCompression?: ContextCompressionOptions;
+    /**
+     * Optional speculative hedged requests configuration to eliminate P99 tail latency.
+     * Automatically fires backup requests after delayMs if primary provider has not responded yet.
+     */
+    hedging?: HedgingOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -66,6 +72,7 @@ export declare class SinapsClient {
     readonly guardrails?: PIIGuardrails;
     readonly securityGuardrails?: SecurityGuardrails;
     readonly contextCompressor?: ContextCompressor;
+    readonly hedgedExecutor?: HedgedExecutor;
     private isReversiblePII;
     private modelAliases;
     private hooks?;

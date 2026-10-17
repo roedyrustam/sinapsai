@@ -367,6 +367,12 @@ export interface SinapsEventHooks {
     violation: SecurityViolation,
     messageIndex: number,
   ) => void;
+  onHedgeFired?: (
+    primaryProvider: Provider,
+    backupProvider: Provider,
+    delayMs: number,
+  ) => void;
+  onHedgeWon?: (winnerProvider: Provider, elapsedMs: number) => void;
 }
 
 export interface BatchProgress {
@@ -497,3 +503,16 @@ export interface SecurityGuardrailsOptions {
    */
   allowedPatterns?: RegExp[];
 }
+
+export type {
+  CompressionResult,
+  ContextCompressionOptions,
+} from '../core/ContextCompressor.js';
+
+export type ContextCompressionResult =
+  import('../core/ContextCompressor.js').CompressionResult;
+
+export type {
+  HedgeRaceResult,
+  HedgingOptions,
+} from '../core/HedgedExecutor.js';
