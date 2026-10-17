@@ -79,6 +79,9 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [24. Alias Model Virtual & Pemetaan Dinamis](#24-alias-model-virtual--pemetaan-dinamis)
   - [25. Pemeriksaan Kesehatan Gateway & Probe Liveness](#25-pemeriksaan-kesehatan-gateway--probe-liveness)
   - [26. Guardrail Keamanan & Pertahanan Prompt Injection](#26-guardrail-keamanan--pertahanan-prompt-injection)
+  - [27. Kompresi Konteks Dinamis (ContextCompressor)](#27-kompresi-konteks-dinamis-contextcompressor)
+  - [28. FinOps Guardrail Anggaran & Batas Biaya](#28-finops-guardrail-anggaran--batas-biaya)
+  - [29. Permintaan Spekulatif Hedged (Pemberantasan Latensi Ekor)](#29-permintaan-spekulatif-hedged-pemberantasan-latensi-ekor)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -1041,6 +1044,65 @@ try {
 
 ---
 
+### 27. Kompresi Konteks Dinamis (`ContextCompressor`)
+
+Pertahankan percakapan panjang dalam batas kuota token secara otomatis tanpa dependensi eksternal. SinapsAI menyediakan `ContextCompressor` dengan preservasi grup pemanggilan tool secara atomik dan dua strategi pemotongan cerdas:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  contextCompression: {
+    maxPromptTokens: 2000,
+    strategy: 'sliding-window', // 'sliding-window' (menghapus giliran terlama) atau 'middle-out' (menjaga sistem + prompt user pertama + giliran terbaru)
+    preserveSystemMessages: true,
+  },
+});
+```
+
+---
+
+### 28. FinOps Guardrail Anggaran & Batas Biaya
+
+Cegah pembengkakan tagihan API tak terkendali dengan menentukan plafon biaya USD dan token secara ketat melalui pemblokiran otomatis maupun notifikasi peringatan:
+
+```typescript
+import { SinapsClient, OpenAiProvider, BudgetExceededError } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  budget: {
+    maxCostUsd: 10.0, // Batas belanja maksimal $10.00 USD
+    maxTotalTokens: 500000,
+    action: 'block', // 'block' melemparkan BudgetExceededError, 'warn' memicu callback peringatan
+    onBudgetWarning: (currentCostUsd, limitUsd) => {
+      console.warn(`[ANGGARAN] Pengeluaran saat ini: $${currentCostUsd} / $${limitUsd}`);
+    },
+  },
+});
+```
+
+---
+
+### 29. Permintaan Spekulatif Hedged (Pemberantasan Latensi Ekor)
+
+Hilangkan lonjakan latensi ekor P99/P99.9 dengan meluncurkan permintaan cadangan spekulatif (*hedged requests*) di seluruh penyedia redundan ketika penyedia utama melampaui `delayMs`:
+
+```typescript
+import { HedgedExecutor, OpenAiProvider, GroqProvider } from 'sinapsai';
+
+const executor = new HedgedExecutor({
+  delayMs: 1200, // Luncurkan cadangan jika penyedia utama belum merespons dalam 1.2 detik
+  maxHedges: 1,
+  onHedgeWon: (winner, elapsedMs) => {
+    console.log(`Hedge dimenangkan oleh ${winner.name} dalam ${elapsedMs}ms`);
+  },
+});
+```
+
+---
+
 ## 🧩 Penyedia yang Didukung (Providers)
 
 | Provider | Kelas Ekspor | Parameter Tambahan |
@@ -1049,6 +1111,8 @@ try {
 | **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, token penalaran (`reasoning_content`) |
+| **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `XAI_MODELS` |
+| **Cohere** | `CohereProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `COHERE_MODELS` |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0), `fallbackModels` |
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, ekstraksi reasoning (`reasoning_format: 'parsed'`, `reasoning_content`), durasi rate limit (`7.66s`, `2m59.56s`), penyesuaian suhu, sanitasi nama pesan |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |

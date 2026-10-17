@@ -77,6 +77,9 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [24. Virtual Model Aliases & Dynamic Mapping](#24-virtual-model-aliases--dynamic-mapping)
   - [25. Gateway Health Checks & Liveness Probes](#25-gateway-health-checks--liveness-probes)
   - [26. Security Guardrails & Prompt Injection Defense](#26-security-guardrails--prompt-injection-defense)
+  - [27. Dynamic Context Compression (ContextCompressor)](#27-dynamic-context-compression-contextcompressor)
+  - [28. FinOps Budget Guardrails & Cost Limits](#28-finops-budget-guardrails--cost-limits)
+  - [29. Speculative Hedged Requests (Tail-Latency Reduction)](#29-speculative-hedged-requests-tail-latency-reduction)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -1037,6 +1040,65 @@ try {
 
 ---
 
+### 27. Dynamic Context Compression (`ContextCompressor`)
+
+Keep long-running conversations within token limits automatically without external dependencies. SinapsAI provides `ContextCompressor` with atomic tool-call preservation and two smart truncation strategies:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  contextCompression: {
+    maxPromptTokens: 2000,
+    strategy: 'sliding-window', // 'sliding-window' (drops oldest turns) or 'middle-out' (keeps system + first user + newest turns)
+    preserveSystemMessages: true,
+  },
+});
+```
+
+---
+
+### 28. FinOps Budget Guardrails & Cost Limits
+
+Prevent runaway API bills by setting strict spend and token envelopes with hard blocking or soft alert warnings:
+
+```typescript
+import { SinapsClient, OpenAiProvider, BudgetExceededError } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  budget: {
+    maxCostUsd: 10.0, // $10.00 maximum spend
+    maxTotalTokens: 500000,
+    action: 'block', // 'block' throws BudgetExceededError, 'warn' calls onBudgetWarning
+    onBudgetWarning: (currentCostUsd, limitUsd) => {
+      console.warn(`[BUDGET] Current spend: $${currentCostUsd} / $${limitUsd}`);
+    },
+  },
+});
+```
+
+---
+
+### 29. Speculative Hedged Requests (Tail-Latency Reduction)
+
+Eliminate P99/P99.9 latency spikes by speculatively launching backup requests across redundant providers when the primary provider exceeds `delayMs`:
+
+```typescript
+import { HedgedExecutor, OpenAiProvider, GroqProvider } from 'sinapsai';
+
+const executor = new HedgedExecutor({
+  delayMs: 1200, // Fire backup if primary does not respond in 1.2s
+  maxHedges: 1,
+  onHedgeWon: (winner, elapsedMs) => {
+    console.log(`Hedge won by ${winner.name} in ${elapsedMs}ms`);
+  },
+});
+```
+
+---
+
 ## 🧩 Supported Providers
 
 | Provider | Exported Class | Options Supported |
@@ -1045,6 +1107,8 @@ try {
 | **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning tokens (`reasoning_content`) |
+| **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `XAI_MODELS` |
+| **Cohere** | `CohereProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `COHERE_MODELS` |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0), `fallbackModels` |
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |

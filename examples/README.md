@@ -72,6 +72,15 @@ npx tsx examples/21-model-aliases-and-health-checks.ts
 
 # 22. Security Guardrails & Prompt Injection Defense
 npx tsx examples/22-security-prompt-injection-defense.ts
+
+# 23. Context Compression & FinOps Budget Guardrails
+npx tsx examples/23-context-compression-and-budget.ts
+
+# 24. xAI (Grok) & Cohere v2 Providers Integration
+npx tsx examples/24-xai-and-cohere-providers.ts
+
+# 25. Hedged Speculative Requests for Tail-Latency (P99) Reduction
+npx tsx examples/25-hedged-requests-tail-latency.ts
 ```
 
 
