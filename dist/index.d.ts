@@ -12,6 +12,7 @@ export * from './core/CircuitBreaker.js';
 export * from './core/CloudflareKVStorage.js';
 export * from './core/ContextCompressor.js';
 export * from './core/D1Storage.js';
+export * from './core/HedgedExecutor.js';
 export * from './core/InMemoryStorage.js';
 export * from './core/PIIGuardrails.js';
 export * from './core/RedisStorage.js';

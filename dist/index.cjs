@@ -3016,6 +3016,127 @@ var D1Storage = class {
   }
 };
 
+// src/core/HedgedExecutor.ts
+var HedgedExecutor = class {
+  options;
+  constructor(options = {}) {
+    this.options = {
+      ...options,
+      enabled: options.enabled ?? true,
+      delayMs: options.delayMs ?? 1500,
+      maxHedges: options.maxHedges ?? 1
+    };
+  }
+  /**
+   * Executes a request against the primary provider and races up to `maxHedges`
+   * secondary providers if the primary exceeds `delayMs`.
+   * Automatically aborts all losing in-flight requests once a winner resolves.
+   */
+  async execute(providers, request, dispatcher) {
+    if (providers.length === 0) {
+      throw new Error(
+        "HedgedExecutor: No available providers to execute request."
+      );
+    }
+    const startTime = Date.now();
+    if (!this.options.enabled || request.stream || providers.length === 1) {
+      const primary = providers[0];
+      const response = await dispatcher(primary, request);
+      return {
+        response,
+        winnerProvider: primary,
+        wasHedged: false,
+        elapsedMs: Date.now() - startTime
+      };
+    }
+    const candidateCount = Math.min(
+      providers.length,
+      1 + Math.max(1, this.options.maxHedges)
+    );
+    const selectedProviders = providers.slice(0, candidateCount);
+    const controllers = [];
+    const timers = [];
+    let settled = false;
+    const cleanup = (winnerIndex) => {
+      for (const t of timers) {
+        clearTimeout(t);
+      }
+      controllers.forEach((ctrl, idx) => {
+        if (idx !== winnerIndex && !ctrl.signal.aborted) {
+          ctrl.abort();
+        }
+      });
+    };
+    if (request.signal) {
+      if (request.signal.aborted) {
+        throw new Error("Request aborted by caller");
+      }
+      request.signal.addEventListener(
+        "abort",
+        () => {
+          settled = true;
+          cleanup();
+        },
+        { once: true }
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const errors = [];
+      let completedCount = 0;
+      const launchAttempt = (provider, index) => {
+        if (settled) return;
+        const ctrl = new AbortController();
+        controllers[index] = ctrl;
+        const hedgedReq = {
+          ...request,
+          signal: ctrl.signal
+        };
+        dispatcher(provider, hedgedReq).then((response) => {
+          if (settled) return;
+          settled = true;
+          const elapsedMs = Date.now() - startTime;
+          cleanup(index);
+          if (index > 0) {
+            this.options.onHedgeWon?.(provider, elapsedMs);
+          }
+          resolve({
+            response,
+            winnerProvider: provider,
+            wasHedged: index > 0,
+            elapsedMs
+          });
+        }).catch((err) => {
+          if (settled) return;
+          errors.push(err instanceof Error ? err : new Error(String(err)));
+          completedCount++;
+          if (completedCount >= selectedProviders.length) {
+            settled = true;
+            cleanup();
+            reject(
+              errors[0] || new Error("All hedged provider attempts failed.")
+            );
+          }
+        });
+      };
+      launchAttempt(selectedProviders[0], 0);
+      for (let i = 1; i < selectedProviders.length; i++) {
+        const delay = this.options.delayMs * i;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            this.options.onHedgeFired?.(
+              selectedProviders[0],
+              selectedProviders[i],
+              delay
+            );
+            launchAttempt(selectedProviders[i], i);
+          }
+        }, delay);
+        timers.push(timer);
+      }
+    });
+  }
+};
+
 // src/core/RedisStorage.ts
 var RedisStorage = class {
   redis;
@@ -6330,6 +6451,7 @@ exports.DeepSeekProvider = DeepSeekProvider;
 exports.GEMINI_MODELS = GEMINI_MODELS;
 exports.GeminiProvider = GeminiProvider;
 exports.GroqProvider = GroqProvider;
+exports.HedgedExecutor = HedgedExecutor;
 exports.InMemoryStorage = InMemoryStorage;
 exports.MistralProvider = MistralProvider;
 exports.OPENROUTER_FREE_MODELS = OPENROUTER_FREE_MODELS;
