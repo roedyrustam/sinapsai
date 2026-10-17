@@ -136,6 +136,18 @@ export class GeminiProvider implements Provider {
     // biome-ignore lint/suspicious/noExplicitAny: complex gemini parts
     const systemParts: any[] = [];
 
+    // 1. Resolusi nama fungsi otomatis untuk role === 'tool' jika msg.name kosong
+    const toolCallIdToName = new Map<string, string>();
+    for (const m of request.messages) {
+      if (m.role === 'assistant' && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          if (tc.id && tc.function?.name) {
+            toolCallIdToName.set(tc.id, tc.function.name);
+          }
+        }
+      }
+    }
+
     const formatGeminiParts = (
       content: string | ContentPart[] | null | undefined,
       // biome-ignore lint/suspicious/noExplicitAny: gemini part format
@@ -204,12 +216,19 @@ export class GeminiProvider implements Provider {
           typeof msg.content === 'string'
             ? msg.content
             : JSON.stringify(msg.content ?? '');
+        const resolvedFunctionName =
+          msg.name ||
+          (msg.tool_call_id
+            ? toolCallIdToName.get(msg.tool_call_id)
+            : undefined) ||
+          'function';
+
         contents.push({
           role: 'user',
           parts: [
             {
               functionResponse: {
-                name: msg.name || 'function',
+                name: resolvedFunctionName,
                 response: { content: responseContent },
               },
             },
@@ -272,8 +291,18 @@ export class GeminiProvider implements Provider {
     if (request.maxTokens !== undefined) {
       generationConfig.maxOutputTokens = request.maxTokens;
     }
+    // 2. Dukungan penuh JSON Schema (Structured Outputs) di generationConfig
     if (request.responseFormat?.type === 'json_object') {
       generationConfig.responseMimeType = 'application/json';
+    } else if (
+      request.responseFormat?.type === 'json_schema' &&
+      request.responseFormat.json_schema
+    ) {
+      generationConfig.responseMimeType = 'application/json';
+      const rawSchema = { ...request.responseFormat.json_schema.schema };
+      // Hapus field additionalProperties karena Gemini API v1beta sering menolak properti ini
+      delete (rawSchema as Record<string, unknown>).additionalProperties;
+      generationConfig.responseSchema = rawSchema;
     }
 
     // Extended Thinking / Reasoning configuration
@@ -305,6 +334,23 @@ export class GeminiProvider implements Provider {
           })),
         },
       ];
+    }
+    // 3. Pemetaan toolChoice ke Gemini toolConfig
+    if (request.toolChoice) {
+      if (request.toolChoice === 'auto') {
+        payload.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+      } else if (request.toolChoice === 'none') {
+        payload.toolConfig = { functionCallingConfig: { mode: 'NONE' } };
+      } else if (request.toolChoice === 'required') {
+        payload.toolConfig = { functionCallingConfig: { mode: 'ANY' } };
+      } else if (typeof request.toolChoice === 'object') {
+        payload.toolConfig = {
+          functionCallingConfig: {
+            mode: 'ANY',
+            allowedFunctionNames: [request.toolChoice.function.name],
+          },
+        };
+      }
     }
 
     return payload;
@@ -393,7 +439,10 @@ export class GeminiProvider implements Provider {
 
     const baseUrl =
       this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
-    const finalUrl = `${baseUrl}/models/${targetModel}:${request.stream ? 'streamGenerateContent?alt=sse&key=' : 'generateContent?key='}${this.config.apiKey}`;
+    const endpointAction = request.stream
+      ? 'streamGenerateContent?alt=sse'
+      : 'generateContent';
+    const finalUrl = `${baseUrl}/models/${targetModel}:${endpointAction}`;
 
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -415,6 +464,7 @@ export class GeminiProvider implements Provider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': this.config.apiKey || '',
         },
         body: JSON.stringify(payload),
         signal: controller.signal,

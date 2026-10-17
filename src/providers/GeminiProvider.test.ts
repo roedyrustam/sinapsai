@@ -187,6 +187,173 @@ describe('GeminiProvider', () => {
         },
       ]);
     });
+
+    it('should resolve tool function name from assistant tool_calls when msg.name is omitted', () => {
+      const request: UnifiedApiRequest = {
+        model: 'gemini-2.5-flash',
+        messages: [
+          { role: 'user', content: 'What is the weather in Tokyo?' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_12345',
+                type: 'function',
+                function: {
+                  name: 'get_weather',
+                  arguments: JSON.stringify({ location: 'Tokyo' }),
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_12345',
+            content: JSON.stringify({ temp: 22, condition: 'Sunny' }),
+          },
+          {
+            role: 'tool',
+            content: 'some default result',
+          },
+        ],
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.contents[1]).toEqual({
+        role: 'model',
+        parts: [
+          {
+            functionCall: {
+              name: 'get_weather',
+              args: { location: 'Tokyo' },
+            },
+          },
+        ],
+      });
+
+      expect(result.contents[2]).toEqual({
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'get_weather',
+              response: { content: '{"temp":22,"condition":"Sunny"}' },
+            },
+          },
+        ],
+      });
+
+      // Fallback to 'function' when name and tool_call_id are absent
+      expect(result.contents[3]).toEqual({
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'function',
+              response: { content: 'some default result' },
+            },
+          },
+        ],
+      });
+    });
+
+    it('should support structured outputs with responseFormat json_schema and strip additionalProperties', () => {
+      const request: UnifiedApiRequest = {
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'Extract user profile' }],
+        responseFormat: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'UserProfile',
+            schema: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                age: { type: 'number' },
+              },
+              required: ['name', 'age'],
+              additionalProperties: false,
+            },
+          },
+        },
+      };
+
+      const result = provider.formatRequest(request);
+
+      expect(result.generationConfig.responseMimeType).toBe('application/json');
+      expect(result.generationConfig.responseSchema).toEqual({
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          age: { type: 'number' },
+        },
+        required: ['name', 'age'],
+      });
+      expect(
+        result.generationConfig.responseSchema.additionalProperties,
+      ).toBeUndefined();
+    });
+
+    it('should correctly map toolChoice options to Gemini toolConfig', () => {
+      const baseRequest: UnifiedApiRequest = {
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'Check tools' }],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'calculator',
+              description: 'Calculate numbers',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+      };
+
+      // 1. auto
+      const autoResult = provider.formatRequest({
+        ...baseRequest,
+        toolChoice: 'auto',
+      });
+      expect(autoResult.toolConfig).toEqual({
+        functionCallingConfig: { mode: 'AUTO' },
+      });
+
+      // 2. none
+      const noneResult = provider.formatRequest({
+        ...baseRequest,
+        toolChoice: 'none',
+      });
+      expect(noneResult.toolConfig).toEqual({
+        functionCallingConfig: { mode: 'NONE' },
+      });
+
+      // 3. required
+      const requiredResult = provider.formatRequest({
+        ...baseRequest,
+        toolChoice: 'required',
+      });
+      expect(requiredResult.toolConfig).toEqual({
+        functionCallingConfig: { mode: 'ANY' },
+      });
+
+      // 4. specific function
+      const specificResult = provider.formatRequest({
+        ...baseRequest,
+        toolChoice: {
+          type: 'function',
+          function: { name: 'calculator' },
+        },
+      });
+      expect(specificResult.toolConfig).toEqual({
+        functionCallingConfig: {
+          mode: 'ANY',
+          allowedFunctionNames: ['calculator'],
+        },
+      });
+    });
   });
 
   describe('formatResponse', () => {
@@ -331,6 +498,111 @@ describe('GeminiProvider', () => {
         name: 'get_price',
         arguments: JSON.stringify({ symbol: 'ETH' }),
       });
+    });
+  });
+
+  describe('generateContent', () => {
+    it('should send apiKey in x-goog-api-key header and not in query params for non-streaming', async () => {
+      const mockGeminiResponse = {
+        candidates: [
+          {
+            content: {
+              parts: [{ text: 'Hello secure Gemini!' }],
+              role: 'model',
+            },
+            finishReason: 'STOP',
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 4,
+          totalTokenCount: 9,
+        },
+      };
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockGeminiResponse,
+        headers: new Headers(),
+      });
+
+      const response = await provider.generateContent({
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': 'test-key',
+          },
+        }),
+      );
+
+      // Verify URL does not contain ?key= or &key=
+      // biome-ignore lint/suspicious/noExplicitAny: mock calls
+      const calledUrl = (global.fetch as any).mock.calls[0][0];
+      expect(calledUrl).not.toContain('key=');
+      // biome-ignore lint/suspicious/noExplicitAny: response choices
+      expect((response as any).choices[0].message.content).toBe(
+        'Hello secure Gemini!',
+      );
+    });
+
+    it('should format stream endpoint with streamGenerateContent?alt=sse and header authentication', async () => {
+      const sseStream = new ReadableStream({
+        start(controller) {
+          const chunk = JSON.stringify({
+            candidates: [
+              {
+                content: { parts: [{ text: 'Streamed part' }] },
+                finishReason: 'STOP',
+              },
+            ],
+          });
+          controller.enqueue(new TextEncoder().encode(`data: ${chunk}\n\n`));
+          controller.close();
+        },
+      });
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        body: sseStream,
+        headers: new Headers(),
+      });
+
+      const stream = await provider.generateContent({
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'Stream this' }],
+        stream: true,
+      });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': 'test-key',
+          },
+        }),
+      );
+
+      // biome-ignore lint/suspicious/noExplicitAny: mock calls
+      const calledUrl = (global.fetch as any).mock.calls[0][0];
+      expect(calledUrl).not.toContain('key=');
+
+      // Consume stream
+      const chunks = [];
+      // biome-ignore lint/suspicious/noExplicitAny: async chunk
+      for await (const chunk of stream as AsyncIterable<any>) {
+        chunks.push(chunk);
+      }
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks[0].choices[0].delta.content).toBe('Streamed part');
     });
   });
 

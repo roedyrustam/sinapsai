@@ -3474,6 +3474,16 @@ var GeminiProvider = class {
   formatRequest(request) {
     const contents = [];
     const systemParts = [];
+    const toolCallIdToName = /* @__PURE__ */ new Map();
+    for (const m of request.messages) {
+      if (m.role === "assistant" && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          if (tc.id && tc.function?.name) {
+            toolCallIdToName.set(tc.id, tc.function.name);
+          }
+        }
+      }
+    }
     const formatGeminiParts = (content) => {
       if (content === null || content === void 0) {
         return [{ text: "" }];
@@ -3534,12 +3544,13 @@ var GeminiProvider = class {
         }
       } else if (msg.role === "tool") {
         const responseContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
+        const resolvedFunctionName = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : void 0) || "function";
         contents.push({
           role: "user",
           parts: [
             {
               functionResponse: {
-                name: msg.name || "function",
+                name: resolvedFunctionName,
                 response: { content: responseContent }
               }
             }
@@ -3597,6 +3608,11 @@ var GeminiProvider = class {
     }
     if (request.responseFormat?.type === "json_object") {
       generationConfig.responseMimeType = "application/json";
+    } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
+      generationConfig.responseMimeType = "application/json";
+      const rawSchema = { ...request.responseFormat.json_schema.schema };
+      delete rawSchema.additionalProperties;
+      generationConfig.responseSchema = rawSchema;
     }
     const thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
     if (thinkingBudget !== void 0) {
@@ -3624,6 +3640,22 @@ var GeminiProvider = class {
           }))
         }
       ];
+    }
+    if (request.toolChoice) {
+      if (request.toolChoice === "auto") {
+        payload.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
+      } else if (request.toolChoice === "none") {
+        payload.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+      } else if (request.toolChoice === "required") {
+        payload.toolConfig = { functionCallingConfig: { mode: "ANY" } };
+      } else if (typeof request.toolChoice === "object") {
+        payload.toolConfig = {
+          functionCallingConfig: {
+            mode: "ANY",
+            allowedFunctionNames: [request.toolChoice.function.name]
+          }
+        };
+      }
     }
     return payload;
   }
@@ -3698,7 +3730,8 @@ var GeminiProvider = class {
     const payload = this.formatRequest(request);
     const targetModel = this.resolveModel(request.model);
     const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const finalUrl = `${baseUrl}/models/${targetModel}:${request.stream ? "streamGenerateContent?alt=sse&key=" : "generateContent?key="}${this.config.apiKey}`;
+    const endpointAction = request.stream ? "streamGenerateContent?alt=sse" : "generateContent";
+    const finalUrl = `${baseUrl}/models/${targetModel}:${endpointAction}`;
     const controller = new AbortController();
     let timeoutId;
     if (this.config.timeoutMs) {
@@ -3717,7 +3750,8 @@ var GeminiProvider = class {
       const response = await fetch(finalUrl, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.config.apiKey || ""
         },
         body: JSON.stringify(payload),
         signal: controller.signal
