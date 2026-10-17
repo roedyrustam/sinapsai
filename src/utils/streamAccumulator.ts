@@ -104,11 +104,13 @@ export async function accumulateStream(
                 arguments: tc.function?.arguments || '',
               });
             } else {
-              const existing = toolCallsMap.get(index)!;
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name += tc.function.name;
-              if (tc.function?.arguments) {
-                existing.arguments += tc.function.arguments;
+              const existing = toolCallsMap.get(index);
+              if (existing) {
+                if (tc.id) existing.id = tc.id;
+                if (tc.function?.name) existing.name += tc.function.name;
+                if (tc.function?.arguments) {
+                  existing.arguments += tc.function.arguments;
+                }
               }
             }
           }
@@ -143,9 +145,7 @@ export async function accumulateStream(
           tool_calls: finalToolCalls,
         },
         finishReason:
-          finalToolCalls &&
-          finalToolCalls.length > 0 &&
-          finishReason === 'stop'
+          finalToolCalls && finalToolCalls.length > 0 && finishReason === 'stop'
             ? 'tool_calls'
             : finishReason,
       },

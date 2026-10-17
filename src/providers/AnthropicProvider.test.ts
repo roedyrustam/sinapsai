@@ -7,7 +7,10 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { UnifiedApiRequest } from '../types/index.js';
+import type {
+  UnifiedApiRequest,
+  UnifiedApiStreamChunk,
+} from '../types/index.js';
 import { AnthropicProvider } from './AnthropicProvider.js';
 
 describe('AnthropicProvider', () => {
@@ -394,12 +397,14 @@ describe('AnthropicProvider', () => {
       try {
         const stream = await provider.generateContent({
           model: 'claude-3-7-sonnet',
-          messages: [{ role: 'user', content: 'What is the weather in Tokyo?' }],
+          messages: [
+            { role: 'user', content: 'What is the weather in Tokyo?' },
+          ],
           stream: true,
         });
 
-        const chunks: any[] = [];
-        for await (const chunk of stream as AsyncIterable<any>) {
+        const chunks: UnifiedApiStreamChunk[] = [];
+        for await (const chunk of stream as AsyncIterable<UnifiedApiStreamChunk>) {
           chunks.push(chunk);
         }
 
@@ -415,9 +420,9 @@ describe('AnthropicProvider', () => {
           (c) => c.choices[0]?.delta?.tool_calls?.[0]?.function?.arguments,
         );
         expect(toolDelta).toBeDefined();
-        expect(toolDelta.choices[0].delta.tool_calls[0].function.arguments).toBe(
-          '{"city": "Tokyo"}',
-        );
+        expect(
+          toolDelta.choices[0].delta.tool_calls[0].function.arguments,
+        ).toBe('{"city": "Tokyo"}');
 
         const endChunk = chunks.find(
           (c) => c.choices[0]?.finishReason === 'tool_calls',

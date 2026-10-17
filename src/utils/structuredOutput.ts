@@ -33,7 +33,7 @@ export function extractJsonFromText<T = unknown>(text: string): T {
   // 2. Extract from markdown code fences: ```json ... ``` or ``` ... ```
   const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/i;
   const match = trimmed.match(codeBlockRegex);
-  if (match && match[1]) {
+  if (match?.[1]) {
     try {
       return JSON.parse(match[1].trim()) as T;
     } catch (_e) {

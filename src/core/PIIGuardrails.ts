@@ -371,7 +371,10 @@ export class PIIGuardrails {
    * Reversibly tokenizes all detected PII in text using unique surrogate tokens.
    * Returns the tokenized text and a key-value vault map of tokens to original values.
    */
-  tokenize(text: string, existingVault?: Map<string, string>): PIITokenizeResult {
+  tokenize(
+    text: string,
+    existingVault?: Map<string, string>,
+  ): PIITokenizeResult {
     const vault = existingVault || new Map<string, string>();
     if (!this.enabled || !text) return { text, vault };
 

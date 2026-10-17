@@ -15,6 +15,7 @@ export * from './core/InMemoryStorage.js';
 export * from './core/PIIGuardrails.js';
 export * from './core/RedisStorage.js';
 export * from './core/Router.js';
+export * from './core/SecurityGuardrails.js';
 export * from './core/SinapsClient.js';
 export * from './core/StateStorage.js';
 export * from './providers/index.js';

@@ -198,6 +198,30 @@ export interface CircuitBreakerStatus {
     failures: number;
     successes: number;
 }
+export interface ProviderHealth {
+    id: string;
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    circuitState: CircuitState;
+    latencyMs?: number;
+    error?: string;
+    successRate: number;
+}
+export interface GatewayHealthReport {
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    timestamp: number;
+    providers: ProviderHealth[];
+}
+export interface HealthCheckOptions {
+    /**
+     * If true, sends an active probe request to test provider connectivity.
+     * If false (default), conducts a passive inspection of circuit states & metrics.
+     */
+    ping?: boolean;
+    /**
+     * Timeout in milliseconds for probe ping requests (default: 3000ms).
+     */
+    timeoutMs?: number;
+}
 export interface SemanticCacheOptions {
     enabled?: boolean;
     /**
@@ -239,6 +263,7 @@ export interface SinapsEventHooks {
     onRateLimit?: (provider: Provider, error: Error) => void;
     onRateLimitWarning?: (provider: Provider, rateLimit: RateLimitInfo) => void;
     onRetry?: (provider: Provider, error: Error, attempt: number, delayMs: number) => void;
+    onSecurityViolation?: (violation: SecurityViolation, messageIndex: number) => void;
 }
 export interface BatchProgress {
     /**
@@ -322,5 +347,40 @@ export interface BatchResult<T> {
      * Total execution time in milliseconds.
      */
     durationMs: number;
+}
+export type SecurityAction = 'block' | 'sanitize' | 'warn';
+export type ThreatCategory = 'prompt_injection' | 'jailbreak' | 'system_override' | 'delimiter_hijack' | 'secret_exfiltration';
+export interface SecurityViolation {
+    category: ThreatCategory;
+    pattern: string;
+    matchedText: string;
+    action: SecurityAction;
+    timestamp: number;
+}
+export interface SecurityScanResult {
+    safe: boolean;
+    sanitizedText: string;
+    violations: SecurityViolation[];
+}
+export interface SecurityGuardrailsOptions {
+    enabled?: boolean;
+    /**
+     * Action to perform when a threat is detected:
+     * - 'block': Throws a SecurityGuardrailError before sending to provider (default).
+     * - 'sanitize': Redacts or neutralizes the detected threat tokens and continues.
+     * - 'warn': Logs or emits onSecurityViolation hook without modifying text or blocking.
+     */
+    action?: SecurityAction;
+    /**
+     * Optional custom detection patterns.
+     */
+    customPatterns?: Array<{
+        category: ThreatCategory;
+        regex: RegExp;
+    }>;
+    /**
+     * Optional allowlist patterns that should be ignored even if matched by detection rules.
+     */
+    allowedPatterns?: RegExp[];
 }
 //# sourceMappingURL=index.d.ts.map

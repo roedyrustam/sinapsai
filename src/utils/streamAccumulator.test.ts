@@ -184,7 +184,7 @@ describe('accumulateStream', () => {
     expect(toolCalls).toBeDefined();
     expect(toolCalls).toHaveLength(2);
 
-    expect(toolCalls![0]).toEqual({
+    expect(toolCalls?.[0]).toEqual({
       id: 'call_weather_123',
       type: 'function',
       function: {
@@ -193,7 +193,7 @@ describe('accumulateStream', () => {
       },
     });
 
-    expect(toolCalls![1]).toEqual({
+    expect(toolCalls?.[1]).toEqual({
       id: 'call_calc_456',
       type: 'function',
       function: {

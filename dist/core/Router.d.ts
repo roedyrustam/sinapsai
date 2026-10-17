@@ -6,7 +6,7 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import type { StateStorage } from './StateStorage.js';
 export type { CacheOptions, SemanticCacheOptions };
@@ -39,6 +39,12 @@ export declare class Router {
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
     resetCircuitBreaker(providerId?: string): Promise<void>;
     clearCache(): Promise<void>;
+    /**
+     * Evaluates health and liveness across all configured providers.
+     * Performs passive inspection of circuit states and metrics by default,
+     * or active probe pings if options.ping is true.
+     */
+    checkHealth(options?: HealthCheckOptions): Promise<GatewayHealthReport>;
     private recordMetrics;
     private estimateRequestCost;
     calculateAdaptiveScore(provider: Provider, request?: UnifiedApiRequest): number;

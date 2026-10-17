@@ -56,6 +56,141 @@ var init_stream = __esm({
   }
 });
 
+// src/utils/streamAccumulator.ts
+async function accumulateStream(stream, options) {
+  let id = "";
+  let model = "";
+  let content = "";
+  let hasContent = false;
+  let reasoningContent = "";
+  let hasReasoning = false;
+  let finishReason = "stop";
+  let usage;
+  const toolCallsMap = /* @__PURE__ */ new Map();
+  for await (const chunk of stream) {
+    options?.onChunk?.(chunk);
+    if (!id && chunk.id) id = chunk.id;
+    if (!model && chunk.model) model = chunk.model;
+    if (chunk.usage) {
+      usage = { ...chunk.usage };
+    }
+    const choice = chunk.choices?.[0];
+    if (choice) {
+      if (choice.finishReason) {
+        finishReason = choice.finishReason;
+      }
+      const delta = choice.delta;
+      if (delta) {
+        if (delta.content !== void 0 && delta.content !== null) {
+          content += delta.content;
+          hasContent = true;
+        }
+        if (delta.reasoning_content !== void 0 && delta.reasoning_content !== null) {
+          reasoningContent += delta.reasoning_content;
+          hasReasoning = true;
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const index = tc.index ?? 0;
+            if (!toolCallsMap.has(index)) {
+              toolCallsMap.set(index, {
+                id: tc.id || "",
+                name: tc.function?.name || "",
+                arguments: tc.function?.arguments || ""
+              });
+            } else {
+              const existing = toolCallsMap.get(index);
+              if (existing) {
+                if (tc.id) existing.id = tc.id;
+                if (tc.function?.name) existing.name += tc.function.name;
+                if (tc.function?.arguments) {
+                  existing.arguments += tc.function.arguments;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  let finalToolCalls;
+  if (toolCallsMap.size > 0) {
+    finalToolCalls = Array.from(toolCallsMap.entries()).sort(([a], [b]) => a - b).map(([_, tc], idx) => ({
+      id: tc.id || `call_${Date.now()}_${idx}`,
+      type: "function",
+      function: {
+        name: tc.name,
+        arguments: tc.arguments
+      }
+    }));
+  }
+  return {
+    id: id || `accumulated-${Date.now()}`,
+    model: model || "unknown",
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: hasContent ? content : null,
+          reasoning_content: hasReasoning ? reasoningContent : null,
+          tool_calls: finalToolCalls
+        },
+        finishReason: finalToolCalls && finalToolCalls.length > 0 && finishReason === "stop" ? "tool_calls" : finishReason
+      }
+    ],
+    usage
+  };
+}
+
+// src/utils/structuredOutput.ts
+function extractJsonFromText(text) {
+  if (!text || typeof text !== "string") {
+    throw new SyntaxError("Cannot extract JSON from empty or non-string input");
+  }
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (_e) {
+  }
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/i;
+  const match = trimmed.match(codeBlockRegex);
+  if (match?.[1]) {
+    try {
+      return JSON.parse(match[1].trim());
+    } catch (_e) {
+    }
+  }
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  const firstBracket = trimmed.indexOf("[");
+  const lastBracket = trimmed.lastIndexOf("]");
+  const hasObject = firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace;
+  const hasArray = firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket;
+  if (hasObject && (!hasArray || firstBrace < firstBracket)) {
+    try {
+      const candidate = trimmed.substring(firstBrace, lastBrace + 1);
+      return JSON.parse(candidate);
+    } catch (_e) {
+    }
+  } else if (hasArray) {
+    try {
+      const candidate = trimmed.substring(firstBracket, lastBracket + 1);
+      return JSON.parse(candidate);
+    } catch (_e) {
+    }
+  }
+  throw new SyntaxError(
+    `Failed to extract valid JSON from response text: "${trimmed.slice(0, 100)}${trimmed.length > 100 ? "..." : ""}"`
+  );
+}
+function tryExtractJson(text) {
+  try {
+    return extractJsonFromText(text);
+  } catch {
+    return null;
+  }
+}
+
 // src/core/BatchExecutor.ts
 var BatchExecutionError = class extends Error {
   results;
@@ -794,6 +929,69 @@ var Router = class {
     }
     this.semanticEntries = [];
   }
+  /**
+   * Evaluates health and liveness across all configured providers.
+   * Performs passive inspection of circuit states and metrics by default,
+   * or active probe pings if options.ping is true.
+   */
+  async checkHealth(options = {}) {
+    const providerHealthList = [];
+    for (const p of this.providers) {
+      const cbStatus = await this.circuitBreaker.getStatus(p.id);
+      const metric = this.metrics.providerMetrics[p.id];
+      const totalReqs = metric ? metric.requests : 0;
+      const successes = metric ? metric.successes : 0;
+      const successRate = totalReqs > 0 ? successes / totalReqs : 1;
+      let status = "healthy";
+      if (cbStatus.state === "OPEN") {
+        status = "unhealthy";
+      } else if (cbStatus.state === "HALF_OPEN" || totalReqs >= 5 && successRate < 0.6) {
+        status = "degraded";
+      }
+      let latencyMs = metric?.averageLatencyMs;
+      let error;
+      if (options.ping) {
+        const start = Date.now();
+        try {
+          const timeoutMs = options.timeoutMs ?? 3e3;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+          await p.generateContent({
+            model: p.defaultModel || (p.resolveModel ? p.resolveModel("default") : "default"),
+            messages: [{ role: "user", content: "ping" }],
+            maxTokens: 1,
+            signal: controller.signal
+          });
+          clearTimeout(timer);
+          latencyMs = Date.now() - start;
+        } catch (err) {
+          const e = err;
+          error = e?.message || "Health probe failed";
+          status = "unhealthy";
+        }
+      }
+      providerHealthList.push({
+        id: p.id,
+        status,
+        circuitState: cbStatus.state,
+        latencyMs,
+        error,
+        successRate: Number(successRate.toFixed(4))
+      });
+    }
+    const allUnhealthy = providerHealthList.every(
+      (ph) => ph.status === "unhealthy"
+    );
+    const allHealthy = providerHealthList.every(
+      (ph) => ph.status === "healthy"
+    );
+    const overallStatus = allUnhealthy ? "unhealthy" : allHealthy ? "healthy" : "degraded";
+    return {
+      status: overallStatus,
+      timestamp: Date.now(),
+      providers: providerHealthList
+    };
+  }
   recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0, cachedPromptTokens = 0) {
     if (!this.metrics.providerMetrics[providerId]) {
       this.metrics.providerMetrics[providerId] = {
@@ -811,16 +1009,14 @@ var Router = class {
     if (success) {
       pm.successes++;
       this.metrics.successfulRequests++;
+      pm.latencySumMs += latencyMs;
+      pm.averageLatencyMs = Math.round(pm.latencySumMs / pm.successes);
     } else {
       pm.failures++;
       this.metrics.failedRequests++;
     }
     pm.promptTokens += promptTokens;
     pm.completionTokens += completionTokens;
-    pm.latencySumMs += latencyMs;
-    pm.averageLatencyMs = Math.round(
-      pm.latencySumMs / (pm.successes + pm.failures)
-    );
     this.metrics.totalPromptTokens += promptTokens;
     this.metrics.totalCompletionTokens += completionTokens;
     this.metrics.totalTokens += promptTokens + completionTokens;
@@ -1465,147 +1661,221 @@ var Router = class {
   }
 };
 
-// src/utils/streamAccumulator.ts
-async function accumulateStream(stream, options) {
-  let id = "";
-  let model = "";
-  let content = "";
-  let hasContent = false;
-  let reasoningContent = "";
-  let hasReasoning = false;
-  let finishReason = "stop";
-  let usage;
-  const toolCallsMap = /* @__PURE__ */ new Map();
-  for await (const chunk of stream) {
-    options?.onChunk?.(chunk);
-    if (!id && chunk.id) id = chunk.id;
-    if (!model && chunk.model) model = chunk.model;
-    if (chunk.usage) {
-      usage = { ...chunk.usage };
+// src/core/SecurityGuardrails.ts
+var SecurityGuardrailError = class extends Error {
+  violations;
+  constructor(message, violations) {
+    super(message);
+    this.name = "SecurityGuardrailError";
+    this.violations = violations;
+  }
+};
+var DEFAULT_THREAT_RULES = [
+  // 1. System Prompt Override & Directive Reset
+  {
+    category: "system_override",
+    regex: /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts|rules|commands|context)/i
+  },
+  {
+    category: "system_override",
+    regex: /(?:disregard|forget|bypass)\s+(?:all\s+)?(?:previous|prior|safety|guardrail|system)\s+(?:instructions|guidelines|rules|prompts)/i
+  },
+  {
+    category: "system_override",
+    regex: /\boverride\s+(?:system\s+)?(?:prompt|instructions|rules)\b/i
+  },
+  // 2. Jailbreak Personas & Unrestricted AI Activation
+  {
+    category: "jailbreak",
+    regex: /\byou\s+are\s+now\s+(?:dan|unrestricted|jailbroken|freed|an\s+evil|chaosgpt)\b/i
+  },
+  {
+    category: "jailbreak",
+    regex: /\bdeveloper\s+mode\s+(?:is\s+)?(?:enabled|activated|on)\b/i
+  },
+  {
+    category: "jailbreak",
+    regex: /\bdo\s+anything\s+now\b/i
+  },
+  {
+    category: "jailbreak",
+    regex: /\bignore\s+ethical\s+guidelines\b/i
+  },
+  {
+    category: "jailbreak",
+    regex: /\bact\s+as\s+an?\s+unfiltered\s+ai\b/i
+  },
+  // 3. Chat Delimiter Hijacking & Format Injection
+  {
+    category: "delimiter_hijack",
+    regex: /<\s*\|\s*im_start\s*\|\s*>\s*system/i
+  },
+  {
+    category: "delimiter_hijack",
+    regex: /\[SYSTEM(?:\s+PROMPT)?\]/i
+  },
+  {
+    category: "delimiter_hijack",
+    regex: /<<SYS>>[\s\S]*?<\/SYS>>/i
+  },
+  {
+    category: "delimiter_hijack",
+    regex: /<\/?(?:INST|SYS|SYSTEM)>/i
+  },
+  {
+    category: "delimiter_hijack",
+    regex: /---+ ?(?:BEGIN|START) SYSTEM (?:PROMPT|INSTRUCTIONS) ?---+/i
+  },
+  // 4. Secret & System Prompt Exfiltration
+  {
+    category: "secret_exfiltration",
+    regex: /(?:print|output|reveal|display|leak|repeat)\s+(?:your\s+)?(?:system\s+prompt|initial\s+instructions|system\s+instructions)\s+(?:verbatim|word\s+for\s+word|in\s+full)/i
+  },
+  {
+    category: "secret_exfiltration",
+    regex: /(?:what\s+are\s+your|show\s+me\s+your)\s+(?:initial\s+instructions|system\s+prompts?|hidden\s+rules)/i
+  },
+  // 5. Prompt Injection Syntax Patterns
+  {
+    category: "prompt_injection",
+    regex: /\bnew\s+instructions\s*:\s*(?:you\s+must|always|ignore)/i
+  },
+  {
+    category: "prompt_injection",
+    regex: /\bhidden\s+instructions\s*:/i
+  }
+];
+var SecurityGuardrails = class {
+  enabled;
+  action;
+  rules;
+  allowedPatterns;
+  constructor(options = {}) {
+    this.enabled = options.enabled !== false;
+    this.action = options.action ?? "block";
+    this.rules = [...DEFAULT_THREAT_RULES, ...options.customPatterns ?? []];
+    this.allowedPatterns = options.allowedPatterns ?? [];
+  }
+  /**
+   * Scans a text string for prompt injection or jailbreak indicators.
+   */
+  scan(text) {
+    if (!this.enabled || !text) {
+      return {
+        safe: true,
+        sanitizedText: text || "",
+        violations: []
+      };
     }
-    const choice = chunk.choices?.[0];
-    if (choice) {
-      if (choice.finishReason) {
-        finishReason = choice.finishReason;
+    const violations = [];
+    let sanitizedText = text;
+    for (const rule of this.rules) {
+      const flags = rule.regex.flags.includes("g") ? rule.regex.flags : `${rule.regex.flags}g`;
+      const globalRegex = new RegExp(rule.regex.source, flags);
+      let match;
+      while (true) {
+        match = globalRegex.exec(text);
+        if (match === null) break;
+        const matchedText = match[0];
+        const isAllowed = this.allowedPatterns.some((allowed) => {
+          if (allowed.test(matchedText)) return true;
+          const textMatch = allowed.exec(text);
+          if (textMatch && match) {
+            const start = textMatch.index;
+            const end = start + textMatch[0].length;
+            return match.index >= start && match.index + matchedText.length <= end;
+          }
+          return false;
+        });
+        if (isAllowed) {
+          continue;
+        }
+        const violation = {
+          category: rule.category,
+          pattern: rule.regex.source,
+          matchedText,
+          action: this.action,
+          timestamp: Date.now()
+        };
+        violations.push(violation);
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(
+            matchedText,
+            `[SECURITY_REDACTED: ${rule.category}]`
+          );
+        }
       }
-      const delta = choice.delta;
-      if (delta) {
-        if (delta.content !== void 0 && delta.content !== null) {
-          content += delta.content;
-          hasContent = true;
-        }
-        if (delta.reasoning_content !== void 0 && delta.reasoning_content !== null) {
-          reasoningContent += delta.reasoning_content;
-          hasReasoning = true;
-        }
-        if (Array.isArray(delta.tool_calls)) {
-          for (const tc of delta.tool_calls) {
-            const index = tc.index ?? 0;
-            if (!toolCallsMap.has(index)) {
-              toolCallsMap.set(index, {
-                id: tc.id || "",
-                name: tc.function?.name || "",
-                arguments: tc.function?.arguments || ""
-              });
-            } else {
-              const existing = toolCallsMap.get(index);
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name += tc.function.name;
-              if (tc.function?.arguments) {
-                existing.arguments += tc.function.arguments;
-              }
-            }
+    }
+    return {
+      safe: violations.length === 0,
+      sanitizedText,
+      violations
+    };
+  }
+  /**
+   * Scans an array of ChatMessage objects and applies the configured action.
+   */
+  scanMessages(messages) {
+    if (!this.enabled || !messages || messages.length === 0) {
+      return {
+        safe: true,
+        messages: messages || [],
+        violations: []
+      };
+    }
+    const allViolations = [];
+    const updatedMessages = [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (typeof msg.content === "string") {
+        const scanResult = this.scan(msg.content);
+        if (!scanResult.safe) {
+          for (const v of scanResult.violations) {
+            allViolations.push({ ...v, messageIndex: i });
           }
         }
+        updatedMessages.push({
+          ...msg,
+          content: this.action === "sanitize" ? scanResult.sanitizedText : msg.content
+        });
+      } else {
+        updatedMessages.push(msg);
       }
     }
+    return {
+      safe: allViolations.length === 0,
+      messages: updatedMessages,
+      violations: allViolations
+    };
   }
-  let finalToolCalls;
-  if (toolCallsMap.size > 0) {
-    finalToolCalls = Array.from(toolCallsMap.entries()).sort(([a], [b]) => a - b).map(([_, tc], idx) => ({
-      id: tc.id || `call_${Date.now()}_${idx}`,
-      type: "function",
-      function: {
-        name: tc.name,
-        arguments: tc.arguments
-      }
-    }));
-  }
-  return {
-    id: id || `accumulated-${Date.now()}`,
-    model: model || "unknown",
-    choices: [
-      {
-        message: {
-          role: "assistant",
-          content: hasContent ? content : null,
-          reasoning_content: hasReasoning ? reasoningContent : null,
-          tool_calls: finalToolCalls
-        },
-        finishReason: finalToolCalls && finalToolCalls.length > 0 && finishReason === "stop" ? "tool_calls" : finishReason
-      }
-    ],
-    usage
-  };
-}
-
-// src/utils/structuredOutput.ts
-function extractJsonFromText(text) {
-  if (!text || typeof text !== "string") {
-    throw new SyntaxError("Cannot extract JSON from empty or non-string input");
-  }
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch (_e) {
-  }
-  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/i;
-  const match = trimmed.match(codeBlockRegex);
-  if (match && match[1]) {
-    try {
-      return JSON.parse(match[1].trim());
-    } catch (_e) {
-    }
-  }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  const hasObject = firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace;
-  const hasArray = firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket;
-  if (hasObject && (!hasArray || firstBrace < firstBracket)) {
-    try {
-      const candidate = trimmed.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(candidate);
-    } catch (_e) {
-    }
-  } else if (hasArray) {
-    try {
-      const candidate = trimmed.substring(firstBracket, lastBracket + 1);
-      return JSON.parse(candidate);
-    } catch (_e) {
-    }
-  }
-  throw new SyntaxError(
-    `Failed to extract valid JSON from response text: "${trimmed.slice(0, 100)}${trimmed.length > 100 ? "..." : ""}"`
-  );
-}
-function tryExtractJson(text) {
-  try {
-    return extractJsonFromText(text);
-  } catch {
-    return null;
-  }
-}
+};
 
 // src/core/SinapsClient.ts
 var SinapsClient = class {
   router;
   storage;
   guardrails;
+  securityGuardrails;
   isReversiblePII = false;
+  modelAliases = /* @__PURE__ */ new Map();
+  hooks;
   constructor(options) {
     this.storage = options.storage || new InMemoryStorage();
+    this.hooks = options.hooks;
+    if (options.modelAliases) {
+      for (const [alias, target] of Object.entries(options.modelAliases)) {
+        this.modelAliases.set(alias, target);
+      }
+    }
+    if (options.securityGuardrails) {
+      if (options.securityGuardrails === true) {
+        this.securityGuardrails = new SecurityGuardrails();
+      } else {
+        this.securityGuardrails = new SecurityGuardrails(
+          options.securityGuardrails
+        );
+      }
+    }
     if (options.piiGuardrails) {
       if (options.piiGuardrails === true) {
         this.guardrails = new PIIGuardrails();
@@ -1644,17 +1914,33 @@ var SinapsClient = class {
       create: (async (request) => {
         let messages = request.messages;
         let piiVault;
+        if (this.securityGuardrails) {
+          const scan = this.securityGuardrails.scanMessages(messages);
+          if (!scan.safe) {
+            for (const v of scan.violations) {
+              this.hooks?.onSecurityViolation?.(v, v.messageIndex);
+            }
+            if (this.securityGuardrails.action === "block") {
+              throw new SecurityGuardrailError(
+                `Prompt rejected due to security violations: ${scan.violations.map((v) => v.category).join(", ")}`,
+                scan.violations
+              );
+            }
+          }
+          messages = scan.messages;
+        }
         if (this.guardrails) {
           if (this.isReversiblePII && !request.stream) {
-            const tokenized = this.guardrails.tokenizeMessages(request.messages);
+            const tokenized = this.guardrails.tokenizeMessages(messages);
             messages = tokenized.messages;
             piiVault = tokenized.vault;
           } else {
-            messages = this.guardrails.redactMessages(request.messages);
+            messages = this.guardrails.redactMessages(messages);
           }
         }
+        const resolvedModel = this.resolveModel(request.model);
         const fullReq = {
-          model: request.model || "default",
+          model: resolvedModel,
           messages,
           temperature: request.temperature,
           maxTokens: request.maxTokens,
@@ -1691,6 +1977,16 @@ var SinapsClient = class {
         }
         const text = textOrResponse.choices?.[0]?.message?.content || "";
         return extractJsonFromText(text);
+      },
+      /**
+       * Safely attempts to extract and parse JSON data, returning null if invalid.
+       */
+      tryExtractJson: (textOrResponse) => {
+        if (typeof textOrResponse === "string") {
+          return tryExtractJson(textOrResponse);
+        }
+        const text = textOrResponse.choices?.[0]?.message?.content || "";
+        return tryExtractJson(text);
       }
     }
   };
@@ -1706,9 +2002,19 @@ var SinapsClient = class {
   extractJson(textOrResponse) {
     return this.chat.completions.extractJson(textOrResponse);
   }
+  /**
+   * Helper to safely attempt JSON extraction, returning null if parsing fails.
+   */
+  tryExtractJson(textOrResponse) {
+    return this.chat.completions.tryExtractJson(textOrResponse);
+  }
   embeddings = {
     create: async (request) => {
-      return this.router.executeEmbedding(request);
+      const model = this.resolveModel(request.model);
+      return this.router.executeEmbedding({
+        ...request,
+        model
+      });
     }
   };
   batch = {
@@ -1755,6 +2061,37 @@ var SinapsClient = class {
   }
   async clearCache() {
     return this.router.clearCache();
+  }
+  /**
+   * Resolves a model name against configured model aliases.
+   */
+  resolveModel(modelName) {
+    if (!modelName) return "default";
+    return this.modelAliases.get(modelName) || modelName;
+  }
+  /**
+   * Registers or updates a friendly model alias.
+   */
+  setModelAlias(alias, targetModel) {
+    this.modelAliases.set(alias, targetModel);
+  }
+  /**
+   * Returns all currently registered model aliases.
+   */
+  getModelAliases() {
+    return Object.fromEntries(this.modelAliases.entries());
+  }
+  /**
+   * Removes a registered model alias.
+   */
+  removeModelAlias(alias) {
+    return this.modelAliases.delete(alias);
+  }
+  /**
+   * Checks the health and liveness of all configured providers.
+   */
+  async checkHealth(options) {
+    return this.router.checkHealth(options);
   }
 };
 
@@ -4925,6 +5262,6 @@ function createOpenRouterFreeProvider(config) {
  * @license MIT
  */
 
-export { AnthropicProvider, BatchExecutionError, CircuitBreaker, CloudflareKVStorage, D1Storage, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RedisStorage, Router, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, accumulateStream, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, executeBatch, extractJsonFromText, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai, tryExtractJson };
+export { AnthropicProvider, BatchExecutionError, CircuitBreaker, CloudflareKVStorage, D1Storage, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RedisStorage, Router, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, accumulateStream, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, executeBatch, extractJsonFromText, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai, tryExtractJson };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

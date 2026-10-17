@@ -57,6 +57,21 @@ npx tsx examples/16-vercel-ai-sdk-adapter.ts
 
 # 17. Distributed Storage Adapters & In-Process PII Guardrails
 npx tsx examples/17-distributed-storage-and-pii-guardrails.ts
+
+# 18. Adaptive & Smart-Hybrid Routing Strategy
+npx tsx examples/18-adaptive-smart-hybrid-routing.ts
+
+# 19. Reversible PII Vault & Response De-anonymization
+npx tsx examples/19-reversible-pii-vault.ts
+
+# 20. Streaming Tool Call Accumulation & Resilient JSON Extraction
+npx tsx examples/20-streaming-tool-accumulator-and-json.ts
+
+# 21. Model Aliases & Gateway Health Probes
+npx tsx examples/21-model-aliases-and-health-checks.ts
+
+# 22. Security Guardrails & Prompt Injection Defense
+npx tsx examples/22-security-prompt-injection-defense.ts
 ```
 
 

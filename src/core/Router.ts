@@ -12,6 +12,9 @@ import type {
   CircuitBreakerStatus,
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
+  GatewayHealthReport,
+  HealthCheckOptions,
+  ProviderHealth,
   SemanticCacheOptions,
   SinapsEventHooks,
   SinapsMetrics,
@@ -137,6 +140,88 @@ export class Router {
     this.semanticEntries = [];
   }
 
+  /**
+   * Evaluates health and liveness across all configured providers.
+   * Performs passive inspection of circuit states and metrics by default,
+   * or active probe pings if options.ping is true.
+   */
+  public async checkHealth(
+    options: HealthCheckOptions = {},
+  ): Promise<GatewayHealthReport> {
+    const providerHealthList: ProviderHealth[] = [];
+
+    for (const p of this.providers) {
+      const cbStatus = await this.circuitBreaker.getStatus(p.id);
+      const metric = this.metrics.providerMetrics[p.id];
+      const totalReqs = metric ? metric.requests : 0;
+      const successes = metric ? metric.successes : 0;
+      const successRate = totalReqs > 0 ? successes / totalReqs : 1.0;
+
+      let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+      if (cbStatus.state === 'OPEN') {
+        status = 'unhealthy';
+      } else if (
+        cbStatus.state === 'HALF_OPEN' ||
+        (totalReqs >= 5 && successRate < 0.6)
+      ) {
+        status = 'degraded';
+      }
+
+      let latencyMs: number | undefined = metric?.averageLatencyMs;
+      let error: string | undefined;
+
+      if (options.ping) {
+        const start = Date.now();
+        try {
+          const timeoutMs = options.timeoutMs ?? 3000;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+          await p.generateContent({
+            model:
+              p.defaultModel ||
+              (p.resolveModel ? p.resolveModel('default') : 'default'),
+            messages: [{ role: 'user', content: 'ping' }],
+            maxTokens: 1,
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          latencyMs = Date.now() - start;
+        } catch (err: unknown) {
+          const e = err as Error;
+          error = e?.message || 'Health probe failed';
+          status = 'unhealthy';
+        }
+      }
+
+      providerHealthList.push({
+        id: p.id,
+        status,
+        circuitState: cbStatus.state,
+        latencyMs,
+        error,
+        successRate: Number(successRate.toFixed(4)),
+      });
+    }
+
+    const allUnhealthy = providerHealthList.every(
+      (ph) => ph.status === 'unhealthy',
+    );
+    const allHealthy = providerHealthList.every(
+      (ph) => ph.status === 'healthy',
+    );
+    const overallStatus: 'healthy' | 'degraded' | 'unhealthy' = allUnhealthy
+      ? 'unhealthy'
+      : allHealthy
+        ? 'healthy'
+        : 'degraded';
+
+    return {
+      status: overallStatus,
+      timestamp: Date.now(),
+      providers: providerHealthList,
+    };
+  }
+
   private recordMetrics(
     providerId: string,
     success: boolean,
@@ -163,16 +248,14 @@ export class Router {
     if (success) {
       pm.successes++;
       this.metrics.successfulRequests++;
+      pm.latencySumMs += latencyMs;
+      pm.averageLatencyMs = Math.round(pm.latencySumMs / pm.successes);
     } else {
       pm.failures++;
       this.metrics.failedRequests++;
     }
     pm.promptTokens += promptTokens;
     pm.completionTokens += completionTokens;
-    pm.latencySumMs += latencyMs;
-    pm.averageLatencyMs = Math.round(
-      pm.latencySumMs / (pm.successes + pm.failures),
-    );
 
     this.metrics.totalPromptTokens += promptTokens;
     this.metrics.totalCompletionTokens += completionTokens;
@@ -252,7 +335,7 @@ export class Router {
       }
     }
 
-    return (successRate ** 2) * latencyScore * costFactor * 100;
+    return successRate ** 2 * latencyScore * costFactor * 100;
   }
 
   private computeCacheKey(request: UnifiedApiRequest): string {
@@ -444,7 +527,10 @@ export class Router {
         if (latA === latB) return 0;
         return latA < latB ? -1 : 1;
       });
-    } else if (this.strategy === 'adaptive' || this.strategy === 'smart-hybrid') {
+    } else if (
+      this.strategy === 'adaptive' ||
+      this.strategy === 'smart-hybrid'
+    ) {
       providersList = [...this.providers].sort((a, b) => {
         const scoreA = this.calculateAdaptiveScore(a, request);
         const scoreB = this.calculateAdaptiveScore(b, request);
@@ -872,7 +958,10 @@ export class Router {
         if (latA === latB) return 0;
         return latA < latB ? -1 : 1;
       });
-    } else if (this.strategy === 'adaptive' || this.strategy === 'smart-hybrid') {
+    } else if (
+      this.strategy === 'adaptive' ||
+      this.strategy === 'smart-hybrid'
+    ) {
       providersList = [...eligibleProviders].sort((a, b) => {
         const scoreA = this.calculateAdaptiveScore(a);
         const scoreB = this.calculateAdaptiveScore(b);

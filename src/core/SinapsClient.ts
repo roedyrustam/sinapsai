@@ -17,21 +17,15 @@ import type {
   CreateChatCompletionRequestStreaming,
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
+  GatewayHealthReport,
+  HealthCheckOptions,
+  SecurityGuardrailsOptions,
   SinapsEventHooks,
   SinapsMetrics,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
-import { executeBatch } from './BatchExecutor.js';
-import {
-  CircuitBreaker,
-  type CircuitBreakerOptions,
-} from './CircuitBreaker.js';
-import { InMemoryStorage } from './InMemoryStorage.js';
-import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
-import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
-import type { StateStorage } from './StateStorage.js';
 import {
   accumulateStream,
   type StreamAccumulatorOptions,
@@ -40,6 +34,19 @@ import {
   extractJsonFromText,
   tryExtractJson,
 } from '../utils/structuredOutput.js';
+import { executeBatch } from './BatchExecutor.js';
+import {
+  CircuitBreaker,
+  type CircuitBreakerOptions,
+} from './CircuitBreaker.js';
+import { InMemoryStorage } from './InMemoryStorage.js';
+import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
+import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
+import {
+  SecurityGuardrailError,
+  SecurityGuardrails,
+} from './SecurityGuardrails.js';
+import type { StateStorage } from './StateStorage.js';
 
 export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
   /**
@@ -67,16 +74,47 @@ export interface SinapsClientOptions {
    * they are sent to LLM providers.
    */
   piiGuardrails?: ExtendedPIIGuardrailsOptions | boolean;
+  /**
+   * Optional security guardrails to defend against prompt injection, jailbreaks,
+   * system role hijacking, and secret exfiltration.
+   */
+  securityGuardrails?: SecurityGuardrailsOptions | boolean;
+  /**
+   * Optional dictionary of model aliases (e.g. { 'fast': 'gpt-4o-mini', 'smart': 'claude-3-7-sonnet' }).
+   * Allows incoming requests to specify friendly virtual alias names which get resolved automatically.
+   */
+  modelAliases?: Record<string, string>;
 }
 
 export class SinapsClient {
   private router: Router;
   private storage: StateStorage;
   public readonly guardrails?: PIIGuardrails;
+  public readonly securityGuardrails?: SecurityGuardrails;
   private isReversiblePII = false;
+  private modelAliases = new Map<string, string>();
+  private hooks?: SinapsEventHooks;
 
   constructor(options: SinapsClientOptions) {
     this.storage = options.storage || new InMemoryStorage();
+    this.hooks = options.hooks;
+
+    if (options.modelAliases) {
+      for (const [alias, target] of Object.entries(options.modelAliases)) {
+        this.modelAliases.set(alias, target);
+      }
+    }
+
+    // Initialize Security guardrails if configured
+    if (options.securityGuardrails) {
+      if (options.securityGuardrails === true) {
+        this.securityGuardrails = new SecurityGuardrails();
+      } else {
+        this.securityGuardrails = new SecurityGuardrails(
+          options.securityGuardrails,
+        );
+      }
+    }
 
     // Initialize PII guardrails if configured
     if (options.piiGuardrails) {
@@ -121,19 +159,38 @@ export class SinapsClient {
         let messages: ChatMessage[] = request.messages;
         let piiVault: Map<string, string> | undefined;
 
+        // Apply Security Guardrails (prompt injection, jailbreaks, delimiter hijacking)
+        if (this.securityGuardrails) {
+          const scan = this.securityGuardrails.scanMessages(messages);
+          if (!scan.safe) {
+            for (const v of scan.violations) {
+              this.hooks?.onSecurityViolation?.(v, v.messageIndex);
+            }
+            if (this.securityGuardrails.action === 'block') {
+              throw new SecurityGuardrailError(
+                `Prompt rejected due to security violations: ${scan.violations.map((v) => v.category).join(', ')}`,
+                scan.violations,
+              );
+            }
+          }
+          messages = scan.messages;
+        }
+
         // Apply PII redaction or reversible tokenization if guardrails are enabled
         if (this.guardrails) {
           if (this.isReversiblePII && !request.stream) {
-            const tokenized = this.guardrails.tokenizeMessages(request.messages);
+            const tokenized = this.guardrails.tokenizeMessages(messages);
             messages = tokenized.messages;
             piiVault = tokenized.vault;
           } else {
-            messages = this.guardrails.redactMessages(request.messages);
+            messages = this.guardrails.redactMessages(messages);
           }
         }
 
+        const resolvedModel = this.resolveModel(request.model);
+
         const fullReq: UnifiedApiRequest = {
-          model: request.model || 'default',
+          model: resolvedModel,
           messages,
           temperature: request.temperature,
           maxTokens: request.maxTokens,
@@ -198,6 +255,19 @@ export class SinapsClient {
         const text = textOrResponse.choices?.[0]?.message?.content || '';
         return extractJsonFromText<T>(text);
       },
+
+      /**
+       * Safely attempts to extract and parse JSON data, returning null if invalid.
+       */
+      tryExtractJson: <T = unknown>(
+        textOrResponse: string | UnifiedApiResponse,
+      ): T | null => {
+        if (typeof textOrResponse === 'string') {
+          return tryExtractJson<T>(textOrResponse);
+        }
+        const text = textOrResponse.choices?.[0]?.message?.content || '';
+        return tryExtractJson<T>(text);
+      },
     },
   };
 
@@ -220,11 +290,24 @@ export class SinapsClient {
     return this.chat.completions.extractJson<T>(textOrResponse);
   }
 
+  /**
+   * Helper to safely attempt JSON extraction, returning null if parsing fails.
+   */
+  public tryExtractJson<T = unknown>(
+    textOrResponse: string | UnifiedApiResponse,
+  ): T | null {
+    return this.chat.completions.tryExtractJson<T>(textOrResponse);
+  }
+
   public readonly embeddings = {
     create: async (
       request: CreateEmbeddingRequest,
     ): Promise<CreateEmbeddingResponse> => {
-      return this.router.executeEmbedding(request);
+      const model = this.resolveModel(request.model);
+      return this.router.executeEmbedding({
+        ...request,
+        model,
+      });
     },
   };
 
@@ -290,5 +373,43 @@ export class SinapsClient {
 
   public async clearCache(): Promise<void> {
     return this.router.clearCache();
+  }
+
+  /**
+   * Resolves a model name against configured model aliases.
+   */
+  public resolveModel(modelName?: string): string {
+    if (!modelName) return 'default';
+    return this.modelAliases.get(modelName) || modelName;
+  }
+
+  /**
+   * Registers or updates a friendly model alias.
+   */
+  public setModelAlias(alias: string, targetModel: string): void {
+    this.modelAliases.set(alias, targetModel);
+  }
+
+  /**
+   * Returns all currently registered model aliases.
+   */
+  public getModelAliases(): Record<string, string> {
+    return Object.fromEntries(this.modelAliases.entries());
+  }
+
+  /**
+   * Removes a registered model alias.
+   */
+  public removeModelAlias(alias: string): boolean {
+    return this.modelAliases.delete(alias);
+  }
+
+  /**
+   * Checks the health and liveness of all configured providers.
+   */
+  public async checkHealth(
+    options?: HealthCheckOptions,
+  ): Promise<GatewayHealthReport> {
+    return this.router.checkHealth(options);
   }
 }

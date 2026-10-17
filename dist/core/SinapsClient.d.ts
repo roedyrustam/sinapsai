@@ -6,12 +6,13 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { BatchOptions, BatchResult, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BatchOptions, BatchResult, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
+import { SecurityGuardrails } from './SecurityGuardrails.js';
 import type { StateStorage } from './StateStorage.js';
-import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
     /**
      * When true, applies reversible tokenization to outgoing messages and
@@ -37,12 +38,25 @@ export interface SinapsClientOptions {
      * they are sent to LLM providers.
      */
     piiGuardrails?: ExtendedPIIGuardrailsOptions | boolean;
+    /**
+     * Optional security guardrails to defend against prompt injection, jailbreaks,
+     * system role hijacking, and secret exfiltration.
+     */
+    securityGuardrails?: SecurityGuardrailsOptions | boolean;
+    /**
+     * Optional dictionary of model aliases (e.g. { 'fast': 'gpt-4o-mini', 'smart': 'claude-3-7-sonnet' }).
+     * Allows incoming requests to specify friendly virtual alias names which get resolved automatically.
+     */
+    modelAliases?: Record<string, string>;
 }
 export declare class SinapsClient {
     private router;
     private storage;
     readonly guardrails?: PIIGuardrails;
+    readonly securityGuardrails?: SecurityGuardrails;
     private isReversiblePII;
+    private modelAliases;
+    private hooks?;
     constructor(options: SinapsClientOptions);
     readonly chat: {
         completions: {
@@ -59,6 +73,10 @@ export declare class SinapsClient {
              * Safely extracts and parses JSON data from a response or text string.
              */
             extractJson: <T = unknown>(textOrResponse: string | UnifiedApiResponse) => T;
+            /**
+             * Safely attempts to extract and parse JSON data, returning null if invalid.
+             */
+            tryExtractJson: <T = unknown>(textOrResponse: string | UnifiedApiResponse) => T | null;
         };
     };
     /**
@@ -69,6 +87,10 @@ export declare class SinapsClient {
      * Helper to safely extract JSON from LLM text responses or response objects.
      */
     extractJson<T = unknown>(textOrResponse: string | UnifiedApiResponse): T;
+    /**
+     * Helper to safely attempt JSON extraction, returning null if parsing fails.
+     */
+    tryExtractJson<T = unknown>(textOrResponse: string | UnifiedApiResponse): T | null;
     readonly embeddings: {
         create: (request: CreateEmbeddingRequest) => Promise<CreateEmbeddingResponse>;
     };
@@ -92,5 +114,25 @@ export declare class SinapsClient {
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
     resetCircuitBreaker(providerId?: string): Promise<void>;
     clearCache(): Promise<void>;
+    /**
+     * Resolves a model name against configured model aliases.
+     */
+    resolveModel(modelName?: string): string;
+    /**
+     * Registers or updates a friendly model alias.
+     */
+    setModelAlias(alias: string, targetModel: string): void;
+    /**
+     * Returns all currently registered model aliases.
+     */
+    getModelAliases(): Record<string, string>;
+    /**
+     * Removes a registered model alias.
+     */
+    removeModelAlias(alias: string): boolean;
+    /**
+     * Checks the health and liveness of all configured providers.
+     */
+    checkHealth(options?: HealthCheckOptions): Promise<GatewayHealthReport>;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

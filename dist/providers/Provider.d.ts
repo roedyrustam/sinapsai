@@ -12,6 +12,7 @@ export interface Provider {
     costPer1kTokens?: number;
     promptCostPer1k?: number;
     completionCostPer1k?: number;
+    defaultModel?: string;
     fallbackModels?: string[];
     retries?: number;
     retryDelayMs?: number;
