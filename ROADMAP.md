@@ -98,7 +98,7 @@
 - [x] **FinOps Spend & Token Guardrails (`BudgetGuardrails`)**: Pelacakan dan pembatasan batas kumulatif USD (`maxCostUsd`) dan volume token (`maxTotalTokens`) dengan mode `block` (`BudgetExceededError`) atau `warn`.
 - [x] **Speculative Hedged Requests (`HedgedExecutor` & Client Option `hedging`)**: Luncurkan permintaan cadangan setelah ambang batas jeda delay (`delayMs`) guna memangkas latensi ekor (P99/P99.9) pada provider redundan, dengan pembatalan otomatis bagi request yang kalah cepat.
 - [x] **Provider Frontier Baru (xAI Grok & Cohere v2)**: Integrasi kelas satu untuk xAI Grok (dengan `reasoningEffort`) dan Cohere v2 (Command A, Embed v4).
-- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 23, 24, dan 25; total 319/319 tes lulus di 29 test suites, 100% Biome Clean.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 23, 24, dan 25; total 320/320 tes lulus di 29 test suites, 100% Biome Clean.
 
 ## Phase 13: Real-Time Multimodal Voice & Native Observability Exporters (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.

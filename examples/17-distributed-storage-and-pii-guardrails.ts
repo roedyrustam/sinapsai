@@ -75,12 +75,11 @@ Also, our public support is support@company.com (allowlisted).
         id: 'resp-inspect-1',
         choices: [
           {
-            index: 0,
             message: {
               role: 'assistant',
               content: 'Request processed safely. No PII was received.',
             },
-            finish_reason: 'stop',
+            finishReason: 'stop',
           },
         ],
         model: request.model,

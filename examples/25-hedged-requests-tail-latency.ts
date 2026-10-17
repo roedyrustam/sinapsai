@@ -35,7 +35,12 @@ async function main() {
       return {
         id: 'res-primary',
         model: 'primary-model',
-        choices: [{ message: { role: 'assistant', content: 'Response from primary provider.' } }],
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Response from primary provider.' },
+            finishReason: 'stop',
+          },
+        ],
       };
     },
   };
@@ -49,7 +54,12 @@ async function main() {
       return {
         id: 'res-backup',
         model: 'backup-model',
-        choices: [{ message: { role: 'assistant', content: 'Response from backup provider.' } }],
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Response from backup provider.' },
+            finishReason: 'stop',
+          },
+        ],
       };
     },
   };
@@ -79,7 +89,8 @@ async function main() {
     [primaryProvider, backupProvider],
     request,
     async (provider, req) => {
-      return provider.generateContent(req);
+      const res = await provider.generateContent(req);
+      return res as UnifiedApiResponse;
     },
   );
 

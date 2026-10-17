@@ -145,5 +145,37 @@ describe('XAiProvider & CohereProvider', () => {
       expect(emb.data[0].embedding).toEqual([0.11, 0.22, 0.33]);
       expect(emb.usage?.promptTokens).toBe(4);
     });
+
+    it('should expose defaultModel and configuration getters correctly', () => {
+      const customXai = new XAiProvider({
+        apiKey: 'xai-key',
+        defaultModel: 'grok-3-beta',
+        fallbackModels: ['grok-3-mini-beta'],
+        costPer1kTokens: 0.005,
+        promptCostPer1k: 0.003,
+        completionCostPer1k: 0.015,
+      });
+      expect(customXai.defaultModel).toBe('grok-3-beta');
+      expect(customXai.fallbackModels).toEqual(['grok-3-mini-beta']);
+      expect(customXai.costPer1kTokens).toBe(0.005);
+      expect(customXai.promptCostPer1k).toBe(0.003);
+      expect(customXai.completionCostPer1k).toBe(0.015);
+
+      const customCohere = new CohereProvider({
+        apiKey: 'coh-key',
+        defaultModel: COHERE_MODELS.COMMAND_A,
+        fallbackModels: [COHERE_MODELS.COMMAND_R_PLUS],
+        costPer1kTokens: 0.004,
+        promptCostPer1k: 0.002,
+        completionCostPer1k: 0.01,
+      });
+      expect(customCohere.defaultModel).toBe(COHERE_MODELS.COMMAND_A);
+      expect(customCohere.fallbackModels).toEqual([
+        COHERE_MODELS.COMMAND_R_PLUS,
+      ]);
+      expect(customCohere.costPer1kTokens).toBe(0.004);
+      expect(customCohere.promptCostPer1k).toBe(0.002);
+      expect(customCohere.completionCostPer1k).toBe(0.01);
+    });
   });
 });

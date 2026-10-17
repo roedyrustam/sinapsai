@@ -71,7 +71,7 @@ async function run() {
   console.log('Dispatching complex problem with extended thinking parameters...\n');
 
   try {
-    const res = await client.create({
+    const res = await client.chat.completions.create({
       model: 'o3-mini',
       messages: [
         {
@@ -85,19 +85,21 @@ async function run() {
       maxTokens: 5000,
     });
 
-    const choice = res.choices[0];
-    if (choice.message.reasoning_content) {
-      console.log('--- Internal Thought Process (Chain of Thought) ---');
-      console.log(choice.message.reasoning_content.slice(0, 300) + '...\n');
+    if ('choices' in res) {
+      const choice = res.choices[0];
+      if (choice?.message.reasoning_content) {
+        console.log('--- Internal Thought Process (Chain of Thought) ---');
+        console.log(choice.message.reasoning_content.slice(0, 300) + '...\n');
+      }
+
+      console.log('--- Final Synthesized Response ---');
+      console.log(choice?.message.content);
+
+      console.log('\n--- Usage & Cache Metrics ---');
+      console.log(`- Prompt Tokens: ${res.usage?.promptTokens}`);
+      console.log(`- Completion Tokens: ${res.usage?.completionTokens}`);
+      console.log(`- Cached Tokens (KV-Cache): ${res.usage?.cachedPromptTokens ?? 0}`);
     }
-
-    console.log('--- Final Synthesized Response ---');
-    console.log(choice.message.content);
-
-    console.log('\n--- Usage & Cache Metrics ---');
-    console.log(`- Prompt Tokens: ${res.usage?.promptTokens}`);
-    console.log(`- Completion Tokens: ${res.usage?.completionTokens}`);
-    console.log(`- Cached Tokens (KV-Cache): ${res.usage?.cachedPromptTokens ?? 0}`);
   } catch (err) {
     console.log(`(Simulated execution without live API key: ${(err as Error).message})\n`);
   }

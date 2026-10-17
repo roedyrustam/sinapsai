@@ -3454,6 +3454,9 @@ var AnthropicProvider = class {
   get fallbackModels() {
     return this.config.fallbackModels;
   }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -3920,6 +3923,9 @@ var CohereProvider = class {
   get fallbackModels() {
     return this.config.fallbackModels;
   }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -4285,6 +4291,9 @@ var DeepSeekProvider = class {
   get fallbackModels() {
     return this.config.fallbackModels;
   }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -4487,6 +4496,9 @@ var GeminiProvider = class {
   }
   get fallbackModels() {
     return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -4992,6 +5004,9 @@ var GroqProvider = class {
   get fallbackModels() {
     return this.config.fallbackModels;
   }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -5204,6 +5219,9 @@ var MistralProvider = class {
   }
   get fallbackModels() {
     return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -5442,6 +5460,9 @@ var OllamaProvider = class {
   }
   get fallbackModels() {
     return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -5682,6 +5703,9 @@ var OpenAiProvider = class {
   }
   get fallbackModels() {
     return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
@@ -5991,6 +6015,9 @@ var OpenRouterProvider = class {
   get fallbackModels() {
     return this.config.fallbackModels;
   }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -6275,6 +6302,9 @@ var XAiProvider = class {
   }
   get fallbackModels() {
     return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
   }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {

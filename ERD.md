@@ -1,22 +1,40 @@
 # Entity Relationship Diagram - SinapsAI (In-Memory State & Architecture)
 
-Karena SinapsAI berjalan secara lokal sebagai SDK/Paket NPM (tanpa database eksternal), diagram ini merepresentasikan arsitektur relasi antar-komponen inti dan struktur manajemen *state in-memory*.
+Karena SinapsAI berjalan secara lokal sebagai SDK/Paket NPM (tanpa database eksternal), diagram ini merepresentasikan arsitektur relasi antar-komponen inti dan struktur manajemen *state in-process* serta adaptasi storage terdistribusi.
 
 ```mermaid
 classDiagram
     class SinapsClient {
         -Router router
         -StateStorage storage
+        -PIIGuardrails piiGuardrails
+        -SecurityGuardrails securityGuardrails
+        -BudgetGuardrails budgetGuardrails
+        -ContextCompressor contextCompressor
+        -HedgedExecutor hedgedExecutor
         +chat.completions.create(request)
+        +embeddings.create(request)
+        +batch.chat(requests, options)
+        +batch.embeddings(requests, options)
+        +checkHealth(options)
+        +getMetrics()
+        +getCircuitBreakerStatus()
+        +resetCircuitBreaker()
+        +clearCache()
     }
+
     class Router {
         -List~Provider~ providers
         -CircuitBreaker circuitBreaker
         -RouterStrategy strategy
         -SinapsEventHooks hooks
         +execute(request)
+        +executeSingleProvider(provider, request)
+        +executeStreaming(request)
         +getProviderById(id)
+        +clearCache()
     }
+
     class CircuitBreaker {
         -StateStorage storage
         -number failureThreshold
@@ -26,7 +44,10 @@ classDiagram
         +execute(provider, request)
         +recordSuccess(providerId)
         +recordFailure(providerId)
+        +getStatus()
+        +reset()
     }
+
     class StateStorage {
         <<interface>>
         +get(key)
@@ -34,6 +55,7 @@ classDiagram
         +delete(key)
         +increment(key)
     }
+
     class InMemoryStorage {
         -Map store
         +sweep()
@@ -43,13 +65,44 @@ classDiagram
         +increment(key)
         +destroy()
     }
+
+    class CloudflareKVStorage {
+        -KVNamespace kv
+        +get(key)
+        +set(key, value, ttlSeconds)
+        +delete(key)
+        +increment(key)
+    }
+
+    class RedisStorage {
+        -RedisClient client
+        +get(key)
+        +set(key, value, ttlSeconds)
+        +delete(key)
+        +increment(key)
+    }
+
+    class D1Storage {
+        -D1Database db
+        +get(key)
+        +set(key, value, ttlSeconds)
+        +delete(key)
+        +increment(key)
+    }
+
     class Provider {
         <<interface>>
         +string id
         +string name
         +number costPer1kTokens
+        +number promptCostPer1k
+        +number completionCostPer1k
+        +string defaultModel
+        +List~string~ fallbackModels
         +generateContent(request)
+        +generateEmbedding(request)
     }
+
     class OpenAiProvider {
         +resolveModel(model)
         +formatRequest(request)
@@ -68,16 +121,83 @@ classDiagram
         +formatResponse(data, model)
         +generateContent(request)
     }
+    class DeepSeekProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+    class GroqProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+    class MistralProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+    class OpenRouterProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+    class OllamaProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+    class XAiProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+    class CohereProvider {
+        +resolveModel(model)
+        +generateContent(request)
+    }
+
+    class PIIGuardrails {
+        +detect(text)
+        +redact(text)
+        +tokenize(text)
+        +detokenize(text, map)
+    }
+
+    class SecurityGuardrails {
+        +inspect(messages)
+    }
+
+    class BudgetGuardrails {
+        +trackUsage(usage, cost)
+        +checkBudget()
+    }
+
+    class ContextCompressor {
+        +compress(messages, options)
+    }
+
+    class HedgedExecutor {
+        +execute(providers, request, executor)
+    }
 
     StateStorage <|.. InMemoryStorage : implements
+    StateStorage <|.. CloudflareKVStorage : implements
+    StateStorage <|.. RedisStorage : implements
+    StateStorage <|.. D1Storage : implements
+
     Provider <|.. OpenAiProvider : implements
     Provider <|.. AnthropicProvider : implements
     Provider <|.. GeminiProvider : implements
+    Provider <|.. DeepSeekProvider : implements
+    Provider <|.. GroqProvider : implements
+    Provider <|.. MistralProvider : implements
+    Provider <|.. OpenRouterProvider : implements
+    Provider <|.. OllamaProvider : implements
+    Provider <|.. XAiProvider : implements
+    Provider <|.. CohereProvider : implements
 
     SinapsClient "1" *-- "1" Router : delegates to
     SinapsClient "1" *-- "1" StateStorage : maintains
+    SinapsClient "1" *-- "0..1" PIIGuardrails : safeguards with
+    SinapsClient "1" *-- "0..1" SecurityGuardrails : secures with
+    SinapsClient "1" *-- "0..1" BudgetGuardrails : caps budget with
+    SinapsClient "1" *-- "0..1" ContextCompressor : trims context with
+    SinapsClient "1" *-- "0..1" HedgedExecutor : hedges latency with
     Router "1" *-- "1" CircuitBreaker : protects with
     Router "1" o-- "many" Provider : routes across
     CircuitBreaker "1" o-- "1" StateStorage : persists state in
 ```
-

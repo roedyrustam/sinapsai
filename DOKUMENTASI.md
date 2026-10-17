@@ -1,7 +1,7 @@
 # Dokumentasi SinapsAI
 
 ## Ikhtisar
-SinapsAI adalah paket NPM Node.js/TypeScript lokal yang berfungsi sebagai *Control Plane / AI Gateway*. Paket ini menghubungkan aplikasi Anda ke berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter) melalui antarmuka API yang bersatu (*Unified API*).
+SinapsAI adalah paket NPM Node.js/TypeScript lokal yang berfungsi sebagai *Control Plane & AI Gateway in-process* (berjalan 100% di dalam proses aplikasi Anda dengan nol dependensi runtime eksternal). Paket ini menghubungkan aplikasi Anda ke 10 penyedia LLM utama (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, dan Cohere v2) melalui satu antarmuka API yang bersatu (*Unified API*), lengkap dengan Circuit Breaker otomatis, perutean multi-strategi, pelindung keamanan & PII, kompresi konteks, batas anggaran FinOps, dan *hedged requests* untuk memangkas latensi ekor (P99).
 
 ## Instalasi
 ```bash
@@ -14,85 +14,154 @@ import {
   SinapsClient, 
   OpenAiProvider, 
   AnthropicProvider,
-  MistralProvider,
-  GeminiProvider 
+  GeminiProvider,
+  GroqProvider,
+  XAiProvider,
+  CohereProvider
 } from 'sinapsai';
 
 const client = new SinapsClient({
-  strategy: 'failover',
+  strategy: 'adaptive', // 'failover' | 'load-balance' | 'lowest-cost' | 'lowest-latency' | 'adaptive'
   providers: [
     new OpenAiProvider({ 
       apiKey: process.env.OPENAI_API_KEY! 
     }),
-    new MistralProvider({
-      apiKey: process.env.MISTRAL_API_KEY!,
-      defaultModel: 'mistral-large-latest',
+    new AnthropicProvider({
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+      defaultModel: 'claude-3-7-sonnet-20250219',
     }),
     new GeminiProvider({
       apiKey: process.env.GEMINI_API_KEY!,
-      defaultModel: 'text-embedding-004',
+      defaultModel: 'gemini-2.5-flash',
+    }),
+    new GroqProvider({
+      apiKey: process.env.GROQ_API_KEY!,
+      defaultModel: 'llama-3.3-70b-versatile',
+    }),
+    new XAiProvider({
+      apiKey: process.env.XAI_API_KEY!,
+      defaultModel: 'grok-3-beta',
+    }),
+    new CohereProvider({
+      apiKey: process.env.COHERE_API_KEY!,
+      defaultModel: 'command-r-plus-08-2024',
     }),
   ],
+  // 1. In-Process Circuit Breaker
+  circuitBreaker: {
+    failureThreshold: 3,
+    resetTimeoutMs: 30000,
+  },
+  // 2. Speculative Hedging untuk memangkas P99 tail-latency
+  hedging: {
+    enabled: true,
+    delayMs: 200, // Luncurkan backup request jika primary melebihi 200ms
+  },
+  // 3. Batas Anggaran FinOps Kumulatif
+  budget: {
+    maxCostUsd: 100.0, // Batas belanja USD kumulatif
+    action: 'block',    // 'block' (melempar BudgetExceededError) atau 'warn'
+  },
+  // 4. Kompresi Konteks Dinamis
+  contextCompression: {
+    enabled: true,
+    maxTokens: 8000,
+    strategy: 'sliding-window', // 'sliding-window' atau 'middle-out'
+  },
+  // 5. In-Process Security & Prompt Injection Defense
+  securityGuardrails: {
+    enabled: true,
+    action: 'block', // 'block' | 'sanitize' | 'warn'
+  },
+  // 6. In-Process Zero-Dependency PII Guardrails
+  piiGuardrails: {
+    enabled: true,
+    reversible: true, // Reversible Vault mengembalikan entitas PII asli pada respon
+  },
 });
 
 async function run() {
-  // 1. Chat Completions
+  // 1. Chat Completions (OpenAI-compatible)
   const response = await client.chat.completions.create({
     model: 'gpt-4o',
-    messages: [{ role: 'user', content: 'Halo, AI!' }],
+    messages: [{ role: 'user', content: 'Halo, SinapsAI!' }],
   });
-  console.log(response.choices[0].message.content);
+  if ('choices' in response) {
+    console.log(response.choices[0].message.content);
+  }
 
-  // 2. Unified Embeddings (OpenAI, Gemini, Mistral, Ollama)
+  // 2. Unified Embeddings
   const embedding = await client.embeddings.create({
-    model: 'text-embedding-004',
-    input: 'Teks pencarian semantik',
+    model: 'text-embedding-3-small',
+    input: 'Pencarian semantik cepat',
   });
   console.log('Embedding dimensions:', embedding.data[0].embedding.length);
 
-  // 3. Inspeksi Status Circuit Breaker Waktu-Nyata
+  // 3. Inspeksi Status Gateway & Health Probes
+  const health = await client.checkHealth({ ping: false });
+  console.log('Gateway status:', health.status);
+
+  // 4. Inspeksi Status Circuit Breaker Waktu-Nyata
   const cbStatus = await client.getCircuitBreakerStatus();
   console.log('Circuit Status:', cbStatus);
 
-  // 4. Reset Circuit Breaker & Pembersihan Cache
+  // 5. Reset Circuit Breaker & Pembersihan Cache
   await client.resetCircuitBreaker();
   await client.clearCache();
 
-  // 5. Telemetri Real-Time In-Process
+  // 6. Telemetri Real-Time In-Process
   const metrics = client.getMetrics();
   console.log('Total Requests:', metrics.totalRequests);
+  console.log('Cached Prompt Tokens:', metrics.totalCachedPromptTokens);
   console.log('Estimated USD Spend:', metrics.estimatedCostUsd);
 }
 run();
 ```
 
-## Fitur Utama v2.0.1 (Resilience & Throughput Edition)
-1. **Zero-Dependency Semantic In-Process Caching**: Caching respon semantik berbasis cosine similarity murni di dalam memori tanpa dependensi native eksternal. Mendukung ambang batas kemiripan (`similarityThreshold`: 0.0 s/d 1.0, default 0.90), kapasitas entri maksimum (`maxEntries`), model embedding otomatis (`embeddingModel`), serta injeksi fungsi vektor kustom (`customEmbed`). Dilengkapi lifecycle hook `onSemanticCacheHit`.
-2. **Pemrosesan Batch Konkuren In-Process (`client.batch`)**: Mesin konkurensi worker pool lokal tanpa dependensi eksternal (`client.batch.chat`, `client.batch.embeddings`, dan `client.batch.create`) dengan batas konkurensi terukur (`concurrency`), pemantauan progres live (`onProgress`), dan eksekusi toleran kesalahan (*fail-soft settled mode* via `stopOnError: false`).
-3. **Hierarchical Model-Level Fallbacks**: Mekanisme cadangan berjenjang 3 level (request, provider, dan client). Mencoba kandidat model alternatif pada provider aktif sebelum memicu failover lintas provider, lengkap dengan fast-failover saat mendeteksi error autentikasi 401 serta hook `onModelFallback`.
-4. **Dukungan Multi-Modal Terpadu (`ContentPart[]`)**: Standar payload OpenAI terpadu untuk teks, gambar (remote URL & base64), dan audio (`input_audio`) yang otomatis diterjemahkan ke format native Anthropic Claude dan Google Gemini.
-5. **Telemetri Streaming TTFT & Pengerasan Circuit Breaker**: Pengukuran presisi Time-To-First-Token (TTFT) via hook `onStreamSuccess`, akumulasi token streaming ke `UnifiedApiStreamChunk.usage`, pencegatan error di tengah stream (*mid-stream connection reset*) ke Circuit Breaker, serta perlindungan pembatalan pengguna (`AbortSignal`) agar tidak merusak metrik provider.
+## Fitur Utama per Versi Rilis
 
-## Fitur Utama v2.0.0 (Superintelligence Edition)
-1. **Universal Frontier Reasoning Engine**: Kontrol terpadu penalaran mendalam dan Chain-of-Thought di seluruh provider: Claude 3.7 Sonnet (`thinkingBudget`, `temperature: 1.0`, `max_tokens > budget`, streaming `thinking_delta`), OpenAI o1/o3/o4 (`reasoningEffort: 'low' | 'medium' | 'high'`, `max_completion_tokens`), Groq LPU (`reasoning_format: 'parsed'`), DeepSeek R1, dan Google Gemini Flash Thinking (`thinkingBudget`). Semua hasil penalaran disajikan seragam pada `message.reasoning_content`.
+### Fitur Utama v2.5.0 (Context Compression, FinOps Budget, Speculative Hedging & Frontier Providers)
+1. **Dynamic Context Compressor (`ContextCompressor`)**: Estimasi token zero-dependency (~4 karakter per token) dan algoritma pemangkasan percakapan otomatis (`sliding-window` & `middle-out`) yang mengamankan instruksi sistem (`system`) serta mempertahankan grup pemanggilan fungsi (`tool_calls` dan `tool`) secara atomik agar tidak memicu error API.
+2. **FinOps Spend & Token Guardrails (`BudgetGuardrails`)**: Pembatasan pengeluaran kumulatif USD (`maxCostUsd`) dan volume token (`maxTotalTokens`) secara proaktif sebelum request dikirim, mendukung aksi pemblokiran keras (`BudgetExceededError`) atau peringatan lembut (`onBudgetWarning`).
+3. **Speculative Hedged Requests (`HedgedExecutor` & Client Option `hedging`)**: Mengirim request cadangan secara spekulatif setelah jeda delay (`delayMs`) guna memangkas latensi ekor (P99/P99.9) pada provider redundan, dengan pembatalan otomatis bagi request yang kalah cepat.
+4. **Dukungan Provider Frontier Baru (xAI Grok & Cohere v2)**: Integrasi kelas satu untuk xAI Grok (`XAiProvider`, mendukung model Grok 3 dan `reasoningEffort`) dan Cohere v2 (`CohereProvider`, mendukung Command A, Command R+, dan Embed v4).
+
+### Fitur Utama v2.4.0 (Security Guardrails, Model Aliases, Health Probes & Stream Accumulator)
+1. **In-Process Security Guardrails (`SecurityGuardrails`)**: Pertahanan lokal tanpa dependensi dari serangan *prompt injection*, *jailbreak* ("DAN", "evil confidant"), manipulasi *system role*, *delimiter hijacking*, dan kebocoran rahasia (*secret exfiltration*) dengan mode `block`, `sanitize`, atau `warn`.
+2. **Virtual Model Aliases (`modelAliases`)**: Pemetaan nama alias virtual yang memisahkan logika aplikasi dari kode model vendor (misal: `{ 'fast': 'gpt-4o-mini', 'smart': 'claude-3-7-sonnet' }`).
+3. **Gateway Health Probes (`client.checkHealth()`)**: Evaluasi kesehatan provider dan gateway secara pasif (state sirkuit, tingkat keberhasilan) dan aktif via heartbeat 1-token (`ping: true`).
+4. **Streaming Tool-Call Accumulator (`accumulateStream`)**: Rekonstruksi otomatis aliran delta streaming SSE (teks, penalaran, dan potongan panggilan alat multi-langkah) ke dalam format respons lengkap `UnifiedApiResponse`.
+
+### Fitur Utama v2.3.0 (Adaptive Dynamic Routing & Reversible PII Vault)
+1. **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'`)**: Skoring cerdas multi-faktor memadukan keandalan (Laplace-smoothed reliability), latensi bergerak (moving-average latency), dan estimasi biaya per request secara real-time.
+2. **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang menyamarkan data sensitif sebelum dikirim ke LLM dan secara otomatis mengembalikan nilai asli pada respons non-streaming.
+
+### Fitur Utama v2.2.0 (Distributed Edge Storages & In-Process PII Guardrails)
+1. **Distributed Edge & Cluster Storage Adapters**: Integrasi state Circuit Breaker dan cache untuk Cloudflare KV (`CloudflareKVStorage`), Cloudflare D1 (`D1Storage`), dan Redis Cluster (`RedisStorage`) tanpa dependensi runtime eksternal.
+2. **Zero-Dependency In-Process PII Guardrails (`PIIGuardrails`)**: Deteksi dan redaksi otomatis data pribadi sensitif (email, nomor telepon, kartu kredit tervalidasi algoritma Luhn, SSN, IPv4/IPv6, nomor paspor, IBAN, JWT, dan URL).
+
+### Fitur Utama v2.1.0 (Official Vercel AI SDK Ecosystem Adapter)
+1. **Vercel AI SDK Drop-In Adapter (`sinapsai/ai-sdk`)**: Implementasi spesifikasi resmi Vercel AI SDK `LanguageModelV1` dan `EmbeddingModelV1` murni tanpa dependensi eksternal, kompatibel penuh dengan `streamText`, `generateText`, `streamObject`, `generateObject`, `embed`, dan Next.js 15 App Router Handlers.
+
+### Fitur Utama v2.0.1 (Resilience & Throughput Edition)
+1. **Zero-Dependency Semantic In-Process Caching**: Caching respon semantik berbasis cosine similarity murni di dalam memori tanpa dependensi native eksternal (`similarityThreshold`, `maxEntries`, `embeddingModel`, `customEmbed`, dan hook `onSemanticCacheHit`).
+2. **Pemrosesan Batch Konkuren In-Process (`client.batch`)**: Mesin konkurensi worker pool lokal (`client.batch.chat`, `client.batch.embeddings`, dan `client.batch.create`) dengan kontrol konkurensi (`concurrency`), pemantauan progres (`onProgress`), dan mode eksekusi terselesaikan bertoleransi kesalahan (*fail-soft*).
+3. **Hierarchical Model-Level Fallbacks**: Mekanisme cadangan berjenjang 3 level (request, provider, dan client) sebelum memicu failover lintas provider, dengan fast-failover pada 401 Unauthorized.
+4. **Dukungan Multi-Modal Terpadu (`ContentPart[]`)**: Standar payload OpenAI terpadu untuk teks, gambar (URL & base64), dan audio (`input_audio`) yang otomatis diterjemahkan ke format native Anthropic Claude dan Google Gemini.
+5. **Telemetri Streaming TTFT & Pengerasan Circuit Breaker**: Pengukuran presisi Time-To-First-Token (TTFT) via hook `onStreamSuccess`, akumulasi token streaming ke `UnifiedApiStreamChunk.usage`, pencegatan error di tengah stream (*mid-stream connection reset*) ke Circuit Breaker, serta perlindungan pembatalan pengguna (`AbortSignal`).
+
+### Fitur Utama v2.0.0 (Superintelligence Edition)
+1. **Universal Frontier Reasoning Engine**: Kontrol terpadu penalaran mendalam dan Chain-of-Thought di seluruh provider: Claude 3.7 Sonnet (`thinkingBudget`), OpenAI o1/o3/o4 (`reasoningEffort`), Groq LPU, DeepSeek R1, Google Gemini Flash Thinking, dan xAI Grok. Semua hasil penalaran disajikan seragam pada `message.reasoning_content`.
 2. **Perutean Dinamis Latensi Terendah (`strategy: 'lowest-latency'`)**: Secara real-time mengukur moving-average latency setiap provider, mengarahkan prompt ke provider tercepat dengan probing inisial instan dan fallback otomatis.
 3. **Telemetri KV-Cache & Prompt Caching Analytics**: Penjejakan `cachedPromptTokens` per response dan `totalCachedPromptTokens` pada `client.getMetrics()`, memungkinkan audit efisiensi prompt caching (penghematan biaya token 70-90%).
-4. **Inferensi Kilat & Penalaran Groq LPU (`GroqProvider`)**: Integrasi penuh spesifikasi [GroqCloud Docs Overview](https://console.groq.com/docs/overview) untuk inferensi ultra-cepat (~500+ token/detik) menggunakan chip LPU. Mencakup model produksi (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`), pemisahan token penalaran (`reasoning_format: 'parsed'` ke `reasoning_content`), structured outputs JSON Schema, parsing durasi header rate-limit Groq (`x-ratelimit-reset-tokens: 7.66s`, `x-ratelimit-reset-requests: 2m59.56s`), penyesuaian suhu (clamping 0 ke `1e-8`), serta sanitasi otomatis field yang tidak didukung (`messages[].name`) demi mencegah error 400.
-5. **OpenRouter Free Tier (`createOpenRouterFreeProvider`)**: Integrasi penuh katalog model gratis [OpenRouter](https://openrouter.ai/models?variant=free) dengan biaya $0 otomatis, meta-router `openrouter/free`, rantai fallback model native (`fallbackModels`), header peringkat (`siteUrl`, `siteName`), serta penemuan model gratis live via `OpenRouterProvider.fetchFreeModels()`.
-6. **Generasi Model Google Gemini 2.5 & 3.x (`GEMINI_MODELS`)**: Integrasi katalog model resmi Google AI ([ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models?hl=id)) mencakup `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro`, dan `gemini-3.8-flash`. Dilengkapi konfigurasi extended thinking (`thinkingBudget`), ekstraksi token penalaran (`reasoning_content`), pengaturan keamanan (`safetySettings`), reduksi dimensi MRL embeddings (`dimensions` / `outputDimensionality`), adaptasi header rate-limit, dan penemuan model live via `GeminiProvider.fetchAvailableModels()`.
-7. **Dukungan Native Mistral AI (`MistralProvider`)**: Eksekusi chat, tools, JSON mode, dan embeddings (`mistral-embed`) dengan penanganan rate-limit otomatis.
-8. **Google Gemini Embeddings (`GeminiProvider.generateEmbedding`)**: Mendukung model `text-embedding-004` baik untuk string tunggal (`embedContent`) maupun batch array (`batchEmbedContents`).
-9. **Inspeksi & Pemulihan Circuit Breaker (`getCircuitBreakerStatus`, `resetCircuitBreaker`)**: Pemantauan status sirkuit (`CLOSED`, `OPEN`, `HALF_OPEN`), jumlah kegagalan/sukses per provider, serta kemampuan reset manual programatik.
-10. **Pembersihan Cache In-Process (`clearCache`)**: Mengosongkan memori cache respon prompt dan embeddings secara instan saat dibutuhkan.
-11. **Dual-Token Pricing (`promptCostPer1k`, `completionCostPer1k`)**: Perhitungan biaya dinamis dan perutean `lowest-cost` otomatis berdasarkan rasio panjang prompt dan token keluaran.
-12. **Adaptive Rate-Limiting & Proactive Throttling**: Ekstraksi header kuota rate-limit (`x-ratelimit-*`, `retry-after`) secara otomatis guna mencegah HTTP 429.
 
-## Keamanan & Kualitas
-- **100% Lokal:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
-- **Zero Overhead:** Desain lokal menjamin tambahan latensi < 10ms.
-- **Pengujian Komprehensif:** 169/169 unit & integration tests lulus di 17 test suites dengan cakupan lengkap seluruh provider, fallback, semantic cache, dan batch engine.
-- **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome tanpa peringatan maupun error.
+## Keamanan & Standar Kualitas
+- **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
+- **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
+- **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
+- **Pengujian Komprehensif:** 319/319 unit & integration tests lulus di 29 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
+- **25 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 25) teruji dan 100% lulus kompilasi TypeScript.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.
-

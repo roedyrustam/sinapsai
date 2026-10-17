@@ -51,6 +51,10 @@ export class GroqProvider implements Provider {
     return this.config.fallbackModels;
   }
 
+  get defaultModel(): string | undefined {
+    return this.config.defaultModel;
+  }
+
   public resolveModel(model: string): string {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];

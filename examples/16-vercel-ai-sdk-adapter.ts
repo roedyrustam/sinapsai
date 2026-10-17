@@ -267,7 +267,7 @@ async function run() {
       process.stdout.write(value.textDelta);
     } else if (value?.type === 'finish') {
       console.log(
-        `\n   ✅ [Stream Finished: reason=${value.finishReason}, tokens=${value.usage.totalTokens || value.usage.completionTokens}]`,
+        `\n   ✅ [Stream Finished: reason=${value.finishReason}, tokens=${value.usage.promptTokens + value.usage.completionTokens}]`,
       );
     }
   }

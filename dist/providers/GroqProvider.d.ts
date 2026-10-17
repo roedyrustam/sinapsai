@@ -18,6 +18,7 @@ export declare class GroqProvider implements Provider {
     get retries(): number | undefined;
     get retryDelayMs(): number | undefined;
     get fallbackModels(): string[] | undefined;
+    get defaultModel(): string | undefined;
     resolveModel(model: string): string;
     formatRequest(request: UnifiedApiRequest): any;
     formatResponse(data: any): UnifiedApiResponse;
