@@ -114,7 +114,11 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 - 🚀 **Engine Batch Konkuren In-Process (`client.batch`)**: Pool pekerja tanpa dependensi untuk pemrosesan paralel chat completion dan embedding dalam skala besar dengan pembatasan konkurensi dan penjejakan progres langsung.
 - 🌊 **Dukungan Streaming SSE**: Streaming respons teks *real-time* menggunakan async generator native (`for await...of`).
 - 🔒 **Privasi & Keamanan Penuh**: 100% berjalan lokal di memori proses aplikasi Anda. Kunci API dan konten prompt tidak pernah dikirimkan ke server pihak ketiga.
-- 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) untuk integrasi ke sistem APM, Prometheus, atau logging.
+- 🗜️ **Kompresor Konteks Dinamis (`ContextCompressor`)**: Estimasi token heuristik tanpa dependensi dan pemotongan cerdas (`sliding-window` & `middle-out`) dengan preservasi grup pemanggilan tool secara atomik.
+- 💳 **Guardrail Anggaran FinOps (`budget`)**: Tentukan batas keras (`action: 'block'`) atau peringatan lembut (`action: 'warn'`) untuk pengeluaran kumulatif USD dan volume token.
+- ⏱️ **Permintaan Spekulatif Hedged (`HedgedExecutor`)**: Luncurkan permintaan cadangan setelah jeda waktu tertentu guna memangkas latensi ekor (P99/P99.9) pada provider redundan, dengan pembatalan otomatis bagi request yang kalah cepat.
+- 🪐 **Dukungan Provider Frontier Luas**: Integrasi kelas satu untuk xAI Grok (dengan `reasoningEffort`), Cohere v2 (Command A, Embed v4), Google Gemini (otentikasi header, sanitasi schema), Anthropic Claude, OpenAI, DeepSeek, dan Groq.
+- 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`, `onSecurityViolation`, `onBudgetWarning`) untuk integrasi ke sistem APM, Prometheus, atau logging.
 
 ---
 
@@ -1163,13 +1167,18 @@ export class OllamaProvider implements Provider {
 | Properti | Tipe | Nilai Default | Keterangan |
 | :--- | :--- | :--- | :--- |
 | `providers` | `Provider[]` | *(Wajib)* | Daftar instance provider yang digunakan |
-| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency'` | `'failover'` | Algoritma perutean request |
-| `storage` | `StateStorage` | `InMemoryStorage` | Tempat penyimpanan state sirkuit breaker |
+| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency' \| 'adaptive'` | `'failover'` | Algoritma perutean request |
+| `storage` | `StateStorage` | `InMemoryStorage` | Tempat penyimpanan state sirkuit breaker dan cache |
 | `circuitBreaker` | `CircuitBreakerOptions` | `{}` | Konfigurasi toleransi kegagalan sirkuit |
 | `cache` | `CacheOptions` | `{}` | Konfigurasi caching respons in-process (exact & semantik) |
 | `retries` | `number` | `0` | Jumlah pengulangan (retry) otomatis dengan exponential backoff |
 | `retryDelayMs` | `number` | `200` | Jeda awal (delay) percobaan ulang dalam milidetik |
 | `fallbackModels` | `string[]` | `undefined` | Daftar global model cadangan sekunder |
+| `budget` | `BudgetOptions` | `undefined` | Guardrail anggaran FinOps untuk biaya USD & limit token (`maxCostUsd`, `maxTotalTokens`, `action`) |
+| `contextCompression` | `ContextCompressionOptions` | `undefined` | Pemotongan percakapan in-process (`sliding-window` atau `middle-out`) |
+| `piiGuardrails` | `ExtendedPIIGuardrailsOptions \| boolean` | `undefined` | Redaksi in-process dan tokenisasi reversibel data PII sensitif |
+| `securityGuardrails` | `SecurityGuardrailsOptions \| boolean` | `undefined` | Pertahanan prompt injection, jailbreak, dan manipulasi system prompt |
+| `modelAliases` | `Record<string, string>` | `undefined` | Pemetaan alias model virtual (contoh: `{ 'fast': 'gpt-4o-mini' }`) |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
 
 ### `CircuitBreakerOptions`

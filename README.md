@@ -112,7 +112,11 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 - 🚀 **Concurrent In-Process Batch Engine (`client.batch`)**: Zero-dependency worker pool for high-throughput batch chat completions and embeddings with concurrency limits and live progress tracking.
 - 🌊 **Native SSE Streaming**: Stream completions in real time using native asynchronous generators (`for await...of`).
 - 🔒 **Zero Data Leakage & 100% Local**: Runs strictly within your application's memory space. API keys and prompt payloads never leave your infrastructure.
-- 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`) for APM metrics and custom alerting.
+- 🗜️ **In-Process Context Compressor (`ContextCompressor`)**: Zero-dependency heuristic token estimation and smart truncation (`sliding-window` & `middle-out`) with atomic tool-call group preservation.
+- 💳 **FinOps Spend & Token Guardrails (`budget`)**: Set strict hard caps (`action: 'block'`) or soft alert thresholds (`action: 'warn'`) for cumulative USD spend and token volumes.
+- ⏱️ **Speculative Hedged Requests (`HedgedExecutor`)**: Launch backup requests after a configured delay to eliminate tail latency (P99/P99.9) across redundant providers, aborting slower calls automatically.
+- 🪐 **Extensible Frontier Providers**: First-class integration for xAI Grok (with `reasoningEffort`), Cohere v2 (Command A, Embed v4), Google Gemini (header auth, schema sanitization), Anthropic Claude, OpenAI, DeepSeek, and Groq.
+- 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`, `onSecurityViolation`, `onBudgetWarning`) for APM metrics and custom alerting.
 
 ---
 
@@ -1159,13 +1163,18 @@ export class OllamaProvider implements Provider {
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `providers` | `Provider[]` | *(Required)* | List of provider instances to register |
-| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency'` | `'failover'` | Routing algorithm for requests |
-| `storage` | `StateStorage` | `InMemoryStorage` | State store for circuit breaker tracking |
+| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency' \| 'adaptive'` | `'failover'` | Routing algorithm for requests |
+| `storage` | `StateStorage` | `InMemoryStorage` | State store for circuit breaker and caching |
 | `circuitBreaker` | `CircuitBreakerOptions` | `{}` | Fault tolerance parameters |
 | `cache` | `CacheOptions` | `{}` | In-process exact & semantic response caching configuration |
 | `retries` | `number` | `0` | Number of retries with exponential backoff before failover |
 | `retryDelayMs` | `number` | `200` | Initial backoff delay for retries |
 | `fallbackModels` | `string[]` | `undefined` | Global candidate model fallback list |
+| `budget` | `BudgetOptions` | `undefined` | FinOps spend & token cap guardrails (`maxCostUsd`, `maxTotalTokens`, `action: 'block' \| 'warn'`) |
+| `contextCompression` | `ContextCompressionOptions` | `undefined` | In-process conversation turn truncation (`sliding-window` or `middle-out`) |
+| `piiGuardrails` | `ExtendedPIIGuardrailsOptions \| boolean` | `undefined` | In-process redaction and reversible tokenization of sensitive PII |
+| `securityGuardrails` | `SecurityGuardrailsOptions \| boolean` | `undefined` | Prompt injection, jailbreak, and system prompt override defense |
+| `modelAliases` | `Record<string, string>` | `undefined` | Virtual model alias mapping (e.g. `{ 'fast': 'gpt-4o-mini' }`) |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |
 
 ### `CircuitBreakerOptions`
