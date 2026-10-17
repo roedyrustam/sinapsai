@@ -28,25 +28,41 @@ async function* parseSSE(response) {
   const decoder = new TextDecoder();
   let buffer = "";
   let currentEvent;
+  const processLine = (line) => {
+    if (!line.trim()) {
+      currentEvent = void 0;
+      return null;
+    }
+    if (line.startsWith("event:")) {
+      currentEvent = line.slice(6).trim();
+      return null;
+    }
+    if (line.startsWith("data:")) {
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") return null;
+      return { event: currentEvent, data };
+    }
+    return null;
+  };
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || "";
       for (const line of lines) {
-        if (!line.trim()) {
-          currentEvent = void 0;
-          continue;
-        }
-        if (line.startsWith("event:")) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          const data = line.slice(5).trim();
-          if (data === "[DONE]") continue;
-          yield { event: currentEvent, data };
-        }
+        const msg = processLine(line);
+        if (msg) yield msg;
+      }
+    }
+    if (buffer.trim()) {
+      for (const line of buffer.split(/\r?\n/)) {
+        const msg = processLine(line);
+        if (msg) yield msg;
       }
     }
   } finally {

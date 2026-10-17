@@ -21,28 +21,46 @@ export async function* parseSSE(
   let buffer = '';
   let currentEvent: string | undefined;
 
+  const processLine = (line: string): SSEMessage | null => {
+    if (!line.trim()) {
+      currentEvent = undefined;
+      return null;
+    }
+    if (line.startsWith('event:')) {
+      currentEvent = line.slice(6).trim();
+      return null;
+    }
+    if (line.startsWith('data:')) {
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') return null;
+      return { event: currentEvent, data };
+    }
+    return null;
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        buffer += decoder.decode(); // flush remaining bytes
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (!line.trim()) {
-          currentEvent = undefined;
-          continue;
-        }
+        const msg = processLine(line);
+        if (msg) yield msg;
+      }
+    }
 
-        if (line.startsWith('event:')) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          const data = line.slice(5).trim();
-          if (data === '[DONE]') continue;
-          yield { event: currentEvent, data };
-        }
+    // Flush sisa buffer terakhir jika tidak diakhiri newline
+    if (buffer.trim()) {
+      for (const line of buffer.split(/\r?\n/)) {
+        const msg = processLine(line);
+        if (msg) yield msg;
       }
     }
   } finally {
