@@ -6,12 +6,13 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
+import { GatewayRateLimiter } from './RateLimiter.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import { SecurityGuardrails } from './SecurityGuardrails.js';
 import type { StateStorage } from './StateStorage.js';
@@ -65,6 +66,12 @@ export interface SinapsClientOptions {
      * Automatically fires backup requests after delayMs if primary provider has not responded yet.
      */
     hedging?: HedgingOptions;
+    /**
+     * Optional in-process gateway rate limiting configuration.
+     * Enforces Requests Per Minute (RPM) and Tokens Per Minute (TPM)
+     * globally, per-user, per-model, or per-provider using a sliding-window counter.
+     */
+    rateLimiting?: GatewayRateLimitOptions | boolean;
 }
 export declare class SinapsClient {
     private router;
@@ -73,6 +80,7 @@ export declare class SinapsClient {
     readonly securityGuardrails?: SecurityGuardrails;
     readonly contextCompressor?: ContextCompressor;
     readonly hedgedExecutor?: HedgedExecutor;
+    readonly rateLimiter?: GatewayRateLimiter;
     private isReversiblePII;
     private modelAliases;
     private hooks?;
@@ -153,5 +161,13 @@ export declare class SinapsClient {
      * Checks the health and liveness of all configured providers.
      */
     checkHealth(options?: HealthCheckOptions): Promise<GatewayHealthReport>;
+    /**
+     * Formats current gateway telemetry metrics into Prometheus / OpenMetrics exposition format.
+     */
+    exportPrometheusMetrics(options?: PrometheusExportOptions): string;
+    /**
+     * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
+     */
+    exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

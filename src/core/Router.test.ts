@@ -201,7 +201,7 @@ describe('Router', () => {
         id: 'p1',
         name: 'p1',
         generateContent: vi.fn().mockImplementation(async () => {
-          await new Promise((r) => setTimeout(r, 40));
+          await new Promise((r) => setTimeout(r, 80));
           return mockResponse;
         }),
       } as unknown as Provider;
@@ -211,7 +211,7 @@ describe('Router', () => {
         id: 'p2',
         name: 'p2',
         generateContent: vi.fn().mockImplementation(async () => {
-          await new Promise((r) => setTimeout(r, 5));
+          await new Promise((r) => setTimeout(r, 2));
           if (p2Fail) throw new Error('p2 transient failure');
           return mockResponse;
         }),

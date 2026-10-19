@@ -81,6 +81,9 @@ npx tsx examples/24-xai-and-cohere-providers.ts
 
 # 25. Hedged Speculative Requests for Tail-Latency (P99) Reduction
 npx tsx examples/25-hedged-requests-tail-latency.ts
+
+# 26. In-Process Gateway Rate Limiting & Prometheus/OpenTelemetry Metrics Export
+npx tsx examples/26-gateway-rate-limiting-and-metrics-export.ts
 ```
 
 

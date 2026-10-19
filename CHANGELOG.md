@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.7.0] - 2026-10-20
+### Added
+- **In-Process Gateway Rate Limiting (`GatewayRateLimiter`, `GatewayRateLimitError`)**:
+  - Zero-dependency sliding-window counter algorithm with sub-window counter weighting to eliminate boundary burst vulnerabilities.
+  - Supports Requests Per Minute (RPM) and Tokens Per Minute (TPM) enforcement with automatic heuristic estimation and post-response token usage adjustment (`adjustTokens`).
+  - Granular multi-tier rules: global default rules (`defaultRule`), model-specific caps (`modelRules`), provider caps (`providerRules`), and user/tenant partitioning via `keyGenerator` or `request.user`.
+  - Configurable actions (`block` throwing `GatewayRateLimitError` or `warn` emitting `onGatewayRateLimitWarning`).
+- **Native Prometheus & OpenMetrics Exporter (`exportPrometheusMetrics`)**:
+  - Zero-dependency formatting utility `formatPrometheusMetrics` outputting standard OpenMetrics/Prometheus text exposition format.
+  - Exposes counters for total requests, completion statuses, tokens (prompt, completion, cached), estimated cost (USD), and per-provider counters and latency gauges.
+  - Accessible via `client.exportPrometheusMetrics()` and `router.exportPrometheusMetrics()` with customizable metric prefixes and static labels.
+- **Native OpenTelemetry OTLP JSON Exporter (`exportOtelMetrics`)**:
+  - Zero-dependency formatting utility `formatOtelMetrics` outputting OTLP v1 JSON `ResourceMetrics` schema directly sendable to any OpenTelemetry collector endpoint (`/v1/metrics`).
+  - Accessible via `client.exportOtelMetrics()` and `router.exportOtelMetrics()` with configurable `serviceName`, `serviceVersion`, and custom resource attributes.
+- **Native Anthropic Prompt Caching (`promptCaching`)**:
+  - Added `promptCaching?: boolean | 'auto'` to `ProviderConfig` for Anthropic Claude.
+  - Automatically injects `anthropic-beta: prompt-caching-2024-07-31` HTTP header and structures system prompts with `cache_control: { type: 'ephemeral' }` for prefixes >1,024 tokens.
+  - Unified token extraction for `cache_creation_input_tokens` and `cache_read_input_tokens` mapped into `UnifiedApiUsage.cachedPromptTokens` across both non-streaming responses and streaming `message_start` / `message_delta` events.
+- **Strict `HALF_OPEN` Canary Probing on `CircuitBreaker` (Anti-Thundering-Herd)**:
+  - Enforced single-canary probe admission when recovering from `OPEN` to `HALF_OPEN`.
+  - Concurrent requests arriving during canary probe execution are safely shielded (`cb:probe:${providerId}`) and routed to fallback providers via `isAvailable()`, preventing downstream thundering herd crashes.
+  - Automatic probe lock cleanup across successes, failures, client aborts, and early stream cancellations.
+- **Universal Signal Detach & Memory Safety (`linkAbortSignal`)**:
+  - Added zero-dependency `linkAbortSignal` utility in `src/utils/signal.ts` to bridge external client signals with internal timeouts and downstream fetch controllers.
+  - Guaranteed deterministic event listener removal in `finally` blocks across all 10 LLM providers (`OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `DeepSeekProvider`, `GroqProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`).
+  - Eliminates Node.js `MaxListenersExceededWarning` and prevents memory leaks in high-concurrency and long-running production environments.
+- **Early Stream Consumer Abort & Resource Severing**:
+  - Integrated `finally { controller.abort(); cleanupSignal?.(); }` inside streaming async generators across all providers.
+  - Breaking or exiting early from an async stream consumer loop (`for await (const chunk of stream) { break; }`) immediately terminates the underlying upstream HTTP connection to eliminate wasted tokens and server bandwidth.
+
 ## [2.6.0] - 2026-10-18
 ### Added
 - **Gemini 4.x & Frontier Model Alignment (2026 Edition)**:

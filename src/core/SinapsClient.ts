@@ -19,7 +19,11 @@ import type {
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
   GatewayHealthReport,
+  GatewayRateLimitOptions,
   HealthCheckOptions,
+  OtelExportOptions,
+  OtelResourceMetrics,
+  PrometheusExportOptions,
   SecurityGuardrailsOptions,
   SinapsEventHooks,
   SinapsMetrics,
@@ -47,6 +51,7 @@ import {
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
+import { GatewayRateLimitError, GatewayRateLimiter } from './RateLimiter.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
 import {
   SecurityGuardrailError,
@@ -105,6 +110,12 @@ export interface SinapsClientOptions {
    * Automatically fires backup requests after delayMs if primary provider has not responded yet.
    */
   hedging?: HedgingOptions;
+  /**
+   * Optional in-process gateway rate limiting configuration.
+   * Enforces Requests Per Minute (RPM) and Tokens Per Minute (TPM)
+   * globally, per-user, per-model, or per-provider using a sliding-window counter.
+   */
+  rateLimiting?: GatewayRateLimitOptions | boolean;
 }
 
 export class SinapsClient {
@@ -114,6 +125,7 @@ export class SinapsClient {
   public readonly securityGuardrails?: SecurityGuardrails;
   public readonly contextCompressor?: ContextCompressor;
   public readonly hedgedExecutor?: HedgedExecutor;
+  public readonly rateLimiter?: GatewayRateLimiter;
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
   private hooks?: SinapsEventHooks;
@@ -125,6 +137,20 @@ export class SinapsClient {
     if (options.modelAliases) {
       for (const [alias, target] of Object.entries(options.modelAliases)) {
         this.modelAliases.set(alias, target);
+      }
+    }
+
+    // Initialize Gateway Rate Limiter if configured
+    if (options.rateLimiting) {
+      if (options.rateLimiting === true) {
+        this.rateLimiter = new GatewayRateLimiter(this.storage, {
+          defaultRule: { requestsPerMinute: 600 },
+        });
+      } else {
+        this.rateLimiter = new GatewayRateLimiter(
+          this.storage,
+          options.rateLimiting,
+        );
       }
     }
 
@@ -241,9 +267,36 @@ export class SinapsClient {
           fallbackModels: request.fallbackModels,
           thinkingBudget: request.thinkingBudget,
           reasoningEffort: request.reasoningEffort,
+          user: request.user,
         };
 
+        let estimatedTokens = 0;
+        if (this.rateLimiter) {
+          estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
+          const check = await this.rateLimiter.check(fullReq, {
+            estimatedTokens,
+          });
+          if (!check.allowed && check.violation) {
+            this.hooks?.onGatewayRateLimitWarning?.(check.violation);
+            if (this.rateLimiter.action === 'block') {
+              throw new GatewayRateLimitError(
+                `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
+                check.violation,
+              );
+            }
+          }
+        }
+
         const res = await this.router.execute(fullReq);
+
+        const actualTokens = (res as UnifiedApiResponse).usage?.totalTokens;
+        if (this.rateLimiter && !request.stream && actualTokens !== undefined) {
+          await this.rateLimiter.adjustTokens(
+            fullReq,
+            actualTokens,
+            estimatedTokens,
+          );
+        }
 
         // Reversibly restore PII values if vault contains tokens
         if (
@@ -343,10 +396,38 @@ export class SinapsClient {
       request: CreateEmbeddingRequest,
     ): Promise<CreateEmbeddingResponse> => {
       const model = this.resolveModel(request.model);
-      return this.router.executeEmbedding({
+      const fullReq: CreateEmbeddingRequest = {
         ...request,
         model,
-      });
+      };
+
+      if (this.rateLimiter) {
+        const dummyReq: UnifiedApiRequest = {
+          model,
+          messages: [],
+          user: request.user,
+        };
+        const inputTokens = Array.isArray(request.input)
+          ? request.input.reduce(
+              (acc, str) => acc + Math.ceil(str.length / 4),
+              0,
+            )
+          : Math.ceil(request.input.length / 4);
+        const check = await this.rateLimiter.check(dummyReq, {
+          estimatedTokens: inputTokens,
+        });
+        if (!check.allowed && check.violation) {
+          this.hooks?.onGatewayRateLimitWarning?.(check.violation);
+          if (this.rateLimiter.action === 'block') {
+            throw new GatewayRateLimitError(
+              `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
+              check.violation,
+            );
+          }
+        }
+      }
+
+      return this.router.executeEmbedding(fullReq);
     },
   };
 
@@ -450,5 +531,19 @@ export class SinapsClient {
     options?: HealthCheckOptions,
   ): Promise<GatewayHealthReport> {
     return this.router.checkHealth(options);
+  }
+
+  /**
+   * Formats current gateway telemetry metrics into Prometheus / OpenMetrics exposition format.
+   */
+  public exportPrometheusMetrics(options?: PrometheusExportOptions): string {
+    return this.router.exportPrometheusMetrics(options);
+  }
+
+  /**
+   * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
+   */
+  public exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
+    return this.router.exportOtelMetrics(options);
   }
 }

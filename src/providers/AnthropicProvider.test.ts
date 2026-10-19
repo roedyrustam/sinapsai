@@ -546,5 +546,29 @@ describe('AnthropicProvider', () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it('should inject cache_control when promptCaching is enabled and include beta header', async () => {
+      const cachedProvider = new AnthropicProvider({
+        apiKey: 'test-key',
+        promptCaching: true,
+      });
+
+      const payload = cachedProvider.formatRequest({
+        model: 'claude-3-7-sonnet',
+        messages: [
+          { role: 'system', content: 'You are an advanced AI assistant.' },
+          { role: 'user', content: 'Hello' },
+        ],
+      });
+
+      expect(Array.isArray(payload.system)).toBe(true);
+      expect(payload.system).toEqual([
+        {
+          type: 'text',
+          text: 'You are an advanced AI assistant.',
+          cache_control: { type: 'ephemeral' },
+        },
+      ]);
+    });
   });
 });

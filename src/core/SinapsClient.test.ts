@@ -566,4 +566,182 @@ describe('SinapsClient', () => {
       expect(backupProvider.generateContent).not.toHaveBeenCalled();
     });
   });
+
+  describe('Gateway Rate Limiting Integration', () => {
+    it('should enforce gateway rate limits on chat completions', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'hello' },
+            finishReason: 'stop',
+          },
+        ],
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      });
+
+      const client = new SinapsClient({
+        providers: [{ name: 'mock', generateContent: mockGenerate }],
+        rateLimiting: {
+          defaultRule: { requestsPerMinute: 2 },
+        },
+      });
+
+      // 1st request succeeds
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'hi 1' }],
+      });
+      // 2nd request succeeds
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'hi 2' }],
+      });
+
+      // 3rd request exceeds limit
+      await expect(
+        client.chat.completions.create({
+          messages: [{ role: 'user', content: 'hi 3' }],
+        }),
+      ).rejects.toThrow('Gateway rate limit exceeded');
+    });
+
+    it('should emit onGatewayRateLimitWarning hook when action is warn', async () => {
+      const warningSpy = vi.fn();
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'warned response' },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      const client = new SinapsClient({
+        providers: [{ name: 'mock', generateContent: mockGenerate }],
+        hooks: {
+          onGatewayRateLimitWarning: warningSpy,
+        },
+        rateLimiting: {
+          action: 'warn',
+          defaultRule: { requestsPerMinute: 1 },
+        },
+      });
+
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'req 1' }],
+      });
+      // Exceeds limit, but should not throw because action: 'warn'
+      const res = await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'req 2' }],
+      });
+
+      expect(res).toBeDefined();
+      expect(warningSpy).toHaveBeenCalledTimes(1);
+      expect(warningSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ limitType: 'requests', limit: 1 }),
+      );
+    });
+
+    it('should enforce rate limits on embeddings creation', async () => {
+      const mockEmbed = vi.fn().mockResolvedValue({
+        object: 'list',
+        data: [{ index: 0, embedding: [0.1, 0.2], object: 'embedding' }],
+        model: 'test-emb',
+      });
+
+      const client = new SinapsClient({
+        providers: [{ name: 'mock', generateEmbedding: mockEmbed }],
+        rateLimiting: {
+          defaultRule: { requestsPerMinute: 1 },
+        },
+      });
+
+      await client.embeddings.create({
+        model: 'test-emb',
+        input: 'first embedding',
+      });
+
+      await expect(
+        client.embeddings.create({
+          model: 'test-emb',
+          input: 'second embedding',
+        }),
+      ).rejects.toThrow('Gateway rate limit exceeded');
+    });
+  });
+
+  describe('Prometheus & OpenTelemetry Metrics Export', () => {
+    it('should export Prometheus metrics via client.exportPrometheusMetrics()', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'test' },
+            finishReason: 'stop',
+          },
+        ],
+        usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          { id: 'test-p', name: 'TestP', generateContent: mockGenerate },
+        ],
+      });
+
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+
+      const promOutput = client.exportPrometheusMetrics({ prefix: 'sinaps_' });
+      expect(typeof promOutput).toBe('string');
+      expect(promOutput).toContain('# HELP sinaps_requests_total');
+      expect(promOutput).toContain('sinaps_requests_total 1');
+      expect(promOutput).toContain(
+        'sinaps_provider_requests_total{provider="test-p"} 1',
+      );
+    });
+
+    it('should export OpenTelemetry metrics via client.exportOtelMetrics()', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'test' },
+            finishReason: 'stop',
+          },
+        ],
+        usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          { id: 'test-p', name: 'TestP', generateContent: mockGenerate },
+        ],
+      });
+
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+
+      const otelOutput = client.exportOtelMetrics({
+        serviceName: 'my-gateway',
+      });
+      expect(otelOutput).toHaveProperty('resourceMetrics');
+      expect(otelOutput.resourceMetrics[0].resource.attributes).toContainEqual({
+        key: 'service.name',
+        value: { stringValue: 'my-gateway' },
+      });
+      const metricNames =
+        otelOutput.resourceMetrics[0].scopeMetrics[0].metrics.map(
+          (m) => m.name,
+        );
+      expect(metricNames).toContain('sinaps.requests.total');
+      expect(metricNames).toContain('sinaps.tokens.total');
+    });
+  });
 });

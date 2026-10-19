@@ -131,6 +131,10 @@ export interface UnifiedApiRequest {
   cachedContent?: string;
   googleSearch?: boolean;
   codeExecution?: boolean;
+  /**
+   * A unique identifier representing your end-user, useful for tracking abuse and rate limiting.
+   */
+  user?: string;
 }
 
 export interface CreateChatCompletionRequestNonStreaming
@@ -209,6 +213,11 @@ export interface ProviderConfig {
   fallbackModels?: string[];
   retries?: number;
   retryDelayMs?: number;
+  /**
+   * Enables native provider prompt caching (e.g. Anthropic cache_control breakpoints).
+   * 'auto' automatically injects cache breakpoints on system instructions exceeding 2,048 chars.
+   */
+  promptCaching?: boolean | 'auto';
 }
 
 export interface CreateEmbeddingRequest {
@@ -409,6 +418,7 @@ export interface SinapsEventHooks {
     delayMs: number,
   ) => void;
   onHedgeWon?: (winnerProvider: Provider, elapsedMs: number) => void;
+  onGatewayRateLimitWarning?: (violation: GatewayRateLimitViolation) => void;
 }
 
 export interface BatchProgress {
@@ -552,3 +562,154 @@ export type {
   HedgeRaceResult,
   HedgingOptions,
 } from '../core/HedgedExecutor.js';
+
+export interface GatewayRateLimitRule {
+  /**
+   * Maximum allowed requests in the window (Requests Per Minute).
+   */
+  requestsPerMinute?: number;
+  /**
+   * Maximum allowed cumulative tokens (prompt + completion) in the window (Tokens Per Minute).
+   */
+  tokensPerMinute?: number;
+  /**
+   * Duration of the sliding-window in milliseconds (default: 60,000 = 1 minute).
+   */
+  windowMs?: number;
+}
+
+export interface GatewayRateLimitOptions {
+  /**
+   * Enable in-process gateway rate limiting. Default: true when options are provided.
+   */
+  enabled?: boolean;
+  /**
+   * Default rule applied to requests if no model-specific or provider-specific rule matches.
+   */
+  defaultRule?: GatewayRateLimitRule;
+  /**
+   * Model-specific rules (e.g. { 'claude-3-7-sonnet': { requestsPerMinute: 20 } }).
+   */
+  modelRules?: Record<string, GatewayRateLimitRule>;
+  /**
+   * Provider-specific rules (e.g. { 'groq': { requestsPerMinute: 30 } }).
+   */
+  providerRules?: Record<string, GatewayRateLimitRule>;
+  /**
+   * Custom key generator to partition limits by tenant, user, or IP.
+   * Defaults to extracting `request.user` or returns 'global'.
+   */
+  keyGenerator?: (request: UnifiedApiRequest) => string;
+  /**
+   * Action when limit is exceeded:
+   * - 'block': Throws GatewayRateLimitError (default).
+   * - 'warn': Invokes onRateLimitExceeded and hook, but allows request.
+   */
+  action?: 'block' | 'warn';
+  /**
+   * Callback invoked whenever a rate limit threshold is exceeded.
+   */
+  onRateLimitExceeded?: (violation: GatewayRateLimitViolation) => void;
+}
+
+export interface GatewayRateLimitViolation {
+  key: string;
+  scope: 'global' | 'user' | 'model' | 'provider';
+  limitType: 'requests' | 'tokens';
+  limit: number;
+  current: number;
+  resetMs: number;
+  retryAfterSec: number;
+  model?: string;
+  providerId?: string;
+}
+
+export interface RateLimitCheckResult {
+  allowed: boolean;
+  violation?: GatewayRateLimitViolation;
+  remainingRequests?: number;
+  remainingTokens?: number;
+  resetMs: number;
+}
+
+export interface PrometheusExportOptions {
+  /**
+   * Metric name prefix (default: 'sinaps_').
+   */
+  prefix?: string;
+  /**
+   * Additional static labels to inject into all metric lines (e.g. { env: 'production' }).
+   */
+  labels?: Record<string, string>;
+  /**
+   * Include current millisecond timestamp at the end of each metric line. Default: false
+   */
+  includeTimestamps?: boolean;
+}
+
+export interface OtelExportOptions {
+  /**
+   * Service name reported in resource attributes (default: 'sinapsai-gateway').
+   */
+  serviceName?: string;
+  /**
+   * Service version reported in resource attributes (default: '2.7.0').
+   */
+  serviceVersion?: string;
+  /**
+   * Custom attributes attached to the root resource.
+   */
+  resourceAttributes?: Record<string, string | number | boolean>;
+}
+
+export interface OtelMetricItem {
+  name: string;
+  description: string;
+  unit: string;
+  sum?: {
+    dataPoints: Array<{
+      asInt?: number;
+      asDouble?: number;
+      timeUnixNano: string;
+      attributes: Array<{
+        key: string;
+        value: { stringValue: string };
+      }>;
+    }>;
+    aggregationTemporality: number;
+    isMonotonic: boolean;
+  };
+  gauge?: {
+    dataPoints: Array<{
+      asDouble: number;
+      timeUnixNano: string;
+      attributes: Array<{
+        key: string;
+        value: { stringValue: string };
+      }>;
+    }>;
+  };
+}
+
+export interface OtelResourceMetrics {
+  resourceMetrics: Array<{
+    resource: {
+      attributes: Array<{
+        key: string;
+        value: {
+          stringValue?: string;
+          intValue?: number;
+          boolValue?: boolean;
+          doubleValue?: number;
+        };
+      }>;
+    };
+    scopeMetrics: Array<{
+      scope: {
+        name: string;
+        version?: string;
+      };
+      metrics: OtelMetricItem[];
+    }>;
+  }>;
+}

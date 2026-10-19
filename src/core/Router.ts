@@ -15,6 +15,9 @@ import type {
   CreateEmbeddingResponse,
   GatewayHealthReport,
   HealthCheckOptions,
+  OtelExportOptions,
+  OtelResourceMetrics,
+  PrometheusExportOptions,
   ProviderHealth,
   SemanticCacheOptions,
   SinapsEventHooks,
@@ -24,6 +27,10 @@ import type {
   UnifiedApiStreamChunk,
 } from '../types/index.js';
 import { BudgetExceededError } from '../types/index.js';
+import {
+  formatOtelMetrics,
+  formatPrometheusMetrics,
+} from '../utils/metricsExporter.js';
 import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import { HedgedExecutor, type HedgingOptions } from './HedgedExecutor.js';
@@ -1400,5 +1407,19 @@ export class Router {
       errors,
       'All eligible embedding providers failed or are unavailable',
     );
+  }
+
+  /**
+   * Formats current gateway telemetry metrics into Prometheus / OpenMetrics exposition format.
+   */
+  public exportPrometheusMetrics(options?: PrometheusExportOptions): string {
+    return formatPrometheusMetrics(this.getMetrics(), options);
+  }
+
+  /**
+   * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
+   */
+  public exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
+    return formatOtelMetrics(this.getMetrics(), options);
   }
 }

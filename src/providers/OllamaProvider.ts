@@ -14,6 +14,7 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { linkAbortSignal } from '../utils/signal.js';
 import type { Provider } from './Provider.js';
 
 export class OllamaProvider implements Provider {
@@ -154,15 +155,7 @@ export class OllamaProvider implements Provider {
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
-    if (request.signal) {
-      if (request.signal.aborted) {
-        controller.abort();
-      } else {
-        request.signal.addEventListener('abort', () => controller.abort(), {
-          once: true,
-        });
-      }
-    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -215,7 +208,9 @@ export class OllamaProvider implements Provider {
               }
             }
           } finally {
+            cleanupSignal?.();
             if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
           }
         })();
       }
@@ -223,11 +218,13 @@ export class OllamaProvider implements Provider {
       const data = await response.json();
       return this.formatResponse(data);
     } catch (error) {
+      cleanupSignal?.();
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
     } finally {
-      if (!request.stream && timeoutId) {
-        clearTimeout(timeoutId);
+      if (!request.stream) {
+        cleanupSignal?.();
+        if (timeoutId) clearTimeout(timeoutId);
       }
     }
   }
@@ -249,15 +246,7 @@ export class OllamaProvider implements Provider {
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
-    if (request.signal) {
-      if (request.signal.aborted) {
-        controller.abort();
-      } else {
-        request.signal.addEventListener('abort', () => controller.abort(), {
-          once: true,
-        });
-      }
-    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -306,6 +295,7 @@ export class OllamaProvider implements Provider {
           : undefined,
       };
     } finally {
+      cleanupSignal?.();
       if (timeoutId) clearTimeout(timeoutId);
     }
   }

@@ -15,6 +15,7 @@ import type {
   UnifiedApiStreamChunk,
 } from '../types/index.js';
 import { parseRateLimitHeaders } from '../utils/rateLimit.js';
+import { linkAbortSignal } from '../utils/signal.js';
 import type { Provider } from './Provider.js';
 
 export class OpenAiProvider implements Provider {
@@ -164,15 +165,7 @@ export class OpenAiProvider implements Provider {
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
-    if (request.signal) {
-      if (request.signal.aborted) {
-        controller.abort();
-      } else {
-        request.signal.addEventListener('abort', () => controller.abort(), {
-          once: true,
-        });
-      }
-    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
 
     try {
       const response = await fetch(url, {
@@ -237,7 +230,9 @@ export class OpenAiProvider implements Provider {
               }
             }
           } finally {
+            cleanupSignal?.();
             if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
           }
         })();
       }
@@ -250,11 +245,13 @@ export class OpenAiProvider implements Provider {
       }
       return res;
     } catch (error) {
+      cleanupSignal?.();
       if (timeoutId) clearTimeout(timeoutId);
       throw error;
     } finally {
-      if (!request.stream && timeoutId) {
-        clearTimeout(timeoutId);
+      if (!request.stream) {
+        cleanupSignal?.();
+        if (timeoutId) clearTimeout(timeoutId);
       }
     }
   }
@@ -271,15 +268,7 @@ export class OpenAiProvider implements Provider {
     if (this.config.timeoutMs) {
       timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
-    if (request.signal) {
-      if (request.signal.aborted) {
-        controller.abort();
-      } else {
-        request.signal.addEventListener('abort', () => controller.abort(), {
-          once: true,
-        });
-      }
-    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
 
     try {
       const response = await fetch(url, {
@@ -324,6 +313,7 @@ export class OpenAiProvider implements Provider {
           : undefined,
       };
     } finally {
+      cleanupSignal?.();
       if (timeoutId) clearTimeout(timeoutId);
     }
   }

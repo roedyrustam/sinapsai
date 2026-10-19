@@ -382,4 +382,119 @@ describe('CircuitBreaker', () => {
       expect(status.state).toBe('CLOSED');
     });
   });
+
+  describe('Canary Probing (HALF_OPEN Thundering Herd Protection)', () => {
+    it('should admit only one canary probe concurrently during HALF_OPEN', async () => {
+      const cb = new CircuitBreaker(storage, {
+        failureThreshold: 2,
+        resetTimeoutMs: 50,
+      });
+
+      const failingProvider = createMockProvider('canary-test', true);
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+
+      // Verify circuit is OPEN
+      expect(await cb.isAvailable('canary-test')).toBe(false);
+
+      // Wait for cooldown to expire into HALF_OPEN
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      // Before executing, provider is considered available for probing
+      expect(await cb.isAvailable('canary-test')).toBe(true);
+
+      // Create a deferred promise to keep the first probe in flight
+      let resolveProbe!: (value: UnifiedApiResponse) => void;
+      const probePromise = new Promise<UnifiedApiResponse>((resolve) => {
+        resolveProbe = resolve;
+      });
+
+      const inFlightProvider: Provider = {
+        id: 'canary-test',
+        name: 'canary-test',
+        generateContent: vi.fn().mockImplementation(() => probePromise),
+      };
+
+      // Launch the canary probe (don't await it yet)
+      const probeExecution = cb.execute(inFlightProvider, mockRequest);
+
+      // Give event loop a tick to ensure probe is marked in storage
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      // Concurrent request should now see provider as unavailable
+      expect(await cb.isAvailable('canary-test')).toBe(false);
+
+      // Concurrent execute should fail-fast with Circuit breaker is OPEN
+      await expect(cb.execute(inFlightProvider, mockRequest)).rejects.toThrow(
+        'Circuit breaker is OPEN for provider: canary-test',
+      );
+
+      // Now resolve the canary probe
+      resolveProbe(mockResponse);
+      const probeResult = await probeExecution;
+      expect(probeResult).toBe(mockResponse);
+
+      // After successful canary probe, circuit is now CLOSED and available to everyone
+      expect(await cb.isAvailable('canary-test')).toBe(true);
+      const finalStatus = await cb.getStatus('canary-test');
+      expect(finalStatus.state).toBe('CLOSED');
+    });
+
+    it('should release probe lock and trip back to OPEN if canary probe fails', async () => {
+      const cb = new CircuitBreaker(storage, {
+        failureThreshold: 2,
+        resetTimeoutMs: 50,
+      });
+
+      const failingProvider = createMockProvider('canary-fail', true);
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+
+      // Wait for cooldown
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      // Probe fails
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+
+      // Should be immediately OPEN again
+      expect(await cb.isAvailable('canary-fail')).toBe(false);
+      const status = await cb.getStatus('canary-fail');
+      expect(status.state).toBe('OPEN');
+    });
+
+    it('should release probe lock if canary probe is aborted', async () => {
+      const cb = new CircuitBreaker(storage, {
+        failureThreshold: 2,
+        resetTimeoutMs: 50,
+      });
+
+      const failingProvider = createMockProvider('canary-abort', true);
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+      await expect(cb.execute(failingProvider, mockRequest)).rejects.toThrow();
+
+      // Wait for cooldown
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const abortController = new AbortController();
+      const abortProvider: Provider = {
+        id: 'canary-abort',
+        name: 'canary-abort',
+        generateContent: vi.fn().mockImplementation(async () => {
+          const err = new Error('The operation was aborted');
+          err.name = 'AbortError';
+          throw err;
+        }),
+      };
+
+      await expect(
+        cb.execute(abortProvider, {
+          ...mockRequest,
+          signal: abortController.signal,
+        }),
+      ).rejects.toThrow('aborted');
+
+      // Probe lock should have been released, so isAvailable returns true for the next probe attempt
+      expect(await cb.isAvailable('canary-abort')).toBe(true);
+    });
+  });
 });

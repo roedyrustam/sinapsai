@@ -47,6 +47,19 @@ export class CircuitBreaker {
       if (state === 'OPEN') {
         return false;
       }
+      const failures = await this.storage.get<number>(
+        `cb:failures:${providerId}`,
+      );
+      if (failures !== null && failures >= this.failureThreshold) {
+        // Circuit is in HALF_OPEN state.
+        // If a canary probe is already in flight, deny concurrent requests to prevent thundering herd.
+        const probing = await this.storage.get<number>(
+          `cb:probe:${providerId}`,
+        );
+        if (probing !== null && probing > 0) {
+          return false;
+        }
+      }
       return true;
     } catch (_error) {
       // If storage fails, default to fail-open to allow the request
@@ -56,6 +69,7 @@ export class CircuitBreaker {
 
   async recordSuccess(providerId: string): Promise<void> {
     try {
+      await this.storage.delete(`cb:probe:${providerId}`);
       const failures = await this.storage.get<number>(
         `cb:failures:${providerId}`,
       );
@@ -86,6 +100,7 @@ export class CircuitBreaker {
 
   async recordFailure(providerId: string): Promise<void> {
     try {
+      await this.storage.delete(`cb:probe:${providerId}`);
       await this.storage.delete(`cb:successes:${providerId}`);
       const failures = await this.storage.increment(
         `cb:failures:${providerId}`,
@@ -137,6 +152,7 @@ export class CircuitBreaker {
 
   async reset(providerId: string): Promise<void> {
     try {
+      await this.storage.delete(`cb:probe:${providerId}`);
       await this.storage.delete(`cb:failures:${providerId}`);
       await this.storage.delete(`cb:successes:${providerId}`);
       await this.storage.set(`cb:state:${providerId}`, 'CLOSED');
@@ -152,6 +168,21 @@ export class CircuitBreaker {
   ): Promise<UnifiedApiResponse | AsyncIterable<UnifiedApiStreamChunk>> {
     if (!(await this.isAvailable(provider.id))) {
       throw new Error(`Circuit breaker is OPEN for provider: ${provider.id}`);
+    }
+
+    try {
+      const failures = await this.storage.get<number>(
+        `cb:failures:${provider.id}`,
+      );
+      if (failures !== null && failures >= this.failureThreshold) {
+        await this.storage.set(
+          `cb:probe:${provider.id}`,
+          1,
+          Math.max(1, Math.ceil(this.resetTimeoutMs / 1000)),
+        );
+      }
+    } catch (_error) {
+      // Ignore storage errors setting probe lease
     }
 
     try {
@@ -174,6 +205,10 @@ export class CircuitBreaker {
             (error as Error)?.message?.toLowerCase().includes('aborted');
           if (!isAbort) {
             await this.recordFailure(provider.id);
+          } else {
+            try {
+              await this.storage.delete(`cb:probe:${provider.id}`);
+            } catch (_e) {}
           }
           throw error;
         }
@@ -201,8 +236,16 @@ export class CircuitBreaker {
                 .includes('aborted');
             if (!isAbort) {
               await self.recordFailure(provider.id);
+            } else {
+              try {
+                await self.storage.delete(`cb:probe:${provider.id}`);
+              } catch (_e) {}
             }
             throw streamError;
+          } finally {
+            try {
+              await self.storage.delete(`cb:probe:${provider.id}`);
+            } catch (_e) {}
           }
         })();
       }
@@ -216,6 +259,10 @@ export class CircuitBreaker {
         (error as Error)?.message?.toLowerCase().includes('aborted');
       if (!isAbort) {
         await this.recordFailure(provider.id);
+      } else {
+        try {
+          await this.storage.delete(`cb:probe:${provider.id}`);
+        } catch (_e) {}
       }
       throw error;
     }

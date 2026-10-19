@@ -6,7 +6,7 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { BudgetOptions, CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BudgetOptions, CacheOptions, CircuitBreakerStatus, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, SemanticCacheOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { BudgetExceededError } from '../types/index.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
 import { HedgedExecutor, type HedgingOptions } from './HedgedExecutor.js';
@@ -69,5 +69,13 @@ export declare class Router {
     private saveResponseToCache;
     private computeEmbeddingCacheKey;
     executeEmbedding(request: CreateEmbeddingRequest): Promise<CreateEmbeddingResponse>;
+    /**
+     * Formats current gateway telemetry metrics into Prometheus / OpenMetrics exposition format.
+     */
+    exportPrometheusMetrics(options?: PrometheusExportOptions): string;
+    /**
+     * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
+     */
+    exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
 }
 //# sourceMappingURL=Router.d.ts.map

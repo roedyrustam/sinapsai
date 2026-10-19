@@ -326,6 +326,17 @@ var CircuitBreaker = class {
       if (state === "OPEN") {
         return false;
       }
+      const failures = await this.storage.get(
+        `cb:failures:${providerId}`
+      );
+      if (failures !== null && failures >= this.failureThreshold) {
+        const probing = await this.storage.get(
+          `cb:probe:${providerId}`
+        );
+        if (probing !== null && probing > 0) {
+          return false;
+        }
+      }
       return true;
     } catch (_error) {
       return true;
@@ -333,6 +344,7 @@ var CircuitBreaker = class {
   }
   async recordSuccess(providerId) {
     try {
+      await this.storage.delete(`cb:probe:${providerId}`);
       const failures = await this.storage.get(
         `cb:failures:${providerId}`
       );
@@ -357,6 +369,7 @@ var CircuitBreaker = class {
   }
   async recordFailure(providerId) {
     try {
+      await this.storage.delete(`cb:probe:${providerId}`);
       await this.storage.delete(`cb:successes:${providerId}`);
       const failures = await this.storage.increment(
         `cb:failures:${providerId}`
@@ -400,6 +413,7 @@ var CircuitBreaker = class {
   }
   async reset(providerId) {
     try {
+      await this.storage.delete(`cb:probe:${providerId}`);
       await this.storage.delete(`cb:failures:${providerId}`);
       await this.storage.delete(`cb:successes:${providerId}`);
       await this.storage.set(`cb:state:${providerId}`, "CLOSED");
@@ -410,6 +424,19 @@ var CircuitBreaker = class {
   async execute(provider, request) {
     if (!await this.isAvailable(provider.id)) {
       throw new Error(`Circuit breaker is OPEN for provider: ${provider.id}`);
+    }
+    try {
+      const failures = await this.storage.get(
+        `cb:failures:${provider.id}`
+      );
+      if (failures !== null && failures >= this.failureThreshold) {
+        await this.storage.set(
+          `cb:probe:${provider.id}`,
+          1,
+          Math.max(1, Math.ceil(this.resetTimeoutMs / 1e3))
+        );
+      }
+    } catch (_error) {
     }
     try {
       const response = await provider.generateContent(request);
@@ -423,6 +450,11 @@ var CircuitBreaker = class {
           const isAbort = request.signal?.aborted || error?.name === "AbortError" || error?.message?.toLowerCase().includes("aborted");
           if (!isAbort) {
             await this.recordFailure(provider.id);
+          } else {
+            try {
+              await this.storage.delete(`cb:probe:${provider.id}`);
+            } catch (_e) {
+            }
           }
           throw error;
         }
@@ -443,8 +475,18 @@ var CircuitBreaker = class {
             const isAbort = request.signal?.aborted || streamError?.name === "AbortError" || streamError?.message?.toLowerCase().includes("aborted");
             if (!isAbort) {
               await self.recordFailure(provider.id);
+            } else {
+              try {
+                await self.storage.delete(`cb:probe:${provider.id}`);
+              } catch (_e) {
+              }
             }
             throw streamError;
+          } finally {
+            try {
+              await self.storage.delete(`cb:probe:${provider.id}`);
+            } catch (_e) {
+            }
           }
         })();
       }
@@ -454,6 +496,11 @@ var CircuitBreaker = class {
       const isAbort = request.signal?.aborted || error?.name === "AbortError" || error?.message?.toLowerCase().includes("aborted");
       if (!isAbort) {
         await this.recordFailure(provider.id);
+      } else {
+        try {
+          await this.storage.delete(`cb:probe:${provider.id}`);
+        } catch (_e) {
+        }
       }
       throw error;
     }
@@ -951,6 +998,200 @@ var PIIGuardrails = class {
   }
 };
 
+// src/core/RateLimiter.ts
+var GatewayRateLimitError = class extends Error {
+  violation;
+  key;
+  limitType;
+  limit;
+  current;
+  resetMs;
+  retryAfterSec;
+  constructor(message, violation) {
+    super(message);
+    this.name = "GatewayRateLimitError";
+    this.violation = violation;
+    this.key = violation.key;
+    this.limitType = violation.limitType;
+    this.limit = violation.limit;
+    this.current = violation.current;
+    this.resetMs = violation.resetMs;
+    this.retryAfterSec = violation.retryAfterSec;
+  }
+};
+var GatewayRateLimiter = class {
+  storage;
+  options;
+  action;
+  constructor(storage, options = {}) {
+    this.storage = storage;
+    this.options = options;
+    this.action = options.action || "block";
+  }
+  /**
+   * Resolves the matching rate limit rule for a request based on:
+   * 1. Model-specific rule (options.modelRules[model])
+   * 2. Provider-specific rule (options.providerRules[providerId])
+   * 3. Default rule (options.defaultRule)
+   */
+  resolveRule(model, providerId) {
+    if (model && this.options.modelRules?.[model]) {
+      return this.options.modelRules[model];
+    }
+    if (providerId && this.options.providerRules?.[providerId]) {
+      return this.options.providerRules[providerId];
+    }
+    return this.options.defaultRule;
+  }
+  /**
+   * Generates the partition key for tracking rate limits.
+   */
+  getKey(request) {
+    if (this.options.keyGenerator) {
+      return this.options.keyGenerator(request) || "global";
+    }
+    if (request.user) {
+      return `user:${request.user}`;
+    }
+    return "global";
+  }
+  /**
+   * Estimates the token requirement for an incoming request.
+   */
+  estimateTokens(request) {
+    let tokens = 0;
+    if (request.messages) {
+      for (const msg of request.messages) {
+        tokens += estimateMessageTokens(msg);
+      }
+    }
+    tokens += Math.min(request.maxTokens ?? 256, 1024);
+    return Math.max(1, tokens);
+  }
+  /**
+   * Checks whether the request is within limits and consumes the quota.
+   */
+  async check(request, checkOptions) {
+    const rule = this.resolveRule(request.model, checkOptions?.providerId);
+    if (!rule) {
+      return { allowed: true, resetMs: 0 };
+    }
+    const windowMs = rule.windowMs || 6e4;
+    const now = Date.now();
+    const currentWindowId = Math.floor(now / windowMs);
+    const elapsedInWindow = now % windowMs;
+    const weight = 1 - elapsedInWindow / windowMs;
+    const ttlSeconds = Math.ceil(windowMs * 2 / 1e3);
+    const resetMs = Math.max(0, windowMs - elapsedInWindow);
+    const retryAfterSec = Math.max(1, Math.ceil(resetMs / 1e3));
+    const baseKey = this.getKey(request);
+    const scope = this.options.modelRules?.[request.model] ? "model" : checkOptions?.providerId && this.options.providerRules?.[checkOptions.providerId] ? "provider" : baseKey.startsWith("user:") ? "user" : "global";
+    const scopeKey = scope === "model" ? `${baseKey}:m:${request.model}` : scope === "provider" && checkOptions?.providerId ? `${baseKey}:p:${checkOptions.providerId}` : baseKey;
+    let currReqCount = 0;
+    let estimatedReqs = 0;
+    const reqKeyCurrent = `gw:rl:req:${scopeKey}:${currentWindowId}`;
+    const reqKeyPrev = `gw:rl:req:${scopeKey}:${currentWindowId - 1}`;
+    if (rule.requestsPerMinute !== void 0) {
+      const reqLimit = rule.requestsPerMinute;
+      currReqCount = await this.storage.get(reqKeyCurrent) || 0;
+      const prevReqCount = await this.storage.get(reqKeyPrev) || 0;
+      estimatedReqs = Math.floor(prevReqCount * weight) + currReqCount;
+      if (estimatedReqs >= reqLimit) {
+        const violation = {
+          key: baseKey,
+          scope,
+          limitType: "requests",
+          limit: reqLimit,
+          current: estimatedReqs,
+          resetMs,
+          retryAfterSec,
+          model: request.model,
+          providerId: checkOptions?.providerId
+        };
+        this.options.onRateLimitExceeded?.(violation);
+        return {
+          allowed: false,
+          violation,
+          remainingRequests: 0,
+          resetMs
+        };
+      }
+    }
+    let currTokCount = 0;
+    let estimatedToks = 0;
+    const tokCost = checkOptions?.estimatedTokens ?? this.estimateTokens(request);
+    const tokKeyCurrent = `gw:rl:tok:${scopeKey}:${currentWindowId}`;
+    const tokKeyPrev = `gw:rl:tok:${scopeKey}:${currentWindowId - 1}`;
+    if (rule.tokensPerMinute !== void 0) {
+      const tokLimit = rule.tokensPerMinute;
+      currTokCount = await this.storage.get(tokKeyCurrent) || 0;
+      const prevTokCount = await this.storage.get(tokKeyPrev) || 0;
+      estimatedToks = Math.floor(prevTokCount * weight) + currTokCount;
+      if (estimatedToks + tokCost > tokLimit) {
+        const violation = {
+          key: baseKey,
+          scope,
+          limitType: "tokens",
+          limit: tokLimit,
+          current: estimatedToks,
+          resetMs,
+          retryAfterSec,
+          model: request.model,
+          providerId: checkOptions?.providerId
+        };
+        this.options.onRateLimitExceeded?.(violation);
+        return {
+          allowed: false,
+          violation,
+          remainingRequests: rule.requestsPerMinute !== void 0 ? Math.max(0, rule.requestsPerMinute - estimatedReqs) : void 0,
+          remainingTokens: Math.max(0, tokLimit - estimatedToks),
+          resetMs
+        };
+      }
+    }
+    const shouldConsume = checkOptions?.consume !== false;
+    if (shouldConsume) {
+      if (rule.requestsPerMinute !== void 0) {
+        await this.storage.increment(reqKeyCurrent);
+        if (currReqCount === 0) {
+          await this.storage.set(reqKeyCurrent, 1, ttlSeconds);
+        }
+      }
+      if (rule.tokensPerMinute !== void 0) {
+        const newTokens = currTokCount + tokCost;
+        await this.storage.set(tokKeyCurrent, newTokens, ttlSeconds);
+      }
+    }
+    const remainingRequests = rule.requestsPerMinute !== void 0 ? Math.max(0, rule.requestsPerMinute - (estimatedReqs + 1)) : void 0;
+    const remainingTokens = rule.tokensPerMinute !== void 0 ? Math.max(0, rule.tokensPerMinute - (estimatedToks + tokCost)) : void 0;
+    return {
+      allowed: true,
+      remainingRequests,
+      remainingTokens,
+      resetMs
+    };
+  }
+  /**
+   * Adjusts the token counter after a response completes if the actual
+   * tokens consumed differs from the initial estimate.
+   */
+  async adjustTokens(request, actualTokens, estimatedTokens) {
+    const delta = actualTokens - estimatedTokens;
+    if (delta === 0) return;
+    const rule = this.resolveRule(request.model);
+    if (!rule || rule.tokensPerMinute === void 0) return;
+    const baseKey = this.getKey(request);
+    const scopeKey = this.options.modelRules?.[request.model] ? `${baseKey}:m:${request.model}` : baseKey;
+    const windowMs = rule.windowMs || 6e4;
+    const currentWindowId = Math.floor(Date.now() / windowMs);
+    const tokKeyCurrent = `gw:rl:tok:${scopeKey}:${currentWindowId}`;
+    const curr = await this.storage.get(tokKeyCurrent) || 0;
+    const updated = Math.max(0, curr + delta);
+    const ttlSeconds = Math.ceil(windowMs * 2 / 1e3);
+    await this.storage.set(tokKeyCurrent, updated, ttlSeconds);
+  }
+};
+
 // src/types/index.ts
 var BudgetExceededError = class extends Error {
   currentCostUsd;
@@ -966,6 +1207,262 @@ var BudgetExceededError = class extends Error {
     this.limitTokens = details?.limitTokens;
   }
 };
+
+// src/utils/metricsExporter.ts
+function escapePrometheusLabelValue(value) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+}
+function formatPrometheusLabels(labels, extraLabels) {
+  const merged = { ...labels, ...extraLabels };
+  const entries = Object.entries(merged);
+  if (entries.length === 0) return "";
+  const formatted = entries.map(([k, v]) => `${k}="${escapePrometheusLabelValue(String(v))}"`).join(",");
+  return `{${formatted}}`;
+}
+function formatPrometheusMetrics(metrics, options = {}) {
+  const prefix = options.prefix ?? "sinaps_";
+  const baseLabels = options.labels || {};
+  const timestampSuffix = options.includeTimestamps ? ` ${Date.now()}` : "";
+  const lines = [];
+  lines.push(
+    `# HELP ${prefix}requests_total Total number of LLM requests handled by SinapsAI gateway`,
+    `# TYPE ${prefix}requests_total counter`,
+    `${prefix}requests_total${formatPrometheusLabels(baseLabels)} ${metrics.totalRequests}${timestampSuffix}`
+  );
+  lines.push(
+    `# HELP ${prefix}requests_by_status_total Requests broken down by status`,
+    `# TYPE ${prefix}requests_by_status_total counter`,
+    `${prefix}requests_by_status_total${formatPrometheusLabels(baseLabels, { status: "success" })} ${metrics.successfulRequests}${timestampSuffix}`,
+    `${prefix}requests_by_status_total${formatPrometheusLabels(baseLabels, { status: "failure" })} ${metrics.failedRequests}${timestampSuffix}`,
+    `${prefix}requests_by_status_total${formatPrometheusLabels(baseLabels, { status: "cached" })} ${metrics.cachedRequests}${timestampSuffix}`
+  );
+  lines.push(
+    `# HELP ${prefix}tokens_total Total tokens processed across all requests`,
+    `# TYPE ${prefix}tokens_total counter`,
+    `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "prompt" })} ${metrics.totalPromptTokens}${timestampSuffix}`,
+    `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "completion" })} ${metrics.totalCompletionTokens}${timestampSuffix}`,
+    `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "cached_prompt" })} ${metrics.totalCachedPromptTokens ?? 0}${timestampSuffix}`,
+    `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "total" })} ${metrics.totalTokens}${timestampSuffix}`
+  );
+  lines.push(
+    `# HELP ${prefix}estimated_cost_usd Cumulative estimated LLM provider cost in USD`,
+    `# TYPE ${prefix}estimated_cost_usd counter`,
+    `${prefix}estimated_cost_usd${formatPrometheusLabels(baseLabels)} ${Number(metrics.estimatedCostUsd.toFixed(6))}${timestampSuffix}`
+  );
+  const providers = Object.entries(metrics.providerMetrics || {});
+  if (providers.length > 0) {
+    lines.push(
+      `# HELP ${prefix}provider_requests_total Total requests dispatched per provider`,
+      `# TYPE ${prefix}provider_requests_total counter`
+    );
+    for (const [id, pm] of providers) {
+      lines.push(
+        `${prefix}provider_requests_total${formatPrometheusLabels(baseLabels, { provider: id })} ${pm.requests}${timestampSuffix}`
+      );
+    }
+    lines.push(
+      `# HELP ${prefix}provider_successes_total Total successful requests per provider`,
+      `# TYPE ${prefix}provider_successes_total counter`
+    );
+    for (const [id, pm] of providers) {
+      lines.push(
+        `${prefix}provider_successes_total${formatPrometheusLabels(baseLabels, { provider: id })} ${pm.successes}${timestampSuffix}`
+      );
+    }
+    lines.push(
+      `# HELP ${prefix}provider_failures_total Total failed requests per provider`,
+      `# TYPE ${prefix}provider_failures_total counter`
+    );
+    for (const [id, pm] of providers) {
+      lines.push(
+        `${prefix}provider_failures_total${formatPrometheusLabels(baseLabels, { provider: id })} ${pm.failures}${timestampSuffix}`
+      );
+    }
+    lines.push(
+      `# HELP ${prefix}provider_tokens_total Total tokens processed per provider by type`,
+      `# TYPE ${prefix}provider_tokens_total counter`
+    );
+    for (const [id, pm] of providers) {
+      lines.push(
+        `${prefix}provider_tokens_total${formatPrometheusLabels(baseLabels, { provider: id, type: "prompt" })} ${pm.promptTokens}${timestampSuffix}`,
+        `${prefix}provider_tokens_total${formatPrometheusLabels(baseLabels, { provider: id, type: "completion" })} ${pm.completionTokens}${timestampSuffix}`,
+        `${prefix}provider_tokens_total${formatPrometheusLabels(baseLabels, { provider: id, type: "cached_prompt" })} ${pm.cachedPromptTokens ?? 0}${timestampSuffix}`
+      );
+    }
+    lines.push(
+      `# HELP ${prefix}provider_latency_avg_ms Running average latency per provider in milliseconds`,
+      `# TYPE ${prefix}provider_latency_avg_ms gauge`
+    );
+    for (const [id, pm] of providers) {
+      lines.push(
+        `${prefix}provider_latency_avg_ms${formatPrometheusLabels(baseLabels, { provider: id })} ${Number(pm.averageLatencyMs.toFixed(2))}${timestampSuffix}`
+      );
+    }
+  }
+  return `${lines.join("\n")}
+`;
+}
+function formatOtelMetrics(metrics, options = {}) {
+  const serviceName = options.serviceName || "sinapsai-gateway";
+  const serviceVersion = options.serviceVersion || "2.7.0";
+  const nowNano = `${Date.now()}000000`;
+  const resourceAttrs = [
+    { key: "service.name", value: { stringValue: serviceName } },
+    { key: "service.version", value: { stringValue: serviceVersion } }
+  ];
+  if (options.resourceAttributes) {
+    for (const [k, v] of Object.entries(options.resourceAttributes)) {
+      if (typeof v === "string") {
+        resourceAttrs.push({ key: k, value: { stringValue: v } });
+      } else if (typeof v === "number") {
+        if (Number.isInteger(v)) {
+          resourceAttrs.push({ key: k, value: { intValue: v } });
+        } else {
+          resourceAttrs.push({ key: k, value: { doubleValue: v } });
+        }
+      } else if (typeof v === "boolean") {
+        resourceAttrs.push({ key: k, value: { boolValue: v } });
+      }
+    }
+  }
+  const createSumMetric = (name, description, unit, dataPoints) => ({
+    name,
+    description,
+    unit,
+    sum: {
+      aggregationTemporality: 2,
+      // CUMULATIVE
+      isMonotonic: true,
+      dataPoints: dataPoints.map((dp) => ({
+        asInt: dp.asInt,
+        asDouble: dp.asDouble,
+        timeUnixNano: nowNano,
+        attributes: Object.entries(dp.attributes || {}).map(([k, v]) => ({
+          key: k,
+          value: { stringValue: v }
+        }))
+      }))
+    }
+  });
+  const createGaugeMetric = (name, description, unit, dataPoints) => ({
+    name,
+    description,
+    unit,
+    gauge: {
+      dataPoints: dataPoints.map((dp) => ({
+        asDouble: dp.asDouble,
+        timeUnixNano: nowNano,
+        attributes: Object.entries(dp.attributes || {}).map(([k, v]) => ({
+          key: k,
+          value: { stringValue: v }
+        }))
+      }))
+    }
+  });
+  const otelMetrics = [
+    createSumMetric(
+      "sinaps.requests.total",
+      "Total number of LLM requests handled by SinapsAI gateway",
+      "{requests}",
+      [{ asInt: metrics.totalRequests }]
+    ),
+    createSumMetric(
+      "sinaps.requests.by_status",
+      "Requests broken down by completion status",
+      "{requests}",
+      [
+        {
+          asInt: metrics.successfulRequests,
+          attributes: { status: "success" }
+        },
+        { asInt: metrics.failedRequests, attributes: { status: "failure" } },
+        { asInt: metrics.cachedRequests, attributes: { status: "cached" } }
+      ]
+    ),
+    createSumMetric(
+      "sinaps.tokens.total",
+      "Total tokens processed across all requests",
+      "{tokens}",
+      [
+        { asInt: metrics.totalPromptTokens, attributes: { type: "prompt" } },
+        {
+          asInt: metrics.totalCompletionTokens,
+          attributes: { type: "completion" }
+        },
+        {
+          asInt: metrics.totalCachedPromptTokens ?? 0,
+          attributes: { type: "cached_prompt" }
+        },
+        { asInt: metrics.totalTokens, attributes: { type: "total" } }
+      ]
+    ),
+    createSumMetric(
+      "sinaps.cost.usd",
+      "Cumulative estimated LLM provider cost in USD",
+      "USD",
+      [{ asDouble: Number(metrics.estimatedCostUsd.toFixed(6)) }]
+    )
+  ];
+  const providers = Object.entries(metrics.providerMetrics || {});
+  if (providers.length > 0) {
+    otelMetrics.push(
+      createSumMetric(
+        "sinaps.provider.requests",
+        "Total requests dispatched per provider",
+        "{requests}",
+        providers.map(([id, pm]) => ({
+          asInt: pm.requests,
+          attributes: { provider: id }
+        }))
+      ),
+      createSumMetric(
+        "sinaps.provider.successes",
+        "Total successful requests per provider",
+        "{requests}",
+        providers.map(([id, pm]) => ({
+          asInt: pm.successes,
+          attributes: { provider: id }
+        }))
+      ),
+      createSumMetric(
+        "sinaps.provider.failures",
+        "Total failed requests per provider",
+        "{requests}",
+        providers.map(([id, pm]) => ({
+          asInt: pm.failures,
+          attributes: { provider: id }
+        }))
+      ),
+      createGaugeMetric(
+        "sinaps.provider.latency.average",
+        "Running average latency per provider in milliseconds",
+        "ms",
+        providers.map(([id, pm]) => ({
+          asDouble: Number(pm.averageLatencyMs.toFixed(2)),
+          attributes: { provider: id }
+        }))
+      )
+    );
+  }
+  return {
+    resourceMetrics: [
+      {
+        resource: {
+          attributes: resourceAttrs
+        },
+        scopeMetrics: [
+          {
+            scope: {
+              name: "sinapsai",
+              version: serviceVersion
+            },
+            metrics: otelMetrics
+          }
+        ]
+      }
+    ]
+  };
+}
 
 // src/utils/similarity.ts
 function cosineSimilarity(a, b) {
@@ -2126,6 +2623,18 @@ var Router = class {
       "All eligible embedding providers failed or are unavailable"
     );
   }
+  /**
+   * Formats current gateway telemetry metrics into Prometheus / OpenMetrics exposition format.
+   */
+  exportPrometheusMetrics(options) {
+    return formatPrometheusMetrics(this.getMetrics(), options);
+  }
+  /**
+   * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
+   */
+  exportOtelMetrics(options) {
+    return formatOtelMetrics(this.getMetrics(), options);
+  }
 };
 
 // src/core/SecurityGuardrails.ts
@@ -2325,6 +2834,7 @@ var SinapsClient = class {
   securityGuardrails;
   contextCompressor;
   hedgedExecutor;
+  rateLimiter;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
@@ -2334,6 +2844,18 @@ var SinapsClient = class {
     if (options.modelAliases) {
       for (const [alias, target] of Object.entries(options.modelAliases)) {
         this.modelAliases.set(alias, target);
+      }
+    }
+    if (options.rateLimiting) {
+      if (options.rateLimiting === true) {
+        this.rateLimiter = new GatewayRateLimiter(this.storage, {
+          defaultRule: { requestsPerMinute: 600 }
+        });
+      } else {
+        this.rateLimiter = new GatewayRateLimiter(
+          this.storage,
+          options.rateLimiting
+        );
       }
     }
     if (options.securityGuardrails) {
@@ -2432,9 +2954,34 @@ var SinapsClient = class {
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
           thinkingBudget: request.thinkingBudget,
-          reasoningEffort: request.reasoningEffort
+          reasoningEffort: request.reasoningEffort,
+          user: request.user
         };
+        let estimatedTokens = 0;
+        if (this.rateLimiter) {
+          estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
+          const check = await this.rateLimiter.check(fullReq, {
+            estimatedTokens
+          });
+          if (!check.allowed && check.violation) {
+            this.hooks?.onGatewayRateLimitWarning?.(check.violation);
+            if (this.rateLimiter.action === "block") {
+              throw new GatewayRateLimitError(
+                `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
+                check.violation
+              );
+            }
+          }
+        }
         const res = await this.router.execute(fullReq);
+        const actualTokens = res.usage?.totalTokens;
+        if (this.rateLimiter && !request.stream && actualTokens !== void 0) {
+          await this.rateLimiter.adjustTokens(
+            fullReq,
+            actualTokens,
+            estimatedTokens
+          );
+        }
         if (this.guardrails && piiVault && piiVault.size > 0 && !request.stream && "choices" in res) {
           return this.guardrails.restoreResponse(
             res,
@@ -2492,10 +3039,34 @@ var SinapsClient = class {
   embeddings = {
     create: async (request) => {
       const model = this.resolveModel(request.model);
-      return this.router.executeEmbedding({
+      const fullReq = {
         ...request,
         model
-      });
+      };
+      if (this.rateLimiter) {
+        const dummyReq = {
+          model,
+          messages: [],
+          user: request.user
+        };
+        const inputTokens = Array.isArray(request.input) ? request.input.reduce(
+          (acc, str) => acc + Math.ceil(str.length / 4),
+          0
+        ) : Math.ceil(request.input.length / 4);
+        const check = await this.rateLimiter.check(dummyReq, {
+          estimatedTokens: inputTokens
+        });
+        if (!check.allowed && check.violation) {
+          this.hooks?.onGatewayRateLimitWarning?.(check.violation);
+          if (this.rateLimiter.action === "block") {
+            throw new GatewayRateLimitError(
+              `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
+              check.violation
+            );
+          }
+        }
+      }
+      return this.router.executeEmbedding(fullReq);
     }
   };
   batch = {
@@ -2573,6 +3144,18 @@ var SinapsClient = class {
    */
   async checkHealth(options) {
     return this.router.checkHealth(options);
+  }
+  /**
+   * Formats current gateway telemetry metrics into Prometheus / OpenMetrics exposition format.
+   */
+  exportPrometheusMetrics(options) {
+    return this.router.exportPrometheusMetrics(options);
+  }
+  /**
+   * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
+   */
+  exportOtelMetrics(options) {
+    return this.router.exportOtelMetrics(options);
   }
 };
 
