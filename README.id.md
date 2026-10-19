@@ -82,6 +82,8 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [27. Kompresi Konteks Dinamis (ContextCompressor)](#27-kompresi-konteks-dinamis-contextcompressor)
   - [28. FinOps Guardrail Anggaran & Batas Biaya](#28-finops-guardrail-anggaran--batas-biaya)
   - [29. Permintaan Spekulatif Hedged (Pemberantasan Latensi Ekor)](#29-permintaan-spekulatif-hedged-pemberantasan-latensi-ekor)
+  - [30. Pembatasan Laju In-Process Gateway (RPM & TPM)](#30-pembatasan-laju-in-process-gateway-rpm--tpm)
+  - [31. Eksportir Metrik Prometheus & OpenTelemetry](#31-eksportir-metrik-prometheus--opentelemetry)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -1103,6 +1105,69 @@ const executor = new HedgedExecutor({
     console.log(`Hedge dimenangkan oleh ${winner.name} dalam ${elapsedMs}ms`);
   },
 });
+```
+
+---
+
+### 30. Pembatasan Laju In-Process Gateway (RPM & TPM)
+
+Lindungi infrastruktur backend dan terapkan kuota berjenjang (Requests Per Minute dan Tokens Per Minute) menggunakan algoritma sliding-window counter yang tahan terhadap lonjakan batas jendela (*burst-proof*):
+
+```typescript
+import { SinapsClient, OpenAiProvider, GatewayRateLimitError } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  rateLimiting: {
+    defaultRule: {
+      requestsPerMinute: 60,  // 60 RPM batas global
+      tokensPerMinute: 100000 // 100k TPM
+    },
+    modelRules: {
+      'claude-3-7-sonnet': { requestsPerMinute: 10 }, // aturan lebih ketat untuk model penalaran mahal
+    },
+    action: 'block', // 'block' melempar GatewayRateLimitError, 'warn' memicu onGatewayRateLimitWarning
+    onRateLimitExceeded: (violation) => {
+      console.warn(`[RATE LIMIT] Batas ${violation.limitType} tercapai untuk ${violation.key}. Coba lagi setelah ${violation.retryAfterSec} detik`);
+    },
+  },
+});
+
+try {
+  const res = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: 'Halo' }],
+    user: 'tim-produk-a', // Membagi kuota secara otomatis per pengguna/tenant
+  });
+} catch (err) {
+  if (err instanceof GatewayRateLimitError) {
+    console.error(`Dibatasi! Coba lagi dalam ${err.retryAfterSec}s (terpakai=${err.current}/${err.limit})`);
+  }
+}
+```
+
+---
+
+### 31. Eksportir Metrik Prometheus & OpenTelemetry
+
+Ekspor metrik telemetri gateway secara native ke Prometheus, Grafana, Datadog, atau OpenTelemetry collector tanpa dependency pihak ketiga:
+
+```typescript
+// 1. Ekspor dalam format teks standar Prometheus / OpenMetrics
+const prometheusMetrics = client.exportPrometheusMetrics({
+  prefix: 'sinaps_',
+  labels: { env: 'production', cluster: 'asia-southeast' },
+});
+// Gunakan langsung pada endpoint HTTP /metrics:
+// res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+// res.send(prometheusMetrics);
+
+// 2. Ekspor dalam format standar OpenTelemetry (OTLP v1 JSON) ResourceMetrics
+const otelMetrics = client.exportOtelMetrics({
+  serviceName: 'sinapsai-gateway',
+  serviceVersion: '2.7.0',
+});
+// Kirim langsung ke endpoint collector OTLP/HTTP /v1/metrics menggunakan fetch
 ```
 
 ---

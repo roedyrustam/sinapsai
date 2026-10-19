@@ -80,6 +80,8 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [27. Dynamic Context Compression (ContextCompressor)](#27-dynamic-context-compression-contextcompressor)
   - [28. FinOps Budget Guardrails & Cost Limits](#28-finops-budget-guardrails--cost-limits)
   - [29. Speculative Hedged Requests (Tail-Latency Reduction)](#29-speculative-hedged-requests-tail-latency-reduction)
+  - [30. In-Process Gateway Rate Limiting (RPM & TPM)](#30-in-process-gateway-rate-limiting-rpm--tpm)
+  - [31. Prometheus & OpenTelemetry Metrics Exporters](#31-prometheus--opentelemetry-metrics-exporters)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -1099,6 +1101,69 @@ const executor = new HedgedExecutor({
     console.log(`Hedge won by ${winner.name} in ${elapsedMs}ms`);
   },
 });
+```
+
+---
+
+### 30. In-Process Gateway Rate Limiting (RPM & TPM)
+
+Protect backend resources and enforce strict multi-tier rate limits (Requests Per Minute and Tokens Per Minute) using a burst-proof sliding-window counter algorithm:
+
+```typescript
+import { SinapsClient, OpenAiProvider, GatewayRateLimitError } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  rateLimiting: {
+    defaultRule: {
+      requestsPerMinute: 60,  // 60 RPM global default
+      tokensPerMinute: 100000 // 100k TPM
+    },
+    modelRules: {
+      'claude-3-7-sonnet': { requestsPerMinute: 10 }, // stricter limit on expensive models
+    },
+    action: 'block', // 'block' throws GatewayRateLimitError, 'warn' triggers onGatewayRateLimitWarning
+    onRateLimitExceeded: (violation) => {
+      console.warn(`[RATE LIMIT] ${violation.limitType} limit reached for ${violation.key}. Retry after ${violation.retryAfterSec}s`);
+    },
+  },
+});
+
+try {
+  const res = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: 'Hello' }],
+    user: 'tenant-team-a', // Automatically partitions quota per user/tenant
+  });
+} catch (err) {
+  if (err instanceof GatewayRateLimitError) {
+    console.error(`Throttled! Retry in ${err.retryAfterSec}s (current=${err.current}/${err.limit})`);
+  }
+}
+```
+
+---
+
+### 31. Prometheus & OpenTelemetry Metrics Exporters
+
+Export in-process gateway telemetry to Prometheus, Grafana, Datadog, or any OpenTelemetry collector with zero third-party dependencies:
+
+```typescript
+// 1. Export in standard Prometheus / OpenMetrics text exposition format
+const prometheusMetrics = client.exportPrometheusMetrics({
+  prefix: 'sinaps_',
+  labels: { env: 'production', cluster: 'us-east-1' },
+});
+// Use directly in your /metrics HTTP endpoint:
+// res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+// res.send(prometheusMetrics);
+
+// 2. Export in standard OpenTelemetry (OTLP v1 JSON) ResourceMetrics format
+const otelMetrics = client.exportOtelMetrics({
+  serviceName: 'my-ai-gateway',
+  serviceVersion: '2.7.0',
+});
+// Send directly to any OTLP/HTTP /v1/metrics collector endpoint via fetch
 ```
 
 ---
