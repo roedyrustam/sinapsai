@@ -6,9 +6,13 @@
  */
 
 import type {
+  CachedContentInfo,
   ContentPart,
+  CreateCachedContentOptions,
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
+  GroundingMetadata,
+  GroundingSource,
   ProviderConfig,
   UnifiedApiRequest,
   UnifiedApiResponse,
@@ -19,19 +23,76 @@ import { parseSSE } from '../utils/stream.js';
 import type { Provider } from './Provider.js';
 
 export const GEMINI_MODELS = {
-  FLASH_2_5: 'gemini-2.5-flash',
-  FLASH_LITE_2_5: 'gemini-2.5-flash-lite',
-  PRO_2_5: 'gemini-2.5-pro',
+  PRO_4: 'gemini-4-pro',
+  FLASH_4: 'gemini-4-flash',
+  PROJECT_ASTRA: 'gemini-4-flash',
   FLASH_3_8: 'gemini-3.8-flash',
   FLASH_3_6: 'gemini-3.6-flash',
   FLASH_LITE_3_5: 'gemini-3.5-flash-lite',
   PRO_3_1_PREVIEW: 'gemini-3.1-pro-preview',
+  FLASH_2_5: 'gemini-2.5-flash',
+  FLASH_LITE_2_5: 'gemini-2.5-flash-lite',
+  PRO_2_5: 'gemini-2.5-pro',
+  FLASH_2_0: 'gemini-2.0-flash',
+  FLASH_2_0_LITE: 'gemini-2.0-flash-lite',
+  FLASH_THINKING_2_0: 'gemini-2.0-flash-thinking-exp',
+  PRO_2_0: 'gemini-2.0-pro-exp',
   FLASH_LATEST: 'gemini-flash-latest',
   PRO_LATEST: 'gemini-pro-latest',
   EMBEDDING_001: 'gemini-embedding-001',
   EMBEDDING_2: 'gemini-embedding-2',
   TEXT_EMBEDDING_004: 'text-embedding-004',
 } as const;
+
+export const GEMINI_DEFAULT_PRICING: Record<
+  string,
+  { promptCostPer1k: number; completionCostPer1k: number }
+> = {
+  'gemini-4-pro': { promptCostPer1k: 0.00125, completionCostPer1k: 0.005 },
+  'gemini-4-flash': { promptCostPer1k: 0.000075, completionCostPer1k: 0.0003 },
+  'gemini-3.8-flash': {
+    promptCostPer1k: 0.000075,
+    completionCostPer1k: 0.0003,
+  },
+  'gemini-3.6-flash': {
+    promptCostPer1k: 0.000075,
+    completionCostPer1k: 0.0003,
+  },
+  'gemini-3.5-flash-lite': {
+    promptCostPer1k: 0.0000375,
+    completionCostPer1k: 0.00015,
+  },
+  'gemini-3.1-pro-preview': {
+    promptCostPer1k: 0.00125,
+    completionCostPer1k: 0.005,
+  },
+  'gemini-2.5-pro': { promptCostPer1k: 0.00125, completionCostPer1k: 0.005 },
+  'gemini-2.5-flash': {
+    promptCostPer1k: 0.000075,
+    completionCostPer1k: 0.0003,
+  },
+  'gemini-2.5-flash-lite': {
+    promptCostPer1k: 0.0000375,
+    completionCostPer1k: 0.00015,
+  },
+  'gemini-2.0-flash': { promptCostPer1k: 0.0001, completionCostPer1k: 0.0004 },
+  'gemini-2.0-flash-lite': {
+    promptCostPer1k: 0.000075,
+    completionCostPer1k: 0.0003,
+  },
+  'gemini-2.0-pro-exp': {
+    promptCostPer1k: 0.00125,
+    completionCostPer1k: 0.005,
+  },
+  'gemini-flash-latest': {
+    promptCostPer1k: 0.000075,
+    completionCostPer1k: 0.0003,
+  },
+  'gemini-pro-latest': { promptCostPer1k: 0.00125, completionCostPer1k: 0.005 },
+  'text-embedding-004': { promptCostPer1k: 0.00001, completionCostPer1k: 0 },
+  'gemini-embedding-001': { promptCostPer1k: 0.00001, completionCostPer1k: 0 },
+  'gemini-embedding-2': { promptCostPer1k: 0.00001, completionCostPer1k: 0 },
+};
 
 export interface GeminiSafetySetting {
   category:
@@ -61,6 +122,9 @@ export interface GeminiModelInfo {
 export interface GeminiProviderConfig extends ProviderConfig {
   safetySettings?: GeminiSafetySetting[];
   thinkingBudget?: number;
+  cachedContent?: string;
+  googleSearch?: boolean;
+  codeExecution?: boolean;
 }
 
 export class GeminiProvider implements Provider {
@@ -80,11 +144,19 @@ export class GeminiProvider implements Provider {
   }
 
   get promptCostPer1k(): number | undefined {
-    return this.config.promptCostPer1k;
+    if (this.config.promptCostPer1k !== undefined) {
+      return this.config.promptCostPer1k;
+    }
+    const model = this.resolveModel(this.defaultModel || 'default');
+    return GEMINI_DEFAULT_PRICING[model]?.promptCostPer1k;
   }
 
   get completionCostPer1k(): number | undefined {
-    return this.config.completionCostPer1k;
+    if (this.config.completionCostPer1k !== undefined) {
+      return this.config.completionCostPer1k;
+    }
+    const model = this.resolveModel(this.defaultModel || 'default');
+    return GEMINI_DEFAULT_PRICING[model]?.completionCostPer1k;
   }
 
   get retries(): number | undefined {
@@ -165,6 +237,12 @@ export class GeminiProvider implements Provider {
               if (url.endsWith('.png')) mimeType = 'image/png';
               else if (url.endsWith('.webp')) mimeType = 'image/webp';
               else if (url.endsWith('.gif')) mimeType = 'image/gif';
+              else if (url.endsWith('.svg')) mimeType = 'image/svg+xml';
+              else if (url.endsWith('.pdf')) mimeType = 'application/pdf';
+              else if (url.endsWith('.mp4')) mimeType = 'video/mp4';
+              else if (url.endsWith('.webm')) mimeType = 'video/webm';
+              else if (url.endsWith('.mp3')) mimeType = 'audio/mp3';
+              else if (url.endsWith('.wav')) mimeType = 'audio/wav';
               parts.push({
                 fileData: {
                   mimeType,
@@ -208,17 +286,21 @@ export class GeminiProvider implements Provider {
             ? toolCallIdToName.get(msg.tool_call_id)
             : undefined) ||
           'function';
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              functionResponse: {
-                name: resolvedName,
-                response: { content: responseContent },
-              },
-            },
-          ],
-        });
+        const functionResponsePart = {
+          functionResponse: {
+            name: resolvedName,
+            response: { content: responseContent },
+          },
+        };
+        const lastContent = contents[contents.length - 1];
+        if (lastContent && lastContent.role === 'user') {
+          lastContent.parts.push(functionResponsePart);
+        } else {
+          contents.push({
+            role: 'user',
+            parts: [functionResponsePart],
+          });
+        }
       } else if (
         msg.role === 'assistant' &&
         msg.tool_calls &&
@@ -288,7 +370,16 @@ export class GeminiProvider implements Provider {
       generationConfig.responseSchema = cleanSchema;
     }
 
-    const thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    let thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    if (thinkingBudget === undefined && request.reasoningEffort) {
+      if (request.reasoningEffort === 'low') {
+        thinkingBudget = 2048;
+      } else if (request.reasoningEffort === 'medium') {
+        thinkingBudget = 8192;
+      } else if (request.reasoningEffort === 'high') {
+        thinkingBudget = 32768;
+      }
+    }
     if (thinkingBudget !== undefined) {
       generationConfig.thinkingConfig = {
         thinkingBudget,
@@ -306,17 +397,38 @@ export class GeminiProvider implements Provider {
     if (this.config.safetySettings && this.config.safetySettings.length > 0) {
       payload.safetySettings = this.config.safetySettings;
     }
-    if (request.tools) {
-      payload.tools = [
-        {
-          functionDeclarations: request.tools.map((t) => ({
-            name: t.function.name,
-            description: t.function.description,
-            parameters: t.function.parameters,
-          })),
-        },
-      ];
+
+    const cachedContent = request.cachedContent ?? this.config.cachedContent;
+    if (cachedContent) {
+      payload.cachedContent = cachedContent;
     }
+
+    // biome-ignore lint/suspicious/noExplicitAny: gemini tools array
+    const tools: any[] = [];
+    if (request.tools && request.tools.length > 0) {
+      tools.push({
+        functionDeclarations: request.tools.map((t) => ({
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters,
+        })),
+      });
+    }
+
+    const useGoogleSearch = request.googleSearch ?? this.config.googleSearch;
+    if (useGoogleSearch) {
+      tools.push({ googleSearch: {} });
+    }
+
+    const useCodeExecution = request.codeExecution ?? this.config.codeExecution;
+    if (useCodeExecution) {
+      tools.push({ codeExecution: {} });
+    }
+
+    if (tools.length > 0) {
+      payload.tools = tools;
+    }
+
     if (request.toolChoice) {
       if (request.toolChoice === 'auto') {
         payload.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
@@ -347,11 +459,22 @@ export class GeminiProvider implements Provider {
 
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
-        if (part.thought) {
+        if (typeof part.thought === 'string') {
+          reasoningContent += part.thought;
+        } else if (part.thought) {
           reasoningContent += part.text || '';
         } else if (part.text) {
           text += part.text;
         }
+
+        if (part.executableCode) {
+          const lang = (part.executableCode.language || 'python').toLowerCase();
+          text += `\n\`\`\`${lang}\n${part.executableCode.code || ''}\n\`\`\`\n`;
+        }
+        if (part.codeExecutionResult) {
+          text += `\n\`\`\`\n[Execution Outcome: ${part.codeExecutionResult.outcome || 'OK'}]\n${part.codeExecutionResult.output || ''}\n\`\`\`\n`;
+        }
+
         if (part.functionCall) {
           toolCalls.push({
             id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -385,6 +508,27 @@ export class GeminiProvider implements Provider {
       }
     }
 
+    let grounding: GroundingMetadata | undefined;
+    if (candidate?.groundingMetadata) {
+      const gm = candidate.groundingMetadata;
+      const sources: GroundingSource[] = [];
+      if (Array.isArray(gm.groundingChunks)) {
+        for (const gc of gm.groundingChunks) {
+          if (gc.web) {
+            sources.push({
+              title: gc.web.title,
+              uri: gc.web.uri,
+            });
+          }
+        }
+      }
+      grounding = {
+        webSearchQueries: gm.webSearchQueries,
+        sources: sources.length > 0 ? sources : undefined,
+        searchEntryPoint: gm.searchEntryPoint?.renderedContent,
+      };
+    }
+
     return {
       id: `gemini-${Date.now()}`,
       model,
@@ -395,10 +539,12 @@ export class GeminiProvider implements Provider {
             content: text || null,
             reasoning_content: reasoningContent || undefined,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+            grounding,
           },
           finishReason,
         },
       ],
+      grounding,
       usage: data.usageMetadata
         ? {
             promptTokens: data.usageMetadata.promptTokenCount || 0,
@@ -475,11 +621,24 @@ export class GeminiProvider implements Provider {
 
                 if (candidate?.content?.parts) {
                   for (const part of candidate.content.parts) {
-                    if (part.thought) {
+                    if (typeof part.thought === 'string') {
+                      reasoning += part.thought;
+                    } else if (part.thought) {
                       reasoning += part.text || '';
                     } else if (part.text) {
                       text += part.text;
                     }
+
+                    if (part.executableCode) {
+                      const lang = (
+                        part.executableCode.language || 'python'
+                      ).toLowerCase();
+                      text += `\n\`\`\`${lang}\n${part.executableCode.code || ''}\n\`\`\`\n`;
+                    }
+                    if (part.codeExecutionResult) {
+                      text += `\n\`\`\`\n[Execution Outcome: ${part.codeExecutionResult.outcome || 'OK'}]\n${part.codeExecutionResult.output || ''}\n\`\`\`\n`;
+                    }
+
                     if (part.functionCall) {
                       toolCalls.push({
                         index: chunkIndex++,
@@ -494,6 +653,27 @@ export class GeminiProvider implements Provider {
                       });
                     }
                   }
+                }
+
+                let streamGrounding: GroundingMetadata | undefined;
+                if (candidate?.groundingMetadata) {
+                  const gm = candidate.groundingMetadata;
+                  const sources: GroundingSource[] = [];
+                  if (Array.isArray(gm.groundingChunks)) {
+                    for (const gc of gm.groundingChunks) {
+                      if (gc.web) {
+                        sources.push({
+                          title: gc.web.title,
+                          uri: gc.web.uri,
+                        });
+                      }
+                    }
+                  }
+                  streamGrounding = {
+                    webSearchQueries: gm.webSearchQueries,
+                    sources: sources.length > 0 ? sources : undefined,
+                    searchEntryPoint: gm.searchEntryPoint?.renderedContent,
+                  };
                 }
 
                 const usage = parsed.usageMetadata
@@ -529,6 +709,7 @@ export class GeminiProvider implements Provider {
                     },
                   ],
                   usage,
+                  grounding: streamGrounding,
                 };
               } catch (_e) {}
             }
@@ -674,5 +855,146 @@ export class GeminiProvider implements Provider {
       outputTokenLimit: m.outputTokenLimit,
       supportedGenerationMethods: m.supportedGenerationMethods || [],
     }));
+  }
+
+  /**
+   * Creates a context cache resource on Google Gemini API for long contexts (>32,768 tokens),
+   * providing up to 75%-90% cost reduction and lower latency.
+   */
+  async createCachedContent(
+    options: CreateCachedContentOptions,
+  ): Promise<CachedContentInfo> {
+    const targetModel = this.resolveModel(options.model);
+    const baseUrl =
+      this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+
+    let contents = options.contents;
+    if (!contents && options.messages) {
+      const formatted = this.formatRequest({
+        model: targetModel,
+        messages: options.messages,
+      });
+      contents = formatted.contents;
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: cached content body
+    const body: any = {
+      model: `models/${targetModel}`,
+      contents: contents || [],
+      ttl: options.ttl || '3600s',
+    };
+    if (options.displayName) {
+      body.displayName = options.displayName;
+    }
+    if (options.systemInstruction) {
+      body.systemInstruction = {
+        parts: [{ text: options.systemInstruction }],
+      };
+    }
+
+    const response = await fetch(`${baseUrl}/cachedContents`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': this.config.apiKey || '',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to create Gemini CachedContent (${response.status}): ${errorText}`,
+      ) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
+    }
+
+    return (await response.json()) as CachedContentInfo;
+  }
+
+  /**
+   * Fetches metadata for an existing Gemini CachedContent.
+   */
+  async getCachedContent(name: string): Promise<CachedContentInfo> {
+    const baseUrl =
+      this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+    const resourcePath = name.startsWith('cachedContents/')
+      ? name
+      : `cachedContents/${name}`;
+
+    const response = await fetch(`${baseUrl}/${resourcePath}`, {
+      method: 'GET',
+      headers: {
+        'x-goog-api-key': this.config.apiKey || '',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to get Gemini CachedContent (${response.status}): ${errorText}`,
+      ) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
+    }
+
+    return (await response.json()) as CachedContentInfo;
+  }
+
+  /**
+   * Lists active CachedContents for the configured Gemini API key.
+   */
+  async listCachedContents(pageSize?: number): Promise<CachedContentInfo[]> {
+    const baseUrl =
+      this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+    const query = pageSize ? `?pageSize=${pageSize}` : '';
+
+    const response = await fetch(`${baseUrl}/cachedContents${query}`, {
+      method: 'GET',
+      headers: {
+        'x-goog-api-key': this.config.apiKey || '',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to list Gemini CachedContents (${response.status}): ${errorText}`,
+      ) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: response json
+    const data = (await response.json()) as any;
+    return (data.cachedContents || []) as CachedContentInfo[];
+  }
+
+  /**
+   * Deletes a Gemini CachedContent by name.
+   */
+  async deleteCachedContent(name: string): Promise<void> {
+    const baseUrl =
+      this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+    const resourcePath = name.startsWith('cachedContents/')
+      ? name
+      : `cachedContents/${name}`;
+
+    const response = await fetch(`${baseUrl}/${resourcePath}`, {
+      method: 'DELETE',
+      headers: {
+        'x-goog-api-key': this.config.apiKey || '',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to delete Gemini CachedContent (${response.status}): ${errorText}`,
+      ) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
+    }
   }
 }

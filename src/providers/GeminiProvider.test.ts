@@ -15,10 +15,17 @@ describe('GeminiProvider', () => {
 
   describe('resolveModel & GEMINI_MODELS', () => {
     it('should expose canonical GEMINI_MODELS constants', () => {
+      expect(GEMINI_MODELS.PRO_4).toBe('gemini-4-pro');
+      expect(GEMINI_MODELS.FLASH_4).toBe('gemini-4-flash');
+      expect(GEMINI_MODELS.PROJECT_ASTRA).toBe('gemini-4-flash');
       expect(GEMINI_MODELS.FLASH_2_5).toBe('gemini-2.5-flash');
       expect(GEMINI_MODELS.FLASH_LITE_2_5).toBe('gemini-2.5-flash-lite');
       expect(GEMINI_MODELS.PRO_2_5).toBe('gemini-2.5-pro');
       expect(GEMINI_MODELS.FLASH_3_8).toBe('gemini-3.8-flash');
+      expect(GEMINI_MODELS.FLASH_2_0).toBe('gemini-2.0-flash');
+      expect(GEMINI_MODELS.FLASH_THINKING_2_0).toBe(
+        'gemini-2.0-flash-thinking-exp',
+      );
       expect(GEMINI_MODELS.FLASH_LATEST).toBe('gemini-flash-latest');
       expect(GEMINI_MODELS.EMBEDDING_001).toBe('gemini-embedding-001');
       expect(GEMINI_MODELS.EMBEDDING_2).toBe('gemini-embedding-2');
@@ -242,13 +249,6 @@ describe('GeminiProvider', () => {
               response: { content: '{"temp":22,"condition":"Sunny"}' },
             },
           },
-        ],
-      });
-
-      // Fallback to 'function' when name and tool_call_id are absent
-      expect(result.contents[3]).toEqual({
-        role: 'user',
-        parts: [
           {
             functionResponse: {
               name: 'function',
@@ -257,6 +257,7 @@ describe('GeminiProvider', () => {
           },
         ],
       });
+      expect(result.contents[3]).toBeUndefined();
     });
 
     it('should support structured outputs with responseFormat json_schema and strip additionalProperties', () => {
@@ -726,6 +727,284 @@ describe('GeminiProvider', () => {
       expect(models[0].inputTokenLimit).toBe(1048576);
       expect(models[1].id).toBe('gemini-2.5-pro');
       expect(models[1].inputTokenLimit).toBe(2097152);
+    });
+  });
+
+  describe('2026 Frontier Features & Enhancements', () => {
+    it('should map reasoningEffort to thinkingBudget when thinkingBudget is omitted', () => {
+      const lowResult = provider.formatRequest({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'user', content: 'test' }],
+        reasoningEffort: 'low',
+      });
+      expect(lowResult.generationConfig.thinkingConfig).toEqual({
+        thinkingBudget: 2048,
+      });
+
+      const medResult = provider.formatRequest({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'user', content: 'test' }],
+        reasoningEffort: 'medium',
+      });
+      expect(medResult.generationConfig.thinkingConfig).toEqual({
+        thinkingBudget: 8192,
+      });
+
+      const highResult = provider.formatRequest({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'user', content: 'test' }],
+        reasoningEffort: 'high',
+      });
+      expect(highResult.generationConfig.thinkingConfig).toEqual({
+        thinkingBudget: 32768,
+      });
+    });
+
+    it('should inject cachedContent into request payload', () => {
+      const result = provider.formatRequest({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'user', content: 'Query cached context' }],
+        cachedContent: 'cachedContents/abc-123-repo-dump',
+      });
+
+      expect(result.cachedContent).toBe('cachedContents/abc-123-repo-dump');
+    });
+
+    it('should support googleSearch and codeExecution tools', () => {
+      const result = provider.formatRequest({
+        model: 'gemini-4-flash',
+        messages: [
+          {
+            role: 'user',
+            content: 'Research live news and execute code',
+          },
+        ],
+        googleSearch: true,
+        codeExecution: true,
+      });
+
+      expect(result.tools).toEqual([
+        { googleSearch: {} },
+        { codeExecution: {} },
+      ]);
+    });
+
+    it('should support multimodal PDF, MP4, and SVG file extensions', () => {
+      const result = provider.formatRequest({
+        model: 'gemini-4-pro',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Analyze attached PDF and video' },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'https://storage.googleapis.com/docs/paper.pdf',
+                },
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'https://storage.googleapis.com/videos/clip.mp4',
+                },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.contents[0].parts[1]).toEqual({
+        fileData: {
+          mimeType: 'application/pdf',
+          fileUri: 'https://storage.googleapis.com/docs/paper.pdf',
+        },
+      });
+      expect(result.contents[0].parts[2]).toEqual({
+        fileData: {
+          mimeType: 'video/mp4',
+          fileUri: 'https://storage.googleapis.com/videos/clip.mp4',
+        },
+      });
+    });
+
+    it('should parse thought as string and extract grounding metadata in formatResponse', () => {
+      const mockData = {
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [
+                {
+                  thought:
+                    'Step 1: calculate derivatives. Step 2: verify boundary.',
+                },
+                {
+                  text: 'The optimal value is 42.',
+                },
+              ],
+            },
+            finishReason: 'STOP',
+            groundingMetadata: {
+              webSearchQueries: ['optimal value math proof'],
+              groundingChunks: [
+                {
+                  web: {
+                    title: 'Mathematical Proofs Index',
+                    uri: 'https://math.example.org/proofs/42',
+                  },
+                },
+              ],
+              searchEntryPoint: {
+                renderedContent: '<div id="search-pill">Search info</div>',
+              },
+            },
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 150,
+          candidatesTokenCount: 85,
+          totalTokenCount: 235,
+          cachedContentTokenCount: 120,
+        },
+      };
+
+      const response = provider.formatResponse(mockData, 'gemini-4-pro');
+
+      expect(response.choices[0].message.reasoning_content).toBe(
+        'Step 1: calculate derivatives. Step 2: verify boundary.',
+      );
+      expect(response.choices[0].message.content).toBe(
+        'The optimal value is 42.',
+      );
+      expect(response.grounding).toBeDefined();
+      expect(response.grounding?.webSearchQueries).toEqual([
+        'optimal value math proof',
+      ]);
+      expect(response.grounding?.sources).toEqual([
+        {
+          title: 'Mathematical Proofs Index',
+          uri: 'https://math.example.org/proofs/42',
+        },
+      ]);
+      expect(response.usage?.cachedPromptTokens).toBe(120);
+    });
+
+    it('should format executableCode and codeExecutionResult in formatResponse', () => {
+      const mockData = {
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [
+                {
+                  executableCode: {
+                    language: 'PYTHON',
+                    code: 'print(sum([x**2 for x in range(10)]))',
+                  },
+                },
+                {
+                  codeExecutionResult: {
+                    outcome: 'OUTCOME_OK',
+                    output: '285\n',
+                  },
+                },
+                {
+                  text: 'The sum of squares is 285.',
+                },
+              ],
+            },
+            finishReason: 'STOP',
+          },
+        ],
+      };
+
+      const response = provider.formatResponse(mockData, 'gemini-4-flash');
+      expect(response.choices[0].message.content).toContain('```python');
+      expect(response.choices[0].message.content).toContain(
+        'print(sum([x**2 for x in range(10)]))',
+      );
+      expect(response.choices[0].message.content).toContain(
+        '[Execution Outcome: OUTCOME_OK]',
+      );
+      expect(response.choices[0].message.content).toContain('285');
+    });
+
+    it('should resolve default pricing for Gemini models', () => {
+      const flashProvider = new GeminiProvider({
+        apiKey: 'test',
+        defaultModel: 'gemini-4-flash',
+      });
+      expect(flashProvider.promptCostPer1k).toBe(0.000075);
+      expect(flashProvider.completionCostPer1k).toBe(0.0003);
+
+      const proProvider = new GeminiProvider({
+        apiKey: 'test',
+        defaultModel: 'gemini-4-pro',
+      });
+      expect(proProvider.promptCostPer1k).toBe(0.00125);
+      expect(proProvider.completionCostPer1k).toBe(0.005);
+    });
+
+    it('should manage Context Caching lifecycle via CRUD methods', async () => {
+      const mockCacheInfo = {
+        name: 'cachedContents/cache-xyz-123',
+        model: 'models/gemini-4-pro',
+        displayName: 'Repo Context',
+        createTime: '2026-10-18T00:00:00Z',
+        expireTime: '2026-10-18T01:00:00Z',
+      };
+
+      // 1. Create
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockCacheInfo,
+      });
+
+      const created = await provider.createCachedContent({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'user', content: 'Massive codebase dump...' }],
+        ttl: '3600s',
+        displayName: 'Repo Context',
+      });
+
+      expect(created.name).toBe('cachedContents/cache-xyz-123');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://generativelanguage.googleapis.com/v1beta/cachedContents',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'x-goog-api-key': 'test-key',
+          }),
+        }),
+      );
+
+      // 2. Get
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockCacheInfo,
+      });
+
+      const fetched = await provider.getCachedContent('cache-xyz-123');
+      expect(fetched.displayName).toBe('Repo Context');
+
+      // 3. List
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ cachedContents: [mockCacheInfo] }),
+      });
+
+      const list = await provider.listCachedContents();
+      expect(list).toHaveLength(1);
+
+      // 4. Delete
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+      });
+
+      await expect(
+        provider.deleteCachedContent('cache-xyz-123'),
+      ).resolves.toBeUndefined();
     });
   });
 });

@@ -33,7 +33,9 @@ Menciptakan "Control Plane" AI in-process berbasis NPM package (TypeScript/Node.
 
 ### C. Developer Experience & Ecosystem
 - **Official Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Implementasi resmi spesifikasi `LanguageModelV1` dan `EmbeddingModelV1` murni tanpa dependensi eksternal, mendukung `streamText`, `generateText`, `streamObject`, `embed`, dan `embedMany`.
-- **Universal Frontier Reasoning Engine**: Kontrol terpadu Chain-of-Thought (`thinkingBudget`, `reasoningEffort: 'low' | 'medium' | 'high'`, dan ekstraksi `reasoning_content`) untuk Claude 3.7 Sonnet, OpenAI o1/o3/o4, DeepSeek R1, Groq LPU, Google Gemini Flash Thinking, dan xAI Grok.
+- **Universal Frontier Reasoning Engine**: Kontrol terpadu Chain-of-Thought (`thinkingBudget`, `reasoningEffort: 'low' | 'medium' | 'high'`, dan ekstraksi `reasoning_content`) untuk Gemini 4 Pro / Flash Thinking, Claude 3.7 Sonnet, OpenAI o1/o3/o4, DeepSeek R1, Groq LPU, dan xAI Grok.
+- **Native Gemini Context Caching (`cachedContent`)**: Integrasi penuh context caching Google Gemini (>32k tokens) dengan diskon 75%–90% pada FinOps tracking, dilengkapi helper CRUD in-process (`createCachedContent`, `getCachedContent`, `listCachedContents`, `deleteCachedContent`).
+- **Live Search Grounding & Python Code Execution**: Injeksi tool live Google Search dengan ekstraksi sitasi terverifikasi (`groundingMetadata`), serta eksekusi kode Python server-side sandbox.
 - **Model Aliases & Health Probes**: Pemetaan alias virtual (misal `{ 'fast': 'gpt-4o-mini' }`) dan inspeksi status gateway pasif/aktif (`client.checkHealth()`).
 - **Concurrent In-Process Batch Engine (`client.batch`)**: Worker pool konkuren tanpa dependensi eksternal untuk bulk chat completions dan embeddings dengan pembatasan konkurensi dan pelaporan progres (`onProgress`).
 - **Zero-Dependency Semantic Caching**: Caching semantik berbasis cosine similarity murni in-process dengan threshold kemiripan dan hook observabilitas.

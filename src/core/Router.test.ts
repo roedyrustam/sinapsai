@@ -254,6 +254,8 @@ describe('Router', () => {
       const p1 = {
         id: 'p1',
         name: 'p1',
+        promptCostPer1k: 0.001,
+        completionCostPer1k: 0.002,
         generateContent: vi.fn().mockResolvedValue(cachedResponse),
       } as unknown as Provider;
 
@@ -265,6 +267,9 @@ describe('Router', () => {
       const metrics = router.getMetrics();
       expect(metrics.totalCachedPromptTokens).toBe(80);
       expect(metrics.providerMetrics.p1.cachedPromptTokens).toBe(80);
+      // uncached = 20, cached = 80 * 0.25 = 20 -> effective = 40.
+      // cost = (40/1000)*0.001 + (20/1000)*0.002 = 0.00004 + 0.00004 = 0.00008
+      expect(metrics.estimatedCostUsd).toBe(0.00008);
     });
   });
 

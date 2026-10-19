@@ -67,6 +67,31 @@ export interface ResponseFormat {
         description?: string;
     };
 }
+export interface GroundingSource {
+    title?: string;
+    uri?: string;
+}
+export interface GroundingMetadata {
+    webSearchQueries?: string[];
+    sources?: GroundingSource[];
+    searchEntryPoint?: string;
+}
+export interface CreateCachedContentOptions {
+    model: string;
+    messages?: ChatMessage[];
+    contents?: any[];
+    systemInstruction?: string;
+    ttl?: string;
+    displayName?: string;
+}
+export interface CachedContentInfo {
+    name: string;
+    displayName?: string;
+    model: string;
+    createTime?: string;
+    updateTime?: string;
+    expireTime?: string;
+}
 export interface UnifiedApiRequest {
     model: string;
     messages: ChatMessage[];
@@ -85,6 +110,9 @@ export interface UnifiedApiRequest {
     fallbackModels?: string[];
     thinkingBudget?: number;
     reasoningEffort?: 'low' | 'medium' | 'high';
+    cachedContent?: string;
+    googleSearch?: boolean;
+    codeExecution?: boolean;
 }
 export interface CreateChatCompletionRequestNonStreaming extends Omit<UnifiedApiRequest, 'model' | 'stream'> {
     model?: string;
@@ -114,6 +142,7 @@ export interface UnifiedApiStreamChunk {
         finishReason: string | null;
     }>;
     usage?: ApiUsage;
+    grounding?: GroundingMetadata;
 }
 export interface RateLimitInfo {
     remainingRequests?: number;
@@ -129,9 +158,11 @@ export interface UnifiedApiResponse {
             content: string | null;
             reasoning_content?: string | null;
             tool_calls?: ToolCall[];
+            grounding?: GroundingMetadata;
         };
         finishReason: string;
     }>;
+    grounding?: GroundingMetadata;
     usage?: ApiUsage;
     rateLimit?: RateLimitInfo;
 }

@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.6.0] - 2026-10-18
+### Added
+- **Gemini 4.x & Frontier Model Alignment (2026 Edition)**:
+  - Added canonical model constants in `GEMINI_MODELS`: `PRO_4` (`gemini-4-pro`), `FLASH_4` (`gemini-4-flash`), `PROJECT_ASTRA` (`gemini-4-flash`), `FLASH_2_0` (`gemini-2.0-flash`), `FLASH_2_0_LITE` (`gemini-2.0-flash-lite`), and `FLASH_THINKING_2_0` (`gemini-2.0-flash-thinking-exp`).
+  - Added built-in 2026 default pricing map (`GEMINI_DEFAULT_PRICING`) for automated cost tracking across all Gemini models without requiring manual provider configuration.
+- **Native Google Context Caching (`cachedContent`)**:
+  - Injected `cachedContent` directly into request payloads for sub-second TTFT and up to 75%–90% cost savings on long contexts (>32k tokens).
+  - Implemented zero-dependency Context Caching lifecycle methods on `GeminiProvider`: `createCachedContent()`, `getCachedContent()`, `listCachedContents()`, and `deleteCachedContent()`.
+- **Live Google Search Grounding & Dynamic Citations**:
+  - Added `googleSearch: true` request option to inject `{ googleSearch: {} }` into Gemini tools.
+  - Automatically extracts `candidate.groundingMetadata` (queries, sources, URLs, titles) into `response.grounding` and `message.grounding`.
+- **Python Code Execution Sandbox**:
+  - Added `codeExecution: true` request option to enable Gemini server-side Python sandbox execution.
+  - Formats `executableCode` and `codeExecutionResult` seamlessly into response choices and stream deltas.
+- **Universal Reasoning Mapping (`reasoningEffort`)**:
+  - Automatically maps `reasoningEffort` (`'low'` -> 2048, `'medium'` -> 8192, `'high'` -> 32768 tokens) to `thinkingConfig.thinkingBudget` for Gemini models when `thinkingBudget` is omitted.
+  - Added robust CoT reasoning token extraction supporting both string thoughts and boolean `part.thought`.
+- **Multimodal Extension**:
+  - Expanded native media file detection in `GeminiProvider` to support documents (`application/pdf`), video (`video/mp4`, `video/webm`), and audio (`audio/mp3`, `audio/wav`).
+- **FinOps 75% KV-Cache Pricing Discount in Router**:
+  - Updated cost calculations in `Router.ts` (streaming & non-streaming) to factor in the 75% KV-cache discount on `cachedPromptTokens`, providing accurate real-world spend metrics.
+### Fixed
+- **Turn Alternation in Parallel Tool Execution**:
+  - Merged multiple consecutive `role: 'tool'` messages into a single `user` turn containing multiple `functionResponse` parts, eliminating HTTP 400 turn alternation errors on Gemini endpoints.
+
 ## [2.5.0] - 2026-10-17
 ### Added
 - **In-Process Dynamic Context Compressor (`ContextCompressor`)**:

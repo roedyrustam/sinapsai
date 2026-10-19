@@ -802,16 +802,27 @@ export class Router {
                       provider.promptCostPer1k !== undefined &&
                       provider.completionCostPer1k !== undefined
                     ) {
+                      const uncached = Math.max(
+                        0,
+                        collectedPromptTokens - collectedCachedPromptTokens,
+                      );
+                      const effectivePrompt =
+                        uncached + collectedCachedPromptTokens * 0.25;
                       costUsd =
-                        (collectedPromptTokens / 1000) *
-                          provider.promptCostPer1k +
+                        (effectivePrompt / 1000) * provider.promptCostPer1k +
                         (collectedCompletionTokens / 1000) *
                           provider.completionCostPer1k;
                     } else if (provider.costPer1kTokens !== undefined) {
+                      const uncached = Math.max(
+                        0,
+                        collectedPromptTokens - collectedCachedPromptTokens,
+                      );
+                      const effectiveTokens =
+                        uncached +
+                        collectedCachedPromptTokens * 0.25 +
+                        collectedCompletionTokens;
                       costUsd =
-                        ((collectedPromptTokens + collectedCompletionTokens) /
-                          1000) *
-                        provider.costPer1kTokens;
+                        (effectiveTokens / 1000) * provider.costPer1kTokens;
                     }
 
                     self.recordMetrics(
@@ -977,21 +988,23 @@ export class Router {
 
             const promptTokens = apiRes.usage?.promptTokens ?? 0;
             const completionTokens = apiRes.usage?.completionTokens ?? 0;
+            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
             let costUsd = 0;
             if (
               provider.promptCostPer1k !== undefined &&
               provider.completionCostPer1k !== undefined
             ) {
+              const uncached = Math.max(0, promptTokens - cachedPromptTokens);
+              const effectivePrompt = uncached + cachedPromptTokens * 0.25;
               costUsd =
-                (promptTokens / 1000) * provider.promptCostPer1k +
+                (effectivePrompt / 1000) * provider.promptCostPer1k +
                 (completionTokens / 1000) * provider.completionCostPer1k;
             } else if (provider.costPer1kTokens !== undefined) {
-              costUsd =
-                ((promptTokens + completionTokens) / 1000) *
-                provider.costPer1kTokens;
+              const uncached = Math.max(0, promptTokens - cachedPromptTokens);
+              const effectiveTokens =
+                uncached + cachedPromptTokens * 0.25 + completionTokens;
+              costUsd = (effectiveTokens / 1000) * provider.costPer1kTokens;
             }
-
-            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
             this.recordMetrics(
               provider.id,
               true,

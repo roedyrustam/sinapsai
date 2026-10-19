@@ -1751,9 +1751,19 @@ var Router = class {
                     const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
                     let costUsd = 0;
                     if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
-                      costUsd = collectedPromptTokens / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
+                      const uncached = Math.max(
+                        0,
+                        collectedPromptTokens - collectedCachedPromptTokens
+                      );
+                      const effectivePrompt = uncached + collectedCachedPromptTokens * 0.25;
+                      costUsd = effectivePrompt / 1e3 * provider.promptCostPer1k + collectedCompletionTokens / 1e3 * provider.completionCostPer1k;
                     } else if (provider.costPer1kTokens !== void 0) {
-                      costUsd = (collectedPromptTokens + collectedCompletionTokens) / 1e3 * provider.costPer1kTokens;
+                      const uncached = Math.max(
+                        0,
+                        collectedPromptTokens - collectedCachedPromptTokens
+                      );
+                      const effectiveTokens = uncached + collectedCachedPromptTokens * 0.25 + collectedCompletionTokens;
+                      costUsd = effectiveTokens / 1e3 * provider.costPer1kTokens;
                     }
                     self.recordMetrics(
                       provider.id,
@@ -1874,13 +1884,17 @@ var Router = class {
             this.hooks?.onSuccess?.(provider, apiRes, latencyMs);
             const promptTokens = apiRes.usage?.promptTokens ?? 0;
             const completionTokens = apiRes.usage?.completionTokens ?? 0;
+            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
             let costUsd = 0;
             if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
-              costUsd = promptTokens / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
+              const uncached = Math.max(0, promptTokens - cachedPromptTokens);
+              const effectivePrompt = uncached + cachedPromptTokens * 0.25;
+              costUsd = effectivePrompt / 1e3 * provider.promptCostPer1k + completionTokens / 1e3 * provider.completionCostPer1k;
             } else if (provider.costPer1kTokens !== void 0) {
-              costUsd = (promptTokens + completionTokens) / 1e3 * provider.costPer1kTokens;
+              const uncached = Math.max(0, promptTokens - cachedPromptTokens);
+              const effectiveTokens = uncached + cachedPromptTokens * 0.25 + completionTokens;
+              costUsd = effectiveTokens / 1e3 * provider.costPer1kTokens;
             }
-            const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
             this.recordMetrics(
               provider.id,
               true,
@@ -4458,18 +4472,71 @@ var DeepSeekProvider = class {
 // src/providers/GeminiProvider.ts
 init_stream();
 var GEMINI_MODELS = {
-  FLASH_2_5: "gemini-2.5-flash",
-  FLASH_LITE_2_5: "gemini-2.5-flash-lite",
-  PRO_2_5: "gemini-2.5-pro",
+  PRO_4: "gemini-4-pro",
+  FLASH_4: "gemini-4-flash",
+  PROJECT_ASTRA: "gemini-4-flash",
   FLASH_3_8: "gemini-3.8-flash",
   FLASH_3_6: "gemini-3.6-flash",
   FLASH_LITE_3_5: "gemini-3.5-flash-lite",
   PRO_3_1_PREVIEW: "gemini-3.1-pro-preview",
+  FLASH_2_5: "gemini-2.5-flash",
+  FLASH_LITE_2_5: "gemini-2.5-flash-lite",
+  PRO_2_5: "gemini-2.5-pro",
+  FLASH_2_0: "gemini-2.0-flash",
+  FLASH_2_0_LITE: "gemini-2.0-flash-lite",
+  FLASH_THINKING_2_0: "gemini-2.0-flash-thinking-exp",
+  PRO_2_0: "gemini-2.0-pro-exp",
   FLASH_LATEST: "gemini-flash-latest",
   PRO_LATEST: "gemini-pro-latest",
   EMBEDDING_001: "gemini-embedding-001",
   EMBEDDING_2: "gemini-embedding-2",
   TEXT_EMBEDDING_004: "text-embedding-004"
+};
+var GEMINI_DEFAULT_PRICING = {
+  "gemini-4-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "gemini-4-flash": { promptCostPer1k: 75e-6, completionCostPer1k: 3e-4 },
+  "gemini-3.8-flash": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-3.6-flash": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-3.5-flash-lite": {
+    promptCostPer1k: 375e-7,
+    completionCostPer1k: 15e-5
+  },
+  "gemini-3.1-pro-preview": {
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3
+  },
+  "gemini-2.5-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "gemini-2.5-flash": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-2.5-flash-lite": {
+    promptCostPer1k: 375e-7,
+    completionCostPer1k: 15e-5
+  },
+  "gemini-2.0-flash": { promptCostPer1k: 1e-4, completionCostPer1k: 4e-4 },
+  "gemini-2.0-flash-lite": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-2.0-pro-exp": {
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3
+  },
+  "gemini-flash-latest": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-pro-latest": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "text-embedding-004": { promptCostPer1k: 1e-5, completionCostPer1k: 0 },
+  "gemini-embedding-001": { promptCostPer1k: 1e-5, completionCostPer1k: 0 },
+  "gemini-embedding-2": { promptCostPer1k: 1e-5, completionCostPer1k: 0 }
 };
 var GeminiProvider = class {
   id;
@@ -4483,10 +4550,18 @@ var GeminiProvider = class {
     return this.config.costPer1kTokens;
   }
   get promptCostPer1k() {
-    return this.config.promptCostPer1k;
+    if (this.config.promptCostPer1k !== void 0) {
+      return this.config.promptCostPer1k;
+    }
+    const model = this.resolveModel(this.defaultModel || "default");
+    return GEMINI_DEFAULT_PRICING[model]?.promptCostPer1k;
   }
   get completionCostPer1k() {
-    return this.config.completionCostPer1k;
+    if (this.config.completionCostPer1k !== void 0) {
+      return this.config.completionCostPer1k;
+    }
+    const model = this.resolveModel(this.defaultModel || "default");
+    return GEMINI_DEFAULT_PRICING[model]?.completionCostPer1k;
   }
   get retries() {
     return this.config.retries;
@@ -4552,6 +4627,12 @@ var GeminiProvider = class {
               if (url.endsWith(".png")) mimeType = "image/png";
               else if (url.endsWith(".webp")) mimeType = "image/webp";
               else if (url.endsWith(".gif")) mimeType = "image/gif";
+              else if (url.endsWith(".svg")) mimeType = "image/svg+xml";
+              else if (url.endsWith(".pdf")) mimeType = "application/pdf";
+              else if (url.endsWith(".mp4")) mimeType = "video/mp4";
+              else if (url.endsWith(".webm")) mimeType = "video/webm";
+              else if (url.endsWith(".mp3")) mimeType = "audio/mp3";
+              else if (url.endsWith(".wav")) mimeType = "audio/wav";
               parts.push({
                 fileData: {
                   mimeType,
@@ -4586,17 +4667,21 @@ var GeminiProvider = class {
       } else if (msg.role === "tool") {
         const responseContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
         const resolvedName = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : void 0) || "function";
-        contents.push({
-          role: "user",
-          parts: [
-            {
-              functionResponse: {
-                name: resolvedName,
-                response: { content: responseContent }
-              }
-            }
-          ]
-        });
+        const functionResponsePart = {
+          functionResponse: {
+            name: resolvedName,
+            response: { content: responseContent }
+          }
+        };
+        const lastContent = contents[contents.length - 1];
+        if (lastContent && lastContent.role === "user") {
+          lastContent.parts.push(functionResponsePart);
+        } else {
+          contents.push({
+            role: "user",
+            parts: [functionResponsePart]
+          });
+        }
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const parts = [];
         if (typeof msg.content === "string" && msg.content) {
@@ -4655,7 +4740,16 @@ var GeminiProvider = class {
       delete cleanSchema.additionalProperties;
       generationConfig.responseSchema = cleanSchema;
     }
-    const thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    let thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    if (thinkingBudget === void 0 && request.reasoningEffort) {
+      if (request.reasoningEffort === "low") {
+        thinkingBudget = 2048;
+      } else if (request.reasoningEffort === "medium") {
+        thinkingBudget = 8192;
+      } else if (request.reasoningEffort === "high") {
+        thinkingBudget = 32768;
+      }
+    }
     if (thinkingBudget !== void 0) {
       generationConfig.thinkingConfig = {
         thinkingBudget
@@ -4671,16 +4765,30 @@ var GeminiProvider = class {
     if (this.config.safetySettings && this.config.safetySettings.length > 0) {
       payload.safetySettings = this.config.safetySettings;
     }
-    if (request.tools) {
-      payload.tools = [
-        {
-          functionDeclarations: request.tools.map((t) => ({
-            name: t.function.name,
-            description: t.function.description,
-            parameters: t.function.parameters
-          }))
-        }
-      ];
+    const cachedContent = request.cachedContent ?? this.config.cachedContent;
+    if (cachedContent) {
+      payload.cachedContent = cachedContent;
+    }
+    const tools = [];
+    if (request.tools && request.tools.length > 0) {
+      tools.push({
+        functionDeclarations: request.tools.map((t) => ({
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters
+        }))
+      });
+    }
+    const useGoogleSearch = request.googleSearch ?? this.config.googleSearch;
+    if (useGoogleSearch) {
+      tools.push({ googleSearch: {} });
+    }
+    const useCodeExecution = request.codeExecution ?? this.config.codeExecution;
+    if (useCodeExecution) {
+      tools.push({ codeExecution: {} });
+    }
+    if (tools.length > 0) {
+      payload.tools = tools;
     }
     if (request.toolChoice) {
       if (request.toolChoice === "auto") {
@@ -4708,10 +4816,28 @@ var GeminiProvider = class {
     const toolCalls = [];
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
-        if (part.thought) {
+        if (typeof part.thought === "string") {
+          reasoningContent += part.thought;
+        } else if (part.thought) {
           reasoningContent += part.text || "";
         } else if (part.text) {
           text += part.text;
+        }
+        if (part.executableCode) {
+          const lang = (part.executableCode.language || "python").toLowerCase();
+          text += `
+\`\`\`${lang}
+${part.executableCode.code || ""}
+\`\`\`
+`;
+        }
+        if (part.codeExecutionResult) {
+          text += `
+\`\`\`
+[Execution Outcome: ${part.codeExecutionResult.outcome || "OK"}]
+${part.codeExecutionResult.output || ""}
+\`\`\`
+`;
         }
         if (part.functionCall) {
           toolCalls.push({
@@ -4744,6 +4870,26 @@ var GeminiProvider = class {
           finishReason = candidate.finishReason.toLowerCase();
       }
     }
+    let grounding;
+    if (candidate?.groundingMetadata) {
+      const gm = candidate.groundingMetadata;
+      const sources = [];
+      if (Array.isArray(gm.groundingChunks)) {
+        for (const gc of gm.groundingChunks) {
+          if (gc.web) {
+            sources.push({
+              title: gc.web.title,
+              uri: gc.web.uri
+            });
+          }
+        }
+      }
+      grounding = {
+        webSearchQueries: gm.webSearchQueries,
+        sources: sources.length > 0 ? sources : void 0,
+        searchEntryPoint: gm.searchEntryPoint?.renderedContent
+      };
+    }
     return {
       id: `gemini-${Date.now()}`,
       model,
@@ -4753,11 +4899,13 @@ var GeminiProvider = class {
             role: "assistant",
             content: text || null,
             reasoning_content: reasoningContent || void 0,
-            tool_calls: toolCalls.length > 0 ? toolCalls : void 0
+            tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+            grounding
           },
           finishReason
         }
       ],
+      grounding,
       usage: data.usageMetadata ? {
         promptTokens: data.usageMetadata.promptTokenCount || 0,
         completionTokens: data.usageMetadata.candidatesTokenCount || 0,
@@ -4817,10 +4965,28 @@ var GeminiProvider = class {
                 const toolCalls = [];
                 if (candidate?.content?.parts) {
                   for (const part of candidate.content.parts) {
-                    if (part.thought) {
+                    if (typeof part.thought === "string") {
+                      reasoning += part.thought;
+                    } else if (part.thought) {
                       reasoning += part.text || "";
                     } else if (part.text) {
                       text += part.text;
+                    }
+                    if (part.executableCode) {
+                      const lang = (part.executableCode.language || "python").toLowerCase();
+                      text += `
+\`\`\`${lang}
+${part.executableCode.code || ""}
+\`\`\`
+`;
+                    }
+                    if (part.codeExecutionResult) {
+                      text += `
+\`\`\`
+[Execution Outcome: ${part.codeExecutionResult.outcome || "OK"}]
+${part.codeExecutionResult.output || ""}
+\`\`\`
+`;
                     }
                     if (part.functionCall) {
                       toolCalls.push({
@@ -4836,6 +5002,26 @@ var GeminiProvider = class {
                       });
                     }
                   }
+                }
+                let streamGrounding;
+                if (candidate?.groundingMetadata) {
+                  const gm = candidate.groundingMetadata;
+                  const sources = [];
+                  if (Array.isArray(gm.groundingChunks)) {
+                    for (const gc of gm.groundingChunks) {
+                      if (gc.web) {
+                        sources.push({
+                          title: gc.web.title,
+                          uri: gc.web.uri
+                        });
+                      }
+                    }
+                  }
+                  streamGrounding = {
+                    webSearchQueries: gm.webSearchQueries,
+                    sources: sources.length > 0 ? sources : void 0,
+                    searchEntryPoint: gm.searchEntryPoint?.renderedContent
+                  };
                 }
                 const usage = parsed.usageMetadata ? {
                   promptTokens: parsed.usageMetadata.promptTokenCount || 0,
@@ -4857,7 +5043,8 @@ var GeminiProvider = class {
                       finishReason: toolCalls.length > 0 ? "tool_calls" : candidate?.finishReason ? candidate.finishReason.toLowerCase() : null
                     }
                   ],
-                  usage
+                  usage,
+                  grounding: streamGrounding
                 };
               } catch (_e) {
               }
@@ -4974,6 +5161,118 @@ var GeminiProvider = class {
       outputTokenLimit: m.outputTokenLimit,
       supportedGenerationMethods: m.supportedGenerationMethods || []
     }));
+  }
+  /**
+   * Creates a context cache resource on Google Gemini API for long contexts (>32,768 tokens),
+   * providing up to 75%-90% cost reduction and lower latency.
+   */
+  async createCachedContent(options) {
+    const targetModel = this.resolveModel(options.model);
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    let contents = options.contents;
+    if (!contents && options.messages) {
+      const formatted = this.formatRequest({
+        model: targetModel,
+        messages: options.messages
+      });
+      contents = formatted.contents;
+    }
+    const body = {
+      model: `models/${targetModel}`,
+      contents: contents || [],
+      ttl: options.ttl || "3600s"
+    };
+    if (options.displayName) {
+      body.displayName = options.displayName;
+    }
+    if (options.systemInstruction) {
+      body.systemInstruction = {
+        parts: [{ text: options.systemInstruction }]
+      };
+    }
+    const response = await fetch(`${baseUrl}/cachedContents`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.config.apiKey || ""
+      },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to create Gemini CachedContent (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    return await response.json();
+  }
+  /**
+   * Fetches metadata for an existing Gemini CachedContent.
+   */
+  async getCachedContent(name) {
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const resourcePath = name.startsWith("cachedContents/") ? name : `cachedContents/${name}`;
+    const response = await fetch(`${baseUrl}/${resourcePath}`, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": this.config.apiKey || ""
+      }
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to get Gemini CachedContent (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    return await response.json();
+  }
+  /**
+   * Lists active CachedContents for the configured Gemini API key.
+   */
+  async listCachedContents(pageSize) {
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const query = pageSize ? `?pageSize=${pageSize}` : "";
+    const response = await fetch(`${baseUrl}/cachedContents${query}`, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": this.config.apiKey || ""
+      }
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to list Gemini CachedContents (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    const data = await response.json();
+    return data.cachedContents || [];
+  }
+  /**
+   * Deletes a Gemini CachedContent by name.
+   */
+  async deleteCachedContent(name) {
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const resourcePath = name.startsWith("cachedContents/") ? name : `cachedContents/${name}`;
+    const response = await fetch(`${baseUrl}/${resourcePath}`, {
+      method: "DELETE",
+      headers: {
+        "x-goog-api-key": this.config.apiKey || ""
+      }
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to delete Gemini CachedContent (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
   }
 };
 
@@ -6611,6 +6910,6 @@ var XAiProvider = class {
  * @license MIT
  */
 
-export { AnthropicProvider, BatchExecutionError, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CircuitBreaker, CloudflareKVStorage, CohereProvider, ContextCompressor, D1Storage, DeepSeekProvider, GEMINI_MODELS, GeminiProvider, GroqProvider, HedgedExecutor, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RedisStorage, Router, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, XAI_MODELS, XAiProvider, accumulateStream, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, estimateMessageTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai, tryExtractJson };
+export { AnthropicProvider, BatchExecutionError, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CircuitBreaker, CloudflareKVStorage, CohereProvider, ContextCompressor, D1Storage, DeepSeekProvider, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GeminiProvider, GroqProvider, HedgedExecutor, InMemoryStorage, MistralProvider, OPENROUTER_FREE_MODELS, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RedisStorage, Router, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, XAI_MODELS, XAiProvider, accumulateStream, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, estimateMessageTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, isOpenRouterFreeModel, mapFinishReason, sinapsai, tryExtractJson };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
