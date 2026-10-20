@@ -91,7 +91,7 @@ async function main() {
   console.log('--- OpenTelemetry OTLP JSON Output ---');
   const otelJson = client.exportOtelMetrics({
     serviceName: 'production-ai-gateway',
-    serviceVersion: '2.7.0',
+    serviceVersion: '2.7.1',
     resourceAttributes: { 'deployment.environment': 'production' },
   });
   console.log(

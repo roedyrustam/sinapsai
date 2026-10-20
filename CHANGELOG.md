@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.7.1] - 2026-10-20
+### Added
+- **Transparent Provider Attribution (`response.provider`)**:
+  - Enriched `UnifiedApiResponse` with optional `provider?: string` property denoting the exact provider ID fulfilling the request across primary and fallback executions.
+  - Automatically populated in single provider executions and speculative hedged requests (`raceResult.winnerProvider.id`).
+- **Streaming Rate Limit Token Balancing**:
+  - Implemented automatic token adjustment for streaming chat completions: wrapped streaming async generator tracks accumulated `usage` and invokes `adjustTokens()` in `finally` upon stream completion, preventing sliding-window token drift.
+- **Observability Exporter Aliases (`toPrometheusMetrics`, `toOtelMetrics`)**:
+  - Added ergonomic DX alias methods `client.toPrometheusMetrics()` and `client.toOtelMetrics()` across both `SinapsClient` and `Router`.
+- **Public Type Re-Exports in `sinapsai/types`**:
+  - Re-exported `SinapsClientOptions`, `RouterOptions`, `ExtendedPIIGuardrailsOptions`, `GatewayRateLimitError`, and `GatewayRateLimiter` directly from `src/types/index.ts` for clean, decoupled TypeScript imports.
+### Fixed
+- **Provider-Scoped Token Adjustment in `GatewayRateLimiter`**:
+  - Added `providerId?: string` parameter to `adjustTokens(request, actualTokens, estimatedTokens, providerId?)` and synchronized `scopeKey` resolution with `check()`, ensuring provider-level rate limit rules adjust tokens accurately.
+
 ## [2.7.0] - 2026-10-20
 ### Added
 - **In-Process Gateway Rate Limiting (`GatewayRateLimiter`, `GatewayRateLimitError`)**:

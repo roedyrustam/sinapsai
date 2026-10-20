@@ -170,5 +170,18 @@ describe('metricsExporter', () => {
       expect(latMetric).toBeDefined();
       expect(latMetric?.gauge?.dataPoints).toHaveLength(2);
     });
+
+    it('should use default serviceName and serviceVersion when omitted', () => {
+      const otel = formatOtelMetrics(sampleMetrics);
+      const attrs = otel.resourceMetrics[0].resource.attributes;
+      expect(attrs).toContainEqual({
+        key: 'service.name',
+        value: { stringValue: 'sinapsai-gateway' },
+      });
+      expect(attrs).toContainEqual({
+        key: 'service.version',
+        value: { stringValue: '2.7.1' },
+      });
+    });
   });
 });

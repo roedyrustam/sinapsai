@@ -1371,7 +1371,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.7.0";
+  const serviceVersion = options.serviceVersion || "2.7.1";
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
