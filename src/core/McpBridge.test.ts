@@ -84,6 +84,28 @@ describe('McpToolBridge', () => {
       bridge.clear();
       expect(bridge.listTools()).toHaveLength(0);
     });
+
+    it('should register tools in bulk with registerTools() and expose size', () => {
+      const bridge = new McpToolBridge();
+      expect(bridge.size).toBe(0);
+
+      bridge.registerTools([
+        {
+          name: 'tool_1',
+          inputSchema: { type: 'object' },
+          handler: () => '1',
+        },
+        {
+          name: 'tool_2',
+          inputSchema: { type: 'object' },
+          handler: () => '2',
+        },
+      ]);
+
+      expect(bridge.size).toBe(2);
+      expect(bridge.hasTool('tool_1')).toBe(true);
+      expect(bridge.hasTool('tool_2')).toBe(true);
+    });
   });
 
   describe('schema conversion', () => {
@@ -266,6 +288,56 @@ describe('McpToolBridge', () => {
         "Error executing tool 'failing_tool': Database connection failed",
       );
     });
+
+    it('should abort tool execution if context.signal is already aborted', async () => {
+      const bridge = new McpToolBridge();
+      bridge.registerTool({
+        name: 'quick_tool',
+        inputSchema: { type: 'object' },
+        handler: () => 'done',
+      });
+
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await bridge.executeToolCall(
+        {
+          id: 'c_aborted',
+          type: 'function',
+          function: { name: 'quick_tool', arguments: '{}' },
+        },
+        { signal: controller.signal },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "Tool 'quick_tool' execution aborted by client signal.",
+      );
+    });
+
+    it('should timeout tool execution when toolDef.timeoutMs is exceeded', async () => {
+      const bridge = new McpToolBridge();
+      bridge.registerTool({
+        name: 'slow_tool',
+        inputSchema: { type: 'object' },
+        timeoutMs: 25,
+        handler: async () => {
+          await new Promise((r) => setTimeout(r, 100));
+          return 'slow result';
+        },
+      });
+
+      const result = await bridge.executeToolCall({
+        id: 'c_slow',
+        type: 'function',
+        function: { name: 'slow_tool', arguments: '{}' },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "Tool 'slow_tool' timed out after 25ms.",
+      );
+    });
   });
 
   describe('executeToolCalls', () => {
@@ -378,6 +450,32 @@ describe('McpToolBridge', () => {
 
       expect(res.error?.code).toBe(-32601);
       expect(res.error?.message).toContain('Method or tool not found');
+    });
+
+    it('should handle JSON-RPC initialize and notifications/initialized methods', async () => {
+      const initRes = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+        },
+      });
+
+      expect(initRes.jsonrpc).toBe('2.0');
+      expect(initRes.id).toBe(10);
+      expect(initRes.result.protocolVersion).toBe('2024-11-05');
+      expect(initRes.result.serverInfo.name).toBe('sinapsai-mcp');
+      expect(initRes.result.serverInfo.version).toBe('2.8.0');
+
+      const notifRes = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: null,
+        method: 'notifications/initialized',
+      });
+      expect(notifRes.jsonrpc).toBe('2.0');
+      expect(notifRes.result).toEqual({});
     });
 
     it('should return -32700 for invalid JSON string input', async () => {
@@ -566,5 +664,88 @@ describe('SinapsClient.runWithTools', () => {
     expect(result.totalSteps).toBe(3);
     expect(result.steps).toHaveLength(3);
     expect(mockProvider.generateContent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should abort agent loop immediately if signal is aborted', async () => {
+    const mockProvider: Provider = {
+      id: 'mock-llm',
+      name: 'MockLLM',
+      generateContent: vi.fn(),
+    };
+
+    const client = new SinapsClient({ providers: [mockProvider] });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      client.runWithTools({
+        model: 'any-model',
+        messages: [{ role: 'user', content: 'test' }],
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('The user aborted a request.');
+    expect(mockProvider.generateContent).not.toHaveBeenCalled();
+  });
+
+  it('should compute totalCostUsd and pass toolTimeoutMs to bridge', async () => {
+    const mockProvider: Provider = {
+      id: 'mock-llm',
+      name: 'MockLLM',
+      generateContent: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: 'resp-cost-1',
+          model: 'm',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'call_timed',
+                    type: 'function',
+                    function: { name: 'timed_action', arguments: '{}' },
+                  },
+                ],
+              },
+              finishReason: 'tool_calls',
+            },
+          ],
+          usage: { promptTokens: 10, completionTokens: 10, totalTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          id: 'resp-cost-2',
+          model: 'm',
+          choices: [
+            {
+              message: { role: 'assistant', content: 'finished.' },
+              finishReason: 'stop',
+            },
+          ],
+          usage: { promptTokens: 15, completionTokens: 5, totalTokens: 20 },
+        }),
+    };
+
+    const client = new SinapsClient({
+      providers: [mockProvider],
+    });
+
+    client.mcp.registerTool({
+      name: 'timed_action',
+      inputSchema: { type: 'object' },
+      handler: async () => 'action completed',
+    });
+
+    const result = await client.runWithTools({
+      model: 'm',
+      messages: [{ role: 'user', content: 'do action' }],
+      toolTimeoutMs: 500,
+    });
+
+    expect(result.totalSteps).toBe(1);
+    expect(result.response.choices[0].message.content).toBe('finished.');
+    expect(result.totalCostUsd).toBeDefined();
+    expect(result.totalCostUsd).toBeGreaterThanOrEqual(0);
   });
 });

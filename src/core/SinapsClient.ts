@@ -616,6 +616,7 @@ export class SinapsClient {
     const bridge = options.mcpBridge ?? this.mcp;
     const currentMessages: ChatMessage[] = [...options.messages];
     const steps: RunWithToolsStep[] = [];
+    const startCost = this.getMetrics().estimatedCostUsd;
     let totalTokens = 0;
     let latestResponse!: UnifiedApiResponse;
 
@@ -625,6 +626,10 @@ export class SinapsClient {
         : bridge.getTools();
 
     for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex++) {
+      if (options.signal?.aborted) {
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
+
       const stepStart = Date.now();
       const req: CreateChatCompletionRequestNonStreaming = {
         ...options,
@@ -659,6 +664,7 @@ export class SinapsClient {
       const toolResults = await bridge.executeToolCalls(toolCalls, {
         signal: options.signal,
         user: options.user,
+        timeoutMs: options.toolTimeoutMs,
       });
 
       for (const tr of toolResults) {
@@ -681,12 +687,16 @@ export class SinapsClient {
       }
     }
 
+    const endCost = this.getMetrics().estimatedCostUsd;
+    const totalCostUsd = Number(Math.max(0, endCost - startCost).toFixed(6));
+
     return {
       response: latestResponse,
       messages: currentMessages,
       steps,
       totalSteps: steps.length,
       totalTokens,
+      totalCostUsd,
     };
   }
 }

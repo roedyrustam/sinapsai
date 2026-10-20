@@ -191,7 +191,7 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 381/381 unit & integration tests lulus di 33 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge & loop agen otonom, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 387/387 unit & integration tests lulus di 33 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge & loop agen otonom, semantic cache, batch engine, PII, budget, security, dan hedged requests.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
 - **27 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 27) teruji dan 100% lulus kompilasi TypeScript.
 

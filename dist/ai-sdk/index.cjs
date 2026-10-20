@@ -743,6 +743,23 @@ var McpToolBridge = class _McpToolBridge {
     return this;
   }
   /**
+   * Registers multiple MCP tools in bulk.
+   */
+  registerTools(tools) {
+    if (Array.isArray(tools)) {
+      for (const t of tools) {
+        this.registerTool(t);
+      }
+    }
+    return this;
+  }
+  /**
+   * Returns the count of registered tools.
+   */
+  get size() {
+    return this.tools.size;
+  }
+  /**
    * Unregisters a previously registered tool by name.
    */
   unregisterTool(name) {
@@ -877,12 +894,44 @@ var McpToolBridge = class _McpToolBridge {
     } else if (typeof rawArgs === "object" && rawArgs !== null) {
       parsedArgs = rawArgs;
     }
+    if (context?.signal?.aborted) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Tool '${toolName}' execution aborted by client signal.`
+          }
+        ],
+        isError: true
+      };
+    }
     try {
       const mergedContext = {
         ...context,
         toolCallId: call.id
       };
-      const rawResult = await toolDef.handler(parsedArgs, mergedContext);
+      const timeoutMs = toolDef.timeoutMs ?? context?.timeoutMs;
+      let rawResult;
+      if (timeoutMs && timeoutMs > 0) {
+        let timer;
+        try {
+          const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(
+                new Error(`Tool '${toolName}' timed out after ${timeoutMs}ms.`)
+              );
+            }, timeoutMs);
+          });
+          rawResult = await Promise.race([
+            toolDef.handler(parsedArgs, mergedContext),
+            timeoutPromise
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      } else {
+        rawResult = await toolDef.handler(parsedArgs, mergedContext);
+      }
       const isError = typeof rawResult === "object" && rawResult !== null ? rawResult.isError === true : false;
       return {
         content: this.formatContentResult(rawResult),
@@ -982,6 +1031,29 @@ var McpToolBridge = class _McpToolBridge {
           }
         };
       }
+      case "initialize": {
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2024-11-05",
+            capabilities: {
+              tools: {}
+            },
+            serverInfo: {
+              name: "sinapsai-mcp",
+              version: "2.8.0"
+            }
+          }
+        };
+      }
+      case "notifications/initialized": {
+        return {
+          jsonrpc: "2.0",
+          id: id ?? null,
+          result: {}
+        };
+      }
       case "tools/call": {
         const name = params?.name;
         const toolDef = this.tools.get(name);
@@ -995,36 +1067,26 @@ var McpToolBridge = class _McpToolBridge {
             }
           };
         }
-        try {
-          const args = params?.arguments || {};
-          const result = await toolDef.handler(args, {
-            meta: params?.meta
-          });
-          const content = this.formatContentResult(result);
-          const isError = typeof result === "object" && result !== null ? result.isError === true : false;
-          return {
-            jsonrpc: "2.0",
-            id,
-            result: {
-              content,
-              isError
-            }
-          };
-        } catch (err) {
-          return {
-            jsonrpc: "2.0",
-            id,
-            result: {
-              content: [
-                {
-                  type: "text",
-                  text: `Execution failed: ${err.message}`
-                }
-              ],
-              isError: true
-            }
-          };
-        }
+        const args = params?.arguments || {};
+        const call = {
+          id: String(id ?? Date.now()),
+          type: "function",
+          function: {
+            name,
+            arguments: typeof args === "string" ? args : JSON.stringify(args)
+          }
+        };
+        const result = await this.executeToolCall(call, {
+          meta: params?.meta
+        });
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: result.content,
+            isError: result.isError
+          }
+        };
       }
       default: {
         return {
@@ -2215,7 +2277,8 @@ var Router = class {
       return 100;
     }
     const successRate = (pm.successes + 1) / (pm.requests + 2);
-    const avgLatency = Math.max(30, pm.averageLatencyMs || 200);
+    const rawLatency = pm.averageLatencyMs !== void 0 ? pm.averageLatencyMs : 200;
+    const avgLatency = Math.max(30, rawLatency);
     const latencyScore = 1e3 / avgLatency;
     let costFactor = 1;
     if (request) {
@@ -3556,10 +3619,14 @@ var SinapsClient = class {
     const bridge = options.mcpBridge ?? this.mcp;
     const currentMessages = [...options.messages];
     const steps = [];
+    const startCost = this.getMetrics().estimatedCostUsd;
     let totalTokens = 0;
     let latestResponse;
     const tools = options.tools && options.tools.length > 0 ? options.tools : bridge.getTools();
     for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex++) {
+      if (options.signal?.aborted) {
+        throw new DOMException("The user aborted a request.", "AbortError");
+      }
       const stepStart = Date.now();
       const req = {
         ...options,
@@ -3586,7 +3653,8 @@ var SinapsClient = class {
       currentMessages.push(choice.message);
       const toolResults = await bridge.executeToolCalls(toolCalls, {
         signal: options.signal,
-        user: options.user
+        user: options.user,
+        timeoutMs: options.toolTimeoutMs
       });
       for (const tr of toolResults) {
         currentMessages.push(tr);
@@ -3605,12 +3673,15 @@ var SinapsClient = class {
         await options.onStep(step);
       }
     }
+    const endCost = this.getMetrics().estimatedCostUsd;
+    const totalCostUsd = Number(Math.max(0, endCost - startCost).toFixed(6));
     return {
       response: latestResponse,
       messages: currentMessages,
       steps,
       totalSteps: steps.length,
-      totalTokens
+      totalTokens,
+      totalCostUsd
     };
   }
 };

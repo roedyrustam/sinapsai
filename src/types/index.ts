@@ -742,6 +742,10 @@ export interface RunWithToolsOptions
    * Callback executed after each tool-calling step.
    */
   onStep?: (step: RunWithToolsStep) => void | Promise<void>;
+  /**
+   * Optional execution timeout in milliseconds for each tool invocation.
+   */
+  toolTimeoutMs?: number;
 }
 
 export interface RunWithToolsResult {

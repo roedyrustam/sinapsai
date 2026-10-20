@@ -412,8 +412,9 @@ export class Router {
     // 1. Reliability (Laplace smoothed success rate)
     const successRate = (pm.successes + 1) / (pm.requests + 2);
 
-    // 2. Latency score (faster = higher score)
-    const avgLatency = Math.max(30, pm.averageLatencyMs || 200);
+    // 2. Latency score (faster = higher score, clamped to min 30ms)
+    const rawLatency = pm.averageLatencyMs !== undefined ? pm.averageLatencyMs : 200;
+    const avgLatency = Math.max(30, rawLatency);
     const latencyScore = 1000 / avgLatency;
 
     // 3. Cost factor

@@ -620,6 +620,10 @@ export interface RunWithToolsOptions extends CreateChatCompletionRequestNonStrea
      * Callback executed after each tool-calling step.
      */
     onStep?: (step: RunWithToolsStep) => void | Promise<void>;
+    /**
+     * Optional execution timeout in milliseconds for each tool invocation.
+     */
+    toolTimeoutMs?: number;
 }
 export interface RunWithToolsResult {
     response: UnifiedApiResponse;

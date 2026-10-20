@@ -6,9 +6,12 @@
   - Zero-dependency in-process MCP registry for registering local tools with JSON Schemas and asynchronous execution handlers.
   - Bi-directional schema conversion between MCP `McpTool` and OpenAI/Unified `ToolDefinition` formats (`bridge.toUnifiedTools()`, `bridge.getTools()`, `McpToolBridge.toToolDefinition()`, `McpToolBridge.fromToolDefinition()`).
   - Error-resilient execution: `bridge.executeToolCall()` and `bridge.executeToolCalls()` parse arguments safely, invoke handlers, and catch errors gracefully (`isError: true`) without crashing the process.
-  - Standard Model Context Protocol JSON-RPC 2.0 protocol dispatching (`bridge.handleJsonRpc()`) supporting `tools/list`, `tools/call`, and `ping`, enabling direct integration with external MCP clients and Stdio/SSE worker processes.
+  - Standard Model Context Protocol JSON-RPC 2.0 protocol dispatching (`bridge.handleJsonRpc()`) supporting `initialize`, `notifications/initialized`, `tools/list`, `tools/call`, and `ping`, enabling direct plug-and-play integration with external MCP clients (Claude Desktop, Cursor, Antigravity) and Stdio/SSE worker processes.
+  - Configurable tool execution timeout (`timeoutMs` per tool definition, `toolTimeoutMs` in agent loop) racing tool execution against a timer to prevent runaway promises.
+  - Bulk registration (`bridge.registerTools()`) and `bridge.size` property for convenient inspection.
+  - Immediate `AbortSignal` checking before and during tool execution.
 - **Autonomous Multi-Step Agent Tool-Calling Loop (`client.runWithTools()`)**:
-  - High-level ergonomic method automating multi-step tool-calling workflows: iteratively queries LLM models, invokes requested MCP tools, feeds results back into conversation history (`role: 'tool'`), and returns the final response and reconstructed messages.
+  - High-level ergonomic method automating multi-step tool-calling workflows: iteratively queries LLM models, invokes requested MCP tools, feeds results back into conversation history (`role: 'tool'`), and returns the final response, reconstructed messages, and accurate `totalCostUsd`.
   - Granular control with `maxSteps` (default: 5) to guard against runaway loops.
   - Real-time step telemetry with `onStep` callbacks emitting `stepIndex`, `assistantMessage`, `toolCalls`, `toolResults`, `durationMs`, and token `usage`.
   - Accessible directly on `SinapsClient` via `client.mcp` and `client.runWithTools()`.
@@ -18,8 +21,11 @@
   - `MistralProvider`: Added `reasoning_content` support and streaming usage extraction.
 - **Runnable Example 27 (`examples/27-mcp-tool-bridge-and-agent-loop.ts`)**:
   - Comprehensive demonstration of in-process MCP tool registration, bi-directional schema conversion, JSON-RPC 2.0 dispatching, and live autonomous agent loop.
+### Fixed
+- **Adaptive Routing Sub-Millisecond Latency Clamp (`Router.calculateAdaptiveScore`)**:
+  - Replaced falsy logical OR (`pm.averageLatencyMs || 200`) with nullish coalescing (`pm.averageLatencyMs !== undefined ? pm.averageLatencyMs : 200`), ensuring 0ms and sub-millisecond responses from ultra-fast local/mock providers clamp to the optimal 30ms floor instead of penalizing them with a 200ms default latency.
 - **New Unit Tests**:
-  - Added 23 new test cases across `McpBridge.test.ts`, `OllamaProvider.test.ts`, and `MistralProvider.test.ts` (total **381 tests** passing across **33 test suites** with 100% Biome cleanliness).
+  - Added 29 new test cases across `McpBridge.test.ts`, `OllamaProvider.test.ts`, and `MistralProvider.test.ts` (total **387 tests** passing across **33 test suites** with 100% Biome cleanliness).
 
 ## [2.7.1] - 2026-10-20
 ### Added

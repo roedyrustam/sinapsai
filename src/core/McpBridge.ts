@@ -58,6 +58,10 @@ export interface McpToolContext {
   signal?: AbortSignal;
   user?: string;
   toolCallId?: string;
+  /**
+   * Optional execution timeout in milliseconds.
+   */
+  timeoutMs?: number;
   // biome-ignore lint/suspicious/noExplicitAny: custom context metadata
   meta?: Record<string, any>;
 }
@@ -71,6 +75,10 @@ export type McpToolHandler<TArgs = any, TResult = any> = (
 // biome-ignore lint/suspicious/noExplicitAny: tool definition wrapper
 export interface McpToolDefinition<TArgs = any, TResult = any> extends McpTool {
   handler: McpToolHandler<TArgs, TResult>;
+  /**
+   * Optional execution timeout in milliseconds for this tool.
+   */
+  timeoutMs?: number;
 }
 
 export interface McpJsonRpcRequest {
@@ -137,6 +145,25 @@ export class McpToolBridge {
       inputSchema,
     });
     return this;
+  }
+
+  /**
+   * Registers multiple MCP tools in bulk.
+   */
+  public registerTools(tools: McpToolDefinition[]): this {
+    if (Array.isArray(tools)) {
+      for (const t of tools) {
+        this.registerTool(t);
+      }
+    }
+    return this;
+  }
+
+  /**
+   * Returns the count of registered tools.
+   */
+  public get size(): number {
+    return this.tools.size;
   }
 
   /**
@@ -302,12 +329,49 @@ export class McpToolBridge {
       parsedArgs = rawArgs;
     }
 
+    if (context?.signal?.aborted) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Tool '${toolName}' execution aborted by client signal.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
     try {
       const mergedContext: McpToolContext = {
         ...context,
         toolCallId: call.id,
       };
-      const rawResult = await toolDef.handler(parsedArgs, mergedContext);
+
+      const timeoutMs = toolDef.timeoutMs ?? context?.timeoutMs;
+      // biome-ignore lint/suspicious/noExplicitAny: raw handler result
+      let rawResult: any;
+
+      if (timeoutMs && timeoutMs > 0) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(
+                new Error(`Tool '${toolName}' timed out after ${timeoutMs}ms.`),
+              );
+            }, timeoutMs);
+          });
+          rawResult = await Promise.race([
+            toolDef.handler(parsedArgs, mergedContext),
+            timeoutPromise,
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      } else {
+        rawResult = await toolDef.handler(parsedArgs, mergedContext);
+      }
+
       const isError =
         typeof rawResult === 'object' && rawResult !== null
           ? rawResult.isError === true
@@ -428,6 +492,31 @@ export class McpToolBridge {
         };
       }
 
+      case 'initialize': {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            protocolVersion: '2024-11-05',
+            capabilities: {
+              tools: {},
+            },
+            serverInfo: {
+              name: 'sinapsai-mcp',
+              version: '2.8.0',
+            },
+          },
+        };
+      }
+
+      case 'notifications/initialized': {
+        return {
+          jsonrpc: '2.0',
+          id: id ?? null,
+          result: {},
+        };
+      }
+
       case 'tools/call': {
         const name = params?.name;
         const toolDef = this.tools.get(name);
@@ -442,40 +531,28 @@ export class McpToolBridge {
           };
         }
 
-        try {
-          const args = params?.arguments || {};
-          const result = await toolDef.handler(args, {
-            meta: params?.meta,
-          });
-          const content = this.formatContentResult(result);
-          const isError =
-            typeof result === 'object' && result !== null
-              ? result.isError === true
-              : false;
+        const args = params?.arguments || {};
+        const call: ToolCall = {
+          id: String(id ?? Date.now()),
+          type: 'function',
+          function: {
+            name,
+            arguments: typeof args === 'string' ? args : JSON.stringify(args),
+          },
+        };
 
-          return {
-            jsonrpc: '2.0',
-            id,
-            result: {
-              content,
-              isError,
-            },
-          };
-        } catch (err) {
-          return {
-            jsonrpc: '2.0',
-            id,
-            result: {
-              content: [
-                {
-                  type: 'text',
-                  text: `Execution failed: ${(err as Error).message}`,
-                },
-              ],
-              isError: true,
-            },
-          };
-        }
+        const result = await this.executeToolCall(call, {
+          meta: params?.meta,
+        });
+
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            content: result.content,
+            isError: result.isError,
+          },
+        };
       }
 
       default: {

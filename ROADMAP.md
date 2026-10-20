@@ -124,7 +124,7 @@
 - [x] **Standard MCP JSON-RPC 2.0 Protocol Dispatcher**: Handler RPC `handleJsonRpc` siap integrasi dengan Stdio/SSE worker dan external MCP clients untuk metode `tools/list`, `tools/call`, dan `ping`.
 - [x] **Autonomous Agent Multi-Step Loop (`client.runWithTools`)**: Siklus eksekusi agen otonom multi-langkah (`maxSteps`) dengan agregasi token penggunaan, preservasi riwayat percakapan, dan pelaporan progres real-time (`onStep`).
 - [x] **Local & Cloud Reasoning Extraction**: Dukungan `reasoning_content` pada Ollama (DeepSeek-R1 / QwQ) dan Mistral AI, serta ekstraksi penggunaan streaming (`usage`) untuk rate limiting presisi.
-- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 27 (`examples/27-mcp-tool-bridge-and-agent-loop.ts`); total 381/381 tes lulus di 33 test suites, 100% Biome Clean.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 27 (`examples/27-mcp-tool-bridge-and-agent-loop.ts`); total 387/387 tes lulus di 33 test suites, 100% Biome Clean.
 
 ## Phase 16: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
