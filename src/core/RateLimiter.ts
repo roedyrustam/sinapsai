@@ -262,17 +262,30 @@ export class GatewayRateLimiter {
     request: UnifiedApiRequest,
     actualTokens: number,
     estimatedTokens: number,
+    providerId?: string,
   ): Promise<void> {
     const delta = actualTokens - estimatedTokens;
     if (delta === 0) return;
 
-    const rule = this.resolveRule(request.model);
+    const rule = this.resolveRule(request.model, providerId);
     if (!rule || rule.tokensPerMinute === undefined) return;
 
     const baseKey = this.getKey(request);
-    const scopeKey = this.options.modelRules?.[request.model]
-      ? `${baseKey}:m:${request.model}`
-      : baseKey;
+    const scope: 'global' | 'user' | 'model' | 'provider' = this.options
+      .modelRules?.[request.model]
+      ? 'model'
+      : providerId && this.options.providerRules?.[providerId]
+        ? 'provider'
+        : baseKey.startsWith('user:')
+          ? 'user'
+          : 'global';
+
+    const scopeKey =
+      scope === 'model'
+        ? `${baseKey}:m:${request.model}`
+        : scope === 'provider' && providerId
+          ? `${baseKey}:p:${providerId}`
+          : baseKey;
 
     const windowMs = rule.windowMs || 60000;
     const currentWindowId = Math.floor(Date.now() / windowMs);

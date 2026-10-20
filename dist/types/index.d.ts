@@ -156,6 +156,10 @@ export interface RateLimitInfo {
 export interface UnifiedApiResponse {
     id: string;
     model: string;
+    /**
+     * Identifier of the provider that fulfilled the request (e.g. 'openai', 'anthropic', 'gemini').
+     */
+    provider?: string;
     choices: Array<{
         message: {
             role: 'assistant';
@@ -594,4 +598,7 @@ export interface OtelResourceMetrics {
         }>;
     }>;
 }
+export { GatewayRateLimitError, GatewayRateLimiter, } from '../core/RateLimiter.js';
+export type { RouterOptions } from '../core/Router.js';
+export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';
 //# sourceMappingURL=index.d.ts.map

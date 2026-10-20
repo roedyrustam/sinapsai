@@ -11,11 +11,11 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-353%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-357%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
-**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
+**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
 
 Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, perutean latensi terendah (*lowest-latency*), dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
 
@@ -1153,7 +1153,7 @@ try {
 Ekspor metrik telemetri gateway secara native ke Prometheus, Grafana, Datadog, atau OpenTelemetry collector tanpa dependency pihak ketiga:
 
 ```typescript
-// 1. Ekspor dalam format teks standar Prometheus / OpenMetrics
+// 1. Ekspor dalam format teks standar Prometheus / OpenMetrics (atau client.toPrometheusMetrics())
 const prometheusMetrics = client.exportPrometheusMetrics({
   prefix: 'sinaps_',
   labels: { env: 'production', cluster: 'asia-southeast' },
@@ -1162,7 +1162,7 @@ const prometheusMetrics = client.exportPrometheusMetrics({
 // res.setHeader('Content-Type', 'text/plain; version=0.0.4');
 // res.send(prometheusMetrics);
 
-// 2. Ekspor dalam format standar OpenTelemetry (OTLP v1 JSON) ResourceMetrics
+// 2. Ekspor dalam format standar OpenTelemetry (OTLP v1 JSON) ResourceMetrics (atau client.toOtelMetrics())
 const otelMetrics = client.exportOtelMetrics({
   serviceName: 'sinapsai-gateway',
   serviceVersion: '2.7.0',

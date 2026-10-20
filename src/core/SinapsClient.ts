@@ -295,7 +295,37 @@ export class SinapsClient {
             fullReq,
             actualTokens,
             estimatedTokens,
+            (res as UnifiedApiResponse).provider,
           );
+        }
+
+        // Adjust rate limit tokens upon streaming completion
+        if (this.rateLimiter && request.stream) {
+          const limiter = this.rateLimiter;
+          const stream = res as AsyncIterable<UnifiedApiStreamChunk>;
+          return (async function* () {
+            let actualStreamTokens: number | undefined;
+            try {
+              for await (const chunk of stream) {
+                if (chunk.usage) {
+                  const calculated =
+                    chunk.usage.totalTokens ??
+                    (chunk.usage.promptTokens || 0) +
+                      (chunk.usage.completionTokens || 0);
+                  actualStreamTokens = calculated > 0 ? calculated : undefined;
+                }
+                yield chunk;
+              }
+            } finally {
+              if (actualStreamTokens !== undefined) {
+                await limiter.adjustTokens(
+                  fullReq,
+                  actualStreamTokens,
+                  estimatedTokens,
+                );
+              }
+            }
+          })();
         }
 
         // Reversibly restore PII values if vault contains tokens
@@ -541,9 +571,23 @@ export class SinapsClient {
   }
 
   /**
+   * Alias for exportPrometheusMetrics.
+   */
+  public toPrometheusMetrics(options?: PrometheusExportOptions): string {
+    return this.exportPrometheusMetrics(options);
+  }
+
+  /**
    * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
    */
   public exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
     return this.router.exportOtelMetrics(options);
+  }
+
+  /**
+   * Alias for exportOtelMetrics.
+   */
+  public toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
+    return this.exportOtelMetrics(options);
   }
 }

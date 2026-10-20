@@ -1241,13 +1241,14 @@ var GatewayRateLimiter = class {
    * Adjusts the token counter after a response completes if the actual
    * tokens consumed differs from the initial estimate.
    */
-  async adjustTokens(request, actualTokens, estimatedTokens) {
+  async adjustTokens(request, actualTokens, estimatedTokens, providerId) {
     const delta = actualTokens - estimatedTokens;
     if (delta === 0) return;
-    const rule = this.resolveRule(request.model);
+    const rule = this.resolveRule(request.model, providerId);
     if (!rule || rule.tokensPerMinute === void 0) return;
     const baseKey = this.getKey(request);
-    const scopeKey = this.options.modelRules?.[request.model] ? `${baseKey}:m:${request.model}` : baseKey;
+    const scope = this.options.modelRules?.[request.model] ? "model" : providerId && this.options.providerRules?.[providerId] ? "provider" : baseKey.startsWith("user:") ? "user" : "global";
+    const scopeKey = scope === "model" ? `${baseKey}:m:${request.model}` : scope === "provider" && providerId ? `${baseKey}:p:${providerId}` : baseKey;
     const windowMs = rule.windowMs || 6e4;
     const currentWindowId = Math.floor(Date.now() / windowMs);
     const tokKeyCurrent = `gw:rl:tok:${scopeKey}:${currentWindowId}`;
@@ -2151,6 +2152,7 @@ var Router = class {
             queryEmbedding,
             semanticConfig
           );
+          raceResult.response.provider = raceResult.winnerProvider.id;
           return raceResult.response;
         } catch (hedgeErr) {
           errors.push(hedgeErr);
@@ -2410,6 +2412,7 @@ var Router = class {
                 }
               }
             }
+            apiRes.provider = provider.id;
             return apiRes;
           }
           throw new Error("Invalid response structure received from provider");
@@ -2696,10 +2699,22 @@ var Router = class {
     return formatPrometheusMetrics(this.getMetrics(), options);
   }
   /**
+   * Alias for exportPrometheusMetrics.
+   */
+  toPrometheusMetrics(options) {
+    return this.exportPrometheusMetrics(options);
+  }
+  /**
    * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
    */
   exportOtelMetrics(options) {
     return formatOtelMetrics(this.getMetrics(), options);
+  }
+  /**
+   * Alias for exportOtelMetrics.
+   */
+  toOtelMetrics(options) {
+    return this.exportOtelMetrics(options);
   }
 };
 
@@ -3045,8 +3060,33 @@ var SinapsClient = class {
           await this.rateLimiter.adjustTokens(
             fullReq,
             actualTokens,
-            estimatedTokens
+            estimatedTokens,
+            res.provider
           );
+        }
+        if (this.rateLimiter && request.stream) {
+          const limiter = this.rateLimiter;
+          const stream = res;
+          return (async function* () {
+            let actualStreamTokens;
+            try {
+              for await (const chunk of stream) {
+                if (chunk.usage) {
+                  const calculated = chunk.usage.totalTokens ?? (chunk.usage.promptTokens || 0) + (chunk.usage.completionTokens || 0);
+                  actualStreamTokens = calculated > 0 ? calculated : void 0;
+                }
+                yield chunk;
+              }
+            } finally {
+              if (actualStreamTokens !== void 0) {
+                await limiter.adjustTokens(
+                  fullReq,
+                  actualStreamTokens,
+                  estimatedTokens
+                );
+              }
+            }
+          })();
         }
         if (this.guardrails && piiVault && piiVault.size > 0 && !request.stream && "choices" in res) {
           return this.guardrails.restoreResponse(
@@ -3218,10 +3258,22 @@ var SinapsClient = class {
     return this.router.exportPrometheusMetrics(options);
   }
   /**
+   * Alias for exportPrometheusMetrics.
+   */
+  toPrometheusMetrics(options) {
+    return this.exportPrometheusMetrics(options);
+  }
+  /**
    * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
    */
   exportOtelMetrics(options) {
     return this.router.exportOtelMetrics(options);
+  }
+  /**
+   * Alias for exportOtelMetrics.
+   */
+  toOtelMetrics(options) {
+    return this.exportOtelMetrics(options);
   }
 };
 

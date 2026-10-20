@@ -167,6 +167,32 @@ describe('GatewayRateLimiter', () => {
     );
   });
 
+  it('should adjust tokens when rule is configured on providerRules', async () => {
+    const limiter = new GatewayRateLimiter(storage, {
+      providerRules: {
+        groq: { tokensPerMinute: 800, windowMs: 60000 },
+      },
+    });
+
+    const req = createRequest(undefined, 'custom-model');
+    // Reserve 500 tokens for groq
+    const res1 = await limiter.check(req, {
+      providerId: 'groq',
+      estimatedTokens: 500,
+    });
+    expect(res1.allowed).toBe(true);
+
+    // Actual usage was 200 (delta -300)
+    await limiter.adjustTokens(req, 200, 500, 'groq');
+
+    // Now another 500 tokens should fit (200 + 500 = 700 <= 800)
+    const res2 = await limiter.check(req, {
+      providerId: 'groq',
+      estimatedTokens: 500,
+    });
+    expect(res2.allowed).toBe(true);
+  });
+
   it('should correctly instantiate GatewayRateLimitError', () => {
     const violation = {
       key: 'user:test',

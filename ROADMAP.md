@@ -100,7 +100,24 @@
 - [x] **Provider Frontier Baru (xAI Grok & Cohere v2)**: Integrasi kelas satu untuk xAI Grok (dengan `reasoningEffort`) dan Cohere v2 (Command A, Embed v4).
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 23, 24, dan 25; total 320/320 tes lulus di 29 test suites, 100% Biome Clean.
 
-## Phase 13: Real-Time Multimodal Voice & Native Observability Exporters (Upcoming / v3.0.0)
+## Phase 13: Google Gemini 4.x & Frontier Model Alignment (v2.6.0) - *Completed*
+- [x] **Gemini 4.x & Frontier Model Alignment**: Model constants resmi (`gemini-4-pro`, `gemini-4-flash`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-2.0-flash-thinking-exp`) dan tabel kalkulasi biaya FinOps default 2026 (`GEMINI_DEFAULT_PRICING`).
+- [x] **Native Google Context Caching (`cachedContent`)**: Integrasi penuh context caching Google Gemini (>32k tokens) dengan diskon 75%–90% pada FinOps tracking, dilengkapi helper lifecycle in-process (`createCachedContent`, `getCachedContent`, `listCachedContents`, `deleteCachedContent`).
+- [x] **Live Google Search Grounding & Dynamic Citations**: Opsi request `googleSearch: true` dengan ekstraksi otomatis query dan sitasi terverifikasi (`groundingMetadata`).
+- [x] **Python Code Execution Sandbox**: Opsi request `codeExecution: true` untuk eksekusi kode Python sandbox di sisi server Gemini dengan output terstruktur.
+- [x] **Universal Reasoning Mapping**: Pemetaan dinamis `reasoningEffort` (`low`, `medium`, `high`) ke `thinkingBudget` pada model Gemini reasoning.
+
+## Phase 14: In-Process Gateway Rate Limiting, Prometheus / OpenTelemetry Exporters & Canary Probing (v2.7.0 - v2.7.1) - *Completed*
+- [x] **In-Process Gateway Rate Limiting (`GatewayRateLimiter`, `GatewayRateLimitError`)**: Algoritma sliding-window counter berbobot sub-window tanpa dependensi eksternal, mendukung Requests Per Minute (RPM) dan Tokens Per Minute (TPM) dengan estimasi proaktif dan penyesuaian paska-respons (`adjustTokens`) lintas request non-streaming dan streaming.
+- [x] **Granular Multi-Tier Rate Limit Rules**: Konfigurasi global default (`defaultRule`), per-model (`modelRules`), per-provider (`providerRules`), dan partisi user/tenant (`keyGenerator` atau `request.user`) dengan aksi `block` atau `warn`.
+- [x] **Native Prometheus & OpenMetrics Exporter (`exportPrometheusMetrics`, `toPrometheusMetrics`)**: Format eksposisi teks standar OpenMetrics/Prometheus tanpa dependensi runtime, mengekspos counter total requests, status breakdown, token (prompt, completion, cached), biaya USD, serta counter dan latency gauge per provider.
+- [x] **Native OpenTelemetry OTLP JSON Exporter (`exportOtelMetrics`, `toOtelMetrics`)**: Format JSON OTLP v1 `ResourceMetrics` siap kirim ke endpoint collector `/v1/metrics` dengan `serviceName` dan atribut resource yang dapat dikonfigurasi.
+- [x] **Native Anthropic Prompt Caching (`promptCaching`)**: Header `anthropic-beta: prompt-caching-2024-07-31` otomatis dan injeksi breakpoint `cache_control: { type: 'ephemeral' }` pada system prompt >1,024 token serta ekstraksi metrik `cachedPromptTokens`.
+- [x] **Anti-Thundering-Herd Strict Canary Probing**: Proteksi transisi Circuit Breaker `HALF_OPEN` dengan kanari tunggal dan pengalihan ke provider cadangan saat probe berlangsung.
+- [x] **Universal Signal Detach & Memory Safety (`linkAbortSignal`)**: Pelepasan event listener deterministik pada blok `finally` dan pemutusan dini stream upstream saat pembatalan konsumen (`for await { break; }`).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 26 (`examples/26-gateway-rate-limiting-and-metrics-export.ts`); total 357/357 tes lulus di 32 test suites, 100% Biome Clean.
+
+## Phase 15: Real-Time Multimodal Voice & Agentic Tool Protocols (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
-- [ ] **OpenTelemetry & Prometheus Native Metrics Exporter (`client.toPrometheusMetrics()`)**: Helper tanpa dependensi untuk mengekspor metrik internal SinapsAI ke format OpenTelemetry / Prometheus scrape endpoint.
 - [ ] **MCP (Model Context Protocol) Local Tool Bridge**: Server/Client MCP terpadu in-process untuk menghubungkan LLM dengan tools lokal secara dinamis.
+

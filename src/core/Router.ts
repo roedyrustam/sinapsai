@@ -678,6 +678,7 @@ export class Router {
             semanticConfig,
           );
 
+          raceResult.response.provider = raceResult.winnerProvider.id;
           return raceResult.response;
         } catch (hedgeErr) {
           errors.push(hedgeErr as Error);
@@ -1038,6 +1039,7 @@ export class Router {
               }
             }
 
+            apiRes.provider = provider.id;
             return apiRes;
           }
           throw new Error('Invalid response structure received from provider');
@@ -1417,9 +1419,23 @@ export class Router {
   }
 
   /**
+   * Alias for exportPrometheusMetrics.
+   */
+  public toPrometheusMetrics(options?: PrometheusExportOptions): string {
+    return this.exportPrometheusMetrics(options);
+  }
+
+  /**
    * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
    */
   public exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
     return formatOtelMetrics(this.getMetrics(), options);
+  }
+
+  /**
+   * Alias for exportOtelMetrics.
+   */
+  public toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
+    return this.exportOtelMetrics(options);
   }
 }

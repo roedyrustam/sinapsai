@@ -166,8 +166,16 @@ export declare class SinapsClient {
      */
     exportPrometheusMetrics(options?: PrometheusExportOptions): string;
     /**
+     * Alias for exportPrometheusMetrics.
+     */
+    toPrometheusMetrics(options?: PrometheusExportOptions): string;
+    /**
      * Formats current gateway telemetry metrics into OpenTelemetry (OTLP v1 JSON) ResourceMetrics structure.
      */
     exportOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
+    /**
+     * Alias for exportOtelMetrics.
+     */
+    toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

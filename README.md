@@ -11,11 +11,11 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-353%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-357%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
-**SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, and custom endpoints) through a single, standardized **Unified API**.
+**SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, and custom endpoints) through a single, standardized **Unified API**.
 
 Engineered with a **100% in-process / in-memory** architecture, SinapsAI eliminates downtime via automatic failover, load balancing, lowest-latency routing, and a resilient **Circuit Breaker**—without requiring intermediary proxy servers, external Redis dependencies, or adding measurable latency (<10ms overhead).
 
@@ -1149,7 +1149,7 @@ try {
 Export in-process gateway telemetry to Prometheus, Grafana, Datadog, or any OpenTelemetry collector with zero third-party dependencies:
 
 ```typescript
-// 1. Export in standard Prometheus / OpenMetrics text exposition format
+// 1. Export in standard Prometheus / OpenMetrics text exposition format (or client.toPrometheusMetrics())
 const prometheusMetrics = client.exportPrometheusMetrics({
   prefix: 'sinaps_',
   labels: { env: 'production', cluster: 'us-east-1' },
@@ -1158,7 +1158,7 @@ const prometheusMetrics = client.exportPrometheusMetrics({
 // res.setHeader('Content-Type', 'text/plain; version=0.0.4');
 // res.send(prometheusMetrics);
 
-// 2. Export in standard OpenTelemetry (OTLP v1 JSON) ResourceMetrics format
+// 2. Export in standard OpenTelemetry (OTLP v1 JSON) ResourceMetrics format (or client.toOtelMetrics())
 const otelMetrics = client.exportOtelMetrics({
   serviceName: 'my-ai-gateway',
   serviceVersion: '2.7.0',

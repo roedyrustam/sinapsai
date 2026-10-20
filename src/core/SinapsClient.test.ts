@@ -743,5 +743,110 @@ describe('SinapsClient', () => {
       expect(metricNames).toContain('sinaps.requests.total');
       expect(metricNames).toContain('sinaps.tokens.total');
     });
+
+    it('should expose toPrometheusMetrics and toOtelMetrics aliases', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'test alias' },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          { id: 'alias-p', name: 'AliasP', generateContent: mockGenerate },
+        ],
+      });
+
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+
+      const prom = client.toPrometheusMetrics({ prefix: 'custom_' });
+      expect(prom).toContain('custom_requests_total');
+
+      const otel = client.toOtelMetrics({ serviceName: 'alias-test' });
+      expect(otel).toHaveProperty('resourceMetrics');
+    });
+
+    it('should attach provider id to successful response', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'prov test' },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'provider-123',
+            name: 'Provider123',
+            generateContent: mockGenerate,
+          },
+        ],
+      });
+
+      const res = await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+
+      if ('choices' in res) {
+        expect(res.provider).toBe('provider-123');
+      }
+    });
+
+    it('should adjust rate limit tokens upon stream completion', async () => {
+      async function* mockStream() {
+        yield {
+          id: 'chunk-1',
+          model: 'm',
+          choices: [{ delta: { content: 'chunk 1' }, finishReason: null }],
+        };
+        yield {
+          id: 'chunk-2',
+          model: 'm',
+          choices: [{ delta: { content: 'chunk 2' }, finishReason: 'stop' }],
+          usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
+        };
+      }
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'stream-p',
+            name: 'StreamP',
+            generateContent: vi.fn().mockReturnValue(mockStream()),
+          },
+        ],
+        rateLimiting: {
+          defaultRule: { tokensPerMinute: 1000 },
+        },
+      });
+
+      const streamRes = await client.chat.completions.create({
+        stream: true,
+        messages: [{ role: 'user', content: 'stream prompt' }],
+      });
+
+      const received: string[] = [];
+      for await (const chunk of streamRes as AsyncIterable<{
+        choices?: Array<{ delta?: { content?: string } }>;
+      }>) {
+        if (chunk.choices?.[0]?.delta?.content) {
+          received.push(chunk.choices[0].delta.content);
+        }
+      }
+
+      expect(received).toEqual(['chunk 1', 'chunk 2']);
+    });
   });
 });

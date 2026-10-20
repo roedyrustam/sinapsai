@@ -120,6 +120,22 @@ run();
 
 ## Fitur Utama per Versi Rilis
 
+### Fitur Utama v2.7.0 (In-Process Gateway Rate Limiting, Prometheus & OpenTelemetry Exporters & Canary Hardening)
+1. **In-Process Gateway Rate Limiting (`GatewayRateLimiter`, `GatewayRateLimitError`)**: Algoritma sliding-window counter berbobot sub-window tanpa dependensi eksternal untuk mencegah lonjakan batas burst, melacak kuota Requests Per Minute (RPM) dan Tokens Per Minute (TPM) secara presisi dengan penyesuaian paska-respons (`adjustTokens`) lintas eksekusi non-streaming dan streaming.
+2. **Aturan Rate Limit Berlapis (Multi-Tier Rules)**: Mendukung aturan default global (`defaultRule`), aturan spesifik model (`modelRules`), batas provider (`providerRules`), serta partisi berbasis user atau tenant (`keyGenerator` atau `request.user`) dengan aksi `block` (melempar `GatewayRateLimitError`) atau `warn` (`onGatewayRateLimitWarning`).
+3. **Eksportir Metrik Native Prometheus & OpenMetrics (`exportPrometheusMetrics`, `toPrometheusMetrics`)**: Format eksposisi teks standar OpenMetrics/Prometheus tanpa runtime dependencies untuk di-scrape langsung oleh Prometheus, Grafana Agent, atau VictoriaMetrics.
+4. **Eksportir Metrik Native OpenTelemetry OTLP JSON (`exportOtelMetrics`, `toOtelMetrics`)**: Format skema JSON OTLP v1 `ResourceMetrics` siap kirim ke endpoint collector `/v1/metrics`.
+5. **Native Anthropic Prompt Caching (`promptCaching`)**: Injeksi header `anthropic-beta: prompt-caching-2024-07-31` otomatis dan breakpoint `cache_control: { type: 'ephemeral' }` pada system prompt >1,024 token serta pemetaan token terpadu ke `cachedPromptTokens`.
+6. **Strict `HALF_OPEN` Canary Probing Anti-Thundering-Herd**: Isolasi kanari tunggal saat masa pemulihan Circuit Breaker dari `OPEN` ke `HALF_OPEN`, mencegah crash downstream akibat lonjakan permintaan konkuren seketika.
+7. **Pelepasan Signal Universal & Severing Stream Dini (`linkAbortSignal`)**: Pembersihan event listener deterministik pada blok `finally` di seluruh 10 provider, serta pemutusan koneksi HTTP upstream seketika saat konsumen stream keluar lebih awal (`break`).
+
+### Fitur Utama v2.6.0 (Google Gemini 4.x Models, Context Caching, Grounding & Code Execution)
+1. **Penyelarasan Model Frontier Gemini 4.x (2026 Edition)**: Konstanta model resmi (`gemini-4-pro`, `gemini-4-flash`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-2.0-flash-thinking-exp`) dan tabel FinOps default 2026 (`GEMINI_DEFAULT_PRICING`).
+2. **Native Google Context Caching (`cachedContent`)**: Pemanfaatan cache konteks Google Gemini (>32k tokens) dengan diskon 75%–90% pada penjejakan FinOps, dilengkapi helper in-process lifecycle (`createCachedContent`, `getCachedContent`, `listCachedContents`, `deleteCachedContent`).
+3. **Live Search Grounding & Dynamic Citations**: Injeksi live Google Search (`googleSearch: true`) dengan ekstraksi sitasi terverifikasi ke dalam `response.grounding`.
+4. **Python Code Execution Sandbox**: Eksekusi sandbox Python di server Google (`codeExecution: true`) dengan perakitan output terstruktur.
+5. **FinOps 75% KV-Cache Pricing Discount**: Perhitungan biaya di Router secara otomatis memperhitungkan diskon 75% pada token prompt yang ter-cache.
+
 ### Fitur Utama v2.5.0 (Context Compression, FinOps Budget, Speculative Hedging & Frontier Providers)
 1. **Dynamic Context Compressor (`ContextCompressor`)**: Estimasi token zero-dependency (~4 karakter per token) dan algoritma pemangkasan percakapan otomatis (`sliding-window` & `middle-out`) yang mengamankan instruksi sistem (`system`) serta mempertahankan grup pemanggilan fungsi (`tool_calls` dan `tool`) secara atomik agar tidak memicu error API.
 2. **FinOps Spend & Token Guardrails (`BudgetGuardrails`)**: Pembatasan pengeluaran kumulatif USD (`maxCostUsd`) dan volume token (`maxTotalTokens`) secara proaktif sebelum request dikirim, mendukung aksi pemblokiran keras (`BudgetExceededError`) atau peringatan lembut (`onBudgetWarning`).
@@ -159,7 +175,7 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 353/353 unit & integration tests lulus di 32 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 357/357 unit & integration tests lulus di 32 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, semantic cache, batch engine, PII, budget, security, dan hedged requests.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
 - **26 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 26) teruji dan 100% lulus kompilasi TypeScript.
 

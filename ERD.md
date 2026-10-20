@@ -12,6 +12,7 @@ classDiagram
         -BudgetGuardrails budgetGuardrails
         -ContextCompressor contextCompressor
         -HedgedExecutor hedgedExecutor
+        -GatewayRateLimiter rateLimiter
         +chat.completions.create(request)
         +embeddings.create(request)
         +batch.chat(requests, options)
@@ -21,6 +22,10 @@ classDiagram
         +getCircuitBreakerStatus()
         +resetCircuitBreaker()
         +clearCache()
+        +exportPrometheusMetrics(options)
+        +toPrometheusMetrics(options)
+        +exportOtelMetrics(options)
+        +toOtelMetrics(options)
     }
 
     class Router {
@@ -174,6 +179,16 @@ classDiagram
         +execute(providers, request, executor)
     }
 
+    class GatewayRateLimiter {
+        -StateStorage storage
+        -GatewayRateLimitOptions options
+        +resolveRule(model, providerId)
+        +getKey(request)
+        +estimateTokens(request)
+        +check(request, options)
+        +adjustTokens(request, actualTokens, estimatedTokens, providerId)
+    }
+
     StateStorage <|.. InMemoryStorage : implements
     StateStorage <|.. CloudflareKVStorage : implements
     StateStorage <|.. RedisStorage : implements
@@ -197,6 +212,8 @@ classDiagram
     SinapsClient "1" *-- "0..1" BudgetGuardrails : caps budget with
     SinapsClient "1" *-- "0..1" ContextCompressor : trims context with
     SinapsClient "1" *-- "0..1" HedgedExecutor : hedges latency with
+    SinapsClient "1" *-- "0..1" GatewayRateLimiter : limits rate with
+    GatewayRateLimiter "1" o-- "1" StateStorage : tracks counters in
     Router "1" *-- "1" CircuitBreaker : protects with
     Router "1" o-- "many" Provider : routes across
     CircuitBreaker "1" o-- "1" StateStorage : persists state in
