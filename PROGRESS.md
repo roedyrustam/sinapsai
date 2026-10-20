@@ -5,7 +5,7 @@
 - [x] PHASE 3: Database & Multi-Tenant Core Architecture (InMemory & StateStorage)
 - [x] PHASE 4: Backend APIs, Microservices & AI Agents (Core Routing Logic & Unified Providers)
 - [x] PHASE 5: Frontend, Design Systems & Mobile Apps (N/A for NPM Package)
-- [x] PHASE 6: Automated Testing (358/358 Tests Pass across 32 test suites - Chat, Embeddings, Edge, 10 Providers, Metrics, Groq Reasoning, Gemini Thinking/Embeddings, OpenRouter Free Tier, Hierarchical Fallbacks, Semantic Caching, Concurrent Batch, Circuit Breaker Streaming Hardening, Vercel AI SDK Adapter, Distributed Storage Adapters, PII Guardrails, Security Guardrails, Budget Guardrails, Context Compression, Hedged Requests, Gateway Rate Limiting, and Prometheus/OpenTelemetry Exporters)
+- [x] PHASE 6: Automated Testing (381/381 Tests Pass across 33 test suites - Chat, Embeddings, Edge, 10 Providers, Metrics, Groq Reasoning, Gemini Thinking/Embeddings, OpenRouter Free Tier, Hierarchical Fallbacks, Semantic Caching, Concurrent Batch, Circuit Breaker Streaming Hardening, Vercel AI SDK Adapter, Distributed Storage Adapters, PII Guardrails, Security Guardrails, Budget Guardrails, Context Compression, Hedged Requests, Gateway Rate Limiting, Prometheus/OpenTelemetry Exporters, and MCP Tool Bridge & Agent Loop)
 - [x] PHASE 7: DevOps, Deployment, Telemetry & Proactive Monitoring (Dual-Pricing, Adaptive Rate Throttling, TTFT Stream Telemetry, KV-Cache Analytics, getMetrics, Circuit Status, Cache Purge & Vercel AI SDK Ecosystem Adapter)
 - [x] PHASE 8: Distributed Edge & Cluster Storage (Cloudflare KV, Redis/Upstash/Valkey, Cloudflare D1 SQL)
 - [x] PHASE 9: In-Process Zero-Dependency PII Guardrails (Automatic Redaction for Email, Phone, Luhn-Validated Credit Card, SSN, IP, IBAN, Passport, JWT, URL)
@@ -16,3 +16,4 @@
 - [x] PHASE 14: Google Gemini 4.x & Frontier Model Alignment, Native Context Caching, Grounding & Code Execution (v2.6.0)
 - [x] PHASE 15: In-Process Gateway Rate Limiting, Sliding-Window RPM/TPM, Prometheus & OpenTelemetry Exporters, Anthropic Prompt Caching & Canary Circuit Breaker (v2.7.0)
 - [x] PHASE 16: Production Hardening, Streaming Token Balancing, Provider Attribution & Zero Tech Debt (358/358 Tests Pass, 100% Biome Clean, Zero Warnings, Strict Types, Zero Runtime Dependencies, 26/26 Examples Validated, Production-Ready v2.7.1)
+- [x] PHASE 17: In-Process Model Context Protocol (MCP) Tool Bridge, JSON-RPC 2.0 Dispatcher & Autonomous Multi-Step Agent Loop (381/381 Tests Pass across 33 suites, 100% Biome Clean, Zero Warnings, Strict Types, Zero Runtime Dependencies, 27/27 Examples Validated, Production-Ready v2.8.0)

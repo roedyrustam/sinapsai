@@ -130,6 +130,28 @@ describe('OllamaProvider', () => {
         totalTokens: 21,
       });
     });
+
+    it('should extract reasoning_content when returned by local reasoning models (DeepSeek-R1)', () => {
+      const response = {
+        model: 'deepseek-r1:8b',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'The answer is 42.',
+              reasoning_content: 'Let me think step-by-step...',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      };
+
+      const result = provider.formatResponse(response);
+      expect(result.choices[0].message.content).toBe('The answer is 42.');
+      expect(result.choices[0].message.reasoning_content).toBe(
+        'Let me think step-by-step...',
+      );
+    });
   });
 
   describe('generateEmbedding', () => {

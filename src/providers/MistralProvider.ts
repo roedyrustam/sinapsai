@@ -72,6 +72,7 @@ export class MistralProvider implements Provider {
         role: m.role,
         content: m.content,
       };
+      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
       if (m.name) msg.name = m.name;
       if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
@@ -92,6 +93,7 @@ export class MistralProvider implements Provider {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -108,6 +110,9 @@ export class MistralProvider implements Provider {
   // biome-ignore lint/suspicious/noExplicitAny: response mapping
   public formatResponse(data: any): UnifiedApiResponse {
     const choice = data.choices?.[0];
+    const reasoningContent =
+      choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? null;
+
     return {
       id: data.id || `mistral-${Date.now()}`,
       model: data.model,
@@ -116,6 +121,7 @@ export class MistralProvider implements Provider {
           message: {
             role: 'assistant',
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls,
           },
           finishReason: choice?.finish_reason || 'stop',
@@ -177,6 +183,18 @@ export class MistralProvider implements Provider {
               if (msg.data.trim() === '[DONE]') break;
               try {
                 const parsed = JSON.parse(msg.data);
+                let chunkUsage: UnifiedApiStreamChunk['usage'] | undefined;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens:
+                      parsed.usage.prompt_tokens_details?.cached_tokens ??
+                      undefined,
+                  };
+                }
+
                 const chunk: UnifiedApiStreamChunk = {
                   id: parsed.id,
                   model: parsed.model,
@@ -186,11 +204,16 @@ export class MistralProvider implements Provider {
                       delta: {
                         role: c.delta?.role,
                         content: c.delta?.content ?? null,
+                        reasoning_content:
+                          c.delta?.reasoning_content ??
+                          c.delta?.reasoning ??
+                          null,
                         tool_calls: c.delta?.tool_calls,
                       },
                       finishReason: c.finish_reason || null,
                     }),
                   ),
+                  usage: chunkUsage,
                 };
                 yield chunk;
               } catch (_e) {}

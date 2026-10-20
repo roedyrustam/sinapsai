@@ -775,6 +775,337 @@ var InMemoryStorage = class {
   }
 };
 
+// src/core/McpBridge.ts
+var McpToolBridge = class _McpToolBridge {
+  tools = /* @__PURE__ */ new Map();
+  constructor(tools) {
+    if (tools && Array.isArray(tools)) {
+      for (const t of tools) {
+        this.registerTool(t);
+      }
+    }
+  }
+  /**
+   * Registers a new in-process MCP tool with its execution handler.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: generic registerTool
+  registerTool(tool) {
+    if (!tool.name || typeof tool.name !== "string") {
+      throw new Error("Tool definition must include a valid non-empty name.");
+    }
+    if (typeof tool.handler !== "function") {
+      throw new Error(
+        `Tool '${tool.name}' must provide an executable handler function.`
+      );
+    }
+    const inputSchema = tool.inputSchema || {
+      type: "object",
+      properties: {}
+    };
+    this.tools.set(tool.name, {
+      ...tool,
+      inputSchema
+    });
+    return this;
+  }
+  /**
+   * Unregisters a previously registered tool by name.
+   */
+  unregisterTool(name) {
+    return this.tools.delete(name);
+  }
+  /**
+   * Checks if a tool is registered.
+   */
+  hasTool(name) {
+    return this.tools.has(name);
+  }
+  /**
+   * Gets a registered tool definition by name.
+   */
+  getTool(name) {
+    return this.tools.get(name);
+  }
+  /**
+   * Returns a list of all registered tools in MCP standard format.
+   */
+  listTools() {
+    return Array.from(this.tools.values()).map(
+      ({ name, description, inputSchema }) => ({
+        name,
+        description,
+        inputSchema
+      })
+    );
+  }
+  /**
+   * Clears all registered tools from the bridge.
+   */
+  clear() {
+    this.tools.clear();
+  }
+  /**
+   * Converts all registered tools into OpenAI / Unified standard ToolDefinition[] format.
+   * Can be passed directly into client.chat.completions.create({ tools: bridge.getTools() }).
+   */
+  toUnifiedTools() {
+    return Array.from(this.tools.values()).map(
+      (tool) => _McpToolBridge.toToolDefinition(tool)
+    );
+  }
+  /**
+   * Alias for toUnifiedTools().
+   */
+  getTools() {
+    return this.toUnifiedTools();
+  }
+  /**
+   * Static helper: converts an MCP Tool to an OpenAI / Unified ToolDefinition.
+   */
+  static toToolDefinition(mcpTool) {
+    return {
+      type: "function",
+      function: {
+        name: mcpTool.name,
+        description: mcpTool.description,
+        parameters: mcpTool.inputSchema
+      }
+    };
+  }
+  /**
+   * Static helper: converts an OpenAI / Unified ToolDefinition to an MCP Tool.
+   */
+  static fromToolDefinition(tool) {
+    return {
+      name: tool.function.name,
+      description: tool.function.description,
+      inputSchema: tool.function.parameters || {
+        type: "object",
+        properties: {}
+      }
+    };
+  }
+  /**
+   * Safely formats any raw handler return value into standard McpContent[].
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: raw format helper
+  formatContentResult(rawResult) {
+    if (rawResult === null || rawResult === void 0) {
+      return [{ type: "text", text: "" }];
+    }
+    if (typeof rawResult === "string") {
+      return [{ type: "text", text: rawResult }];
+    }
+    if (typeof rawResult === "object" && Array.isArray(rawResult.content) && rawResult.content.every(
+      (c) => typeof c?.type === "string"
+    )) {
+      return rawResult.content;
+    }
+    if (typeof rawResult === "object" && typeof rawResult.type === "string" && (rawResult.type === "text" || rawResult.type === "image" || rawResult.type === "resource")) {
+      return [rawResult];
+    }
+    return [{ type: "text", text: JSON.stringify(rawResult, null, 2) }];
+  }
+  /**
+   * Executes a single ToolCall returned by an LLM.
+   * Handles JSON argument parsing, handler invocation, and catches errors gracefully.
+   */
+  async executeToolCall(call, context) {
+    const toolName = call.function?.name;
+    const rawArgs = call.function?.arguments;
+    const toolDef = this.tools.get(toolName);
+    if (!toolDef) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Tool '${toolName}' is not registered on this MCP bridge.`
+          }
+        ],
+        isError: true
+      };
+    }
+    let parsedArgs = {};
+    if (rawArgs && typeof rawArgs === "string" && rawArgs.trim().length > 0) {
+      try {
+        parsedArgs = extractJsonFromText(rawArgs);
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Invalid JSON arguments for tool '${toolName}': ${err.message}`
+            }
+          ],
+          isError: true
+        };
+      }
+    } else if (typeof rawArgs === "object" && rawArgs !== null) {
+      parsedArgs = rawArgs;
+    }
+    try {
+      const mergedContext = {
+        ...context,
+        toolCallId: call.id
+      };
+      const rawResult = await toolDef.handler(parsedArgs, mergedContext);
+      const isError = typeof rawResult === "object" && rawResult !== null ? rawResult.isError === true : false;
+      return {
+        content: this.formatContentResult(rawResult),
+        isError,
+        _raw: rawResult
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error executing tool '${toolName}': ${err.message}`
+          }
+        ],
+        isError: true,
+        _raw: err
+      };
+    }
+  }
+  /**
+   * Executes an array of ToolCalls concurrently and maps them directly into
+   * standard OpenAI-compatible ChatMessage[] objects with role: 'tool'.
+   */
+  async executeToolCalls(calls, context) {
+    if (!calls || calls.length === 0) return [];
+    const results = await Promise.all(
+      calls.map(async (call) => {
+        const result = await this.executeToolCall(call, context);
+        const textContent = result.content.map((part) => {
+          if (part.type === "text") return part.text;
+          if (part.type === "image") return `[Image: ${part.mimeType}]`;
+          if (part.type === "resource")
+            return `[Resource: ${part.resource.uri}]`;
+          return JSON.stringify(part);
+        }).join("\n");
+        const message = {
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.function?.name,
+          content: textContent
+        };
+        return message;
+      })
+    );
+    return results;
+  }
+  /**
+   * Processes a standard Model Context Protocol (MCP) JSON-RPC 2.0 request.
+   * Supports:
+   * - 'tools/list': lists registered tools
+   * - 'tools/call': executes a tool by name with arguments
+   * - 'ping': liveness probe
+   */
+  async handleJsonRpc(request) {
+    let req;
+    if (typeof request === "string") {
+      try {
+        req = JSON.parse(request);
+      } catch (err) {
+        return {
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32700,
+            message: `Parse error: ${err.message}`
+          }
+        };
+      }
+    } else {
+      req = request;
+    }
+    if (req?.jsonrpc !== "2.0" || !req?.method) {
+      return {
+        jsonrpc: "2.0",
+        id: req?.id ?? null,
+        error: {
+          code: -32600,
+          message: "Invalid Request: missing jsonrpc 2.0 or method."
+        }
+      };
+    }
+    const { id, method, params } = req;
+    switch (method) {
+      case "ping": {
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {}
+        };
+      }
+      case "tools/list": {
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            tools: this.listTools()
+          }
+        };
+      }
+      case "tools/call": {
+        const name = params?.name;
+        const toolDef = this.tools.get(name);
+        if (!name || !toolDef) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32601,
+              message: `Method or tool not found: ${name}`
+            }
+          };
+        }
+        try {
+          const args = params?.arguments || {};
+          const result = await toolDef.handler(args, {
+            meta: params?.meta
+          });
+          const content = this.formatContentResult(result);
+          const isError = typeof result === "object" && result !== null ? result.isError === true : false;
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              content,
+              isError
+            }
+          };
+        } catch (err) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: `Execution failed: ${err.message}`
+                }
+              ],
+              isError: true
+            }
+          };
+        }
+      }
+      default: {
+        return {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32601,
+            message: `Method not found: ${method}`
+          }
+        };
+      }
+    }
+  }
+};
+
 // src/core/PIIGuardrails.ts
 var PATTERNS = {
   email: /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g,
@@ -1373,7 +1704,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.7.1";
+  const serviceVersion = options.serviceVersion || "2.8.0";
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
@@ -2918,12 +3249,14 @@ var SinapsClient = class {
   contextCompressor;
   hedgedExecutor;
   rateLimiter;
+  mcp;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
   constructor(options) {
     this.storage = options.storage || new InMemoryStorage();
     this.hooks = options.hooks;
+    this.mcp = options.mcpBridge || new McpToolBridge();
     if (options.modelAliases) {
       for (const [alias, target] of Object.entries(options.modelAliases)) {
         this.modelAliases.set(alias, target);
@@ -3276,6 +3609,75 @@ var SinapsClient = class {
    */
   toOtelMetrics(options) {
     return this.exportOtelMetrics(options);
+  }
+  /**
+   * Runs an autonomous multi-step tool-calling agent loop.
+   *
+   * Repeatedly queries the model with available MCP tools, executes requested tool calls
+   * via the McpToolBridge, feeds results back into the conversation, and returns the final
+   * response and complete conversation history once the model finishes or maxSteps is reached.
+   */
+  async runWithTools(options) {
+    const maxSteps = options.maxSteps ?? 5;
+    const bridge = options.mcpBridge ?? this.mcp;
+    const currentMessages = [...options.messages];
+    const steps = [];
+    let totalTokens = 0;
+    let latestResponse;
+    const tools = options.tools && options.tools.length > 0 ? options.tools : bridge.getTools();
+    for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex++) {
+      const stepStart = Date.now();
+      const req = {
+        ...options,
+        messages: currentMessages,
+        stream: false,
+        tools: tools.length > 0 ? tools : void 0
+      };
+      const response = await this.chat.completions.create(
+        req
+      );
+      latestResponse = response;
+      const promptTokens = response.usage?.promptTokens || 0;
+      const completionTokens = response.usage?.completionTokens || 0;
+      const stepTokens = response.usage?.totalTokens || promptTokens + completionTokens;
+      totalTokens += stepTokens;
+      const choice = response.choices?.[0];
+      const toolCalls = choice?.message?.tool_calls;
+      if (!toolCalls || toolCalls.length === 0) {
+        if (choice?.message) {
+          currentMessages.push(choice.message);
+        }
+        break;
+      }
+      currentMessages.push(choice.message);
+      const toolResults = await bridge.executeToolCalls(toolCalls, {
+        signal: options.signal,
+        user: options.user
+      });
+      for (const tr of toolResults) {
+        currentMessages.push(tr);
+      }
+      const durationMs = Date.now() - stepStart;
+      const step = {
+        stepIndex,
+        assistantMessage: choice.message,
+        toolCalls,
+        toolResults,
+        durationMs,
+        usage: response.usage
+      };
+      steps.push(step);
+      if (options.onStep) {
+        await options.onStep(step);
+      }
+    }
+    return {
+      response: latestResponse,
+      messages: currentMessages,
+      steps,
+      totalSteps: steps.length,
+      totalTokens
+    };
   }
 };
 
@@ -6183,6 +6585,7 @@ var MistralProvider = class {
         role: m.role,
         content: m.content
       };
+      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
       if (m.name) msg.name = m.name;
       if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
@@ -6200,6 +6603,7 @@ var MistralProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -6215,6 +6619,7 @@ var MistralProvider = class {
   // biome-ignore lint/suspicious/noExplicitAny: response mapping
   formatResponse(data) {
     const choice = data.choices?.[0];
+    const reasoningContent = choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? null;
     return {
       id: data.id || `mistral-${Date.now()}`,
       model: data.model,
@@ -6223,6 +6628,7 @@ var MistralProvider = class {
           message: {
             role: "assistant",
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
@@ -6273,6 +6679,15 @@ var MistralProvider = class {
               if (msg.data.trim() === "[DONE]") break;
               try {
                 const parsed = JSON.parse(msg.data);
+                let chunkUsage;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens: parsed.usage.prompt_tokens_details?.cached_tokens ?? void 0
+                  };
+                }
                 const chunk = {
                   id: parsed.id,
                   model: parsed.model,
@@ -6282,11 +6697,13 @@ var MistralProvider = class {
                       delta: {
                         role: c.delta?.role,
                         content: c.delta?.content ?? null,
+                        reasoning_content: c.delta?.reasoning_content ?? c.delta?.reasoning ?? null,
                         tool_calls: c.delta?.tool_calls
                       },
                       finishReason: c.finish_reason || null
                     })
-                  )
+                  ),
+                  usage: chunkUsage
                 };
                 yield chunk;
               } catch (_e) {
@@ -6413,6 +6830,7 @@ var OllamaProvider = class {
         role: m.role,
         content: m.content
       };
+      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
       if (m.name) msg.name = m.name;
       if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
@@ -6430,6 +6848,7 @@ var OllamaProvider = class {
     }
     if (request.stream) {
       payload.stream = true;
+      payload.stream_options = { include_usage: true };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -6448,6 +6867,7 @@ var OllamaProvider = class {
     const promptTokens = data.usage?.prompt_tokens ?? data.prompt_eval_count ?? 0;
     const completionTokens = data.usage?.completion_tokens ?? data.eval_count ?? 0;
     const totalTokens = data.usage?.total_tokens ?? promptTokens + completionTokens;
+    const reasoningContent = choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? null;
     return {
       id: data.id || `ollama-${Date.now()}`,
       model: data.model,
@@ -6456,6 +6876,7 @@ var OllamaProvider = class {
           message: {
             role: "assistant",
             content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
             tool_calls: choice?.message?.tool_calls
           },
           finishReason: choice?.finish_reason || "stop"
@@ -6508,6 +6929,22 @@ var OllamaProvider = class {
               try {
                 const parsed = JSON.parse(msg.data);
                 const chunk = parsed.choices?.[0];
+                let chunkUsage;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0
+                  };
+                } else if (parsed.prompt_eval_count !== void 0 || parsed.eval_count !== void 0) {
+                  const promptTokens = parsed.prompt_eval_count || 0;
+                  const completionTokens = parsed.eval_count || 0;
+                  chunkUsage = {
+                    promptTokens,
+                    completionTokens,
+                    totalTokens: promptTokens + completionTokens
+                  };
+                }
                 yield {
                   id: parsed.id || `ollama-${Date.now()}`,
                   model: parsed.model,
@@ -6516,11 +6953,13 @@ var OllamaProvider = class {
                       delta: {
                         role: chunk?.delta?.role,
                         content: chunk?.delta?.content,
+                        reasoning_content: chunk?.delta?.reasoning_content ?? chunk?.delta?.reasoning ?? null,
                         tool_calls: chunk?.delta?.tool_calls
                       },
                       finishReason: chunk?.finish_reason || null
                     }
-                  ]
+                  ],
+                  usage: chunkUsage
                 };
               } catch (_e) {
               }
@@ -7443,6 +7882,15 @@ var XAiProvider = class {
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ *
+ * Model Context Protocol (MCP) In-Process Tool Bridge & JSON-RPC Protocol
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Zero-Dependency PII Guardrails Engine
  *
  * In-process automatic redaction of Personally Identifiable Information (PII)
@@ -7537,6 +7985,7 @@ exports.GeminiProvider = GeminiProvider;
 exports.GroqProvider = GroqProvider;
 exports.HedgedExecutor = HedgedExecutor;
 exports.InMemoryStorage = InMemoryStorage;
+exports.McpToolBridge = McpToolBridge;
 exports.MistralProvider = MistralProvider;
 exports.OPENROUTER_FREE_MODELS = OPENROUTER_FREE_MODELS;
 exports.OllamaProvider = OllamaProvider;

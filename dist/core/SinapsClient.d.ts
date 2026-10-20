@@ -6,11 +6,12 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
+import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { GatewayRateLimiter } from './RateLimiter.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
@@ -72,6 +73,11 @@ export interface SinapsClientOptions {
      * globally, per-user, per-model, or per-provider using a sliding-window counter.
      */
     rateLimiting?: GatewayRateLimitOptions | boolean;
+    /**
+     * Optional Model Context Protocol (MCP) tool bridge.
+     * If provided, client.mcp will use this bridge; otherwise a default in-process bridge is created.
+     */
+    mcpBridge?: McpToolBridge;
 }
 export declare class SinapsClient {
     private router;
@@ -81,6 +87,7 @@ export declare class SinapsClient {
     readonly contextCompressor?: ContextCompressor;
     readonly hedgedExecutor?: HedgedExecutor;
     readonly rateLimiter?: GatewayRateLimiter;
+    readonly mcp: McpToolBridge;
     private isReversiblePII;
     private modelAliases;
     private hooks?;
@@ -177,5 +184,13 @@ export declare class SinapsClient {
      * Alias for exportOtelMetrics.
      */
     toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
+    /**
+     * Runs an autonomous multi-step tool-calling agent loop.
+     *
+     * Repeatedly queries the model with available MCP tools, executes requested tool calls
+     * via the McpToolBridge, feeds results back into the conversation, and returns the final
+     * response and complete conversation history once the model finishes or maxSteps is reached.
+     */
+    runWithTools(options: RunWithToolsOptions): Promise<RunWithToolsResult>;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

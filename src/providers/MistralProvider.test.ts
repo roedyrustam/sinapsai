@@ -142,6 +142,29 @@ describe('MistralProvider', () => {
       expect(result.usage?.cachedPromptTokens).toBe(90);
       expect(result.usage?.promptTokens).toBe(120);
     });
+
+    it('should extract reasoning_content when returned in Mistral response', () => {
+      const reasoningResponse = {
+        id: 'cmpl-mistral-reasoning',
+        model: 'mistral-large-latest',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'The solution is 42.',
+              reasoning_content: 'Step 1: calculate. Step 2: verify.',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      };
+
+      const result = provider.formatResponse(reasoningResponse);
+      expect(result.choices[0].message.content).toBe('The solution is 42.');
+      expect(result.choices[0].message.reasoning_content).toBe(
+        'Step 1: calculate. Step 2: verify.',
+      );
+    });
   });
 
   describe('generateContent & rate limits', () => {

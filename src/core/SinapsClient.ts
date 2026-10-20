@@ -24,6 +24,9 @@ import type {
   OtelExportOptions,
   OtelResourceMetrics,
   PrometheusExportOptions,
+  RunWithToolsOptions,
+  RunWithToolsResult,
+  RunWithToolsStep,
   SecurityGuardrailsOptions,
   SinapsEventHooks,
   SinapsMetrics,
@@ -50,6 +53,7 @@ import {
 } from './ContextCompressor.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
+import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { GatewayRateLimitError, GatewayRateLimiter } from './RateLimiter.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
@@ -116,6 +120,11 @@ export interface SinapsClientOptions {
    * globally, per-user, per-model, or per-provider using a sliding-window counter.
    */
   rateLimiting?: GatewayRateLimitOptions | boolean;
+  /**
+   * Optional Model Context Protocol (MCP) tool bridge.
+   * If provided, client.mcp will use this bridge; otherwise a default in-process bridge is created.
+   */
+  mcpBridge?: McpToolBridge;
 }
 
 export class SinapsClient {
@@ -126,6 +135,7 @@ export class SinapsClient {
   public readonly contextCompressor?: ContextCompressor;
   public readonly hedgedExecutor?: HedgedExecutor;
   public readonly rateLimiter?: GatewayRateLimiter;
+  public readonly mcp: McpToolBridge;
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
   private hooks?: SinapsEventHooks;
@@ -133,6 +143,7 @@ export class SinapsClient {
   constructor(options: SinapsClientOptions) {
     this.storage = options.storage || new InMemoryStorage();
     this.hooks = options.hooks;
+    this.mcp = options.mcpBridge || new McpToolBridge();
 
     if (options.modelAliases) {
       for (const [alias, target] of Object.entries(options.modelAliases)) {
@@ -589,5 +600,93 @@ export class SinapsClient {
    */
   public toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
     return this.exportOtelMetrics(options);
+  }
+
+  /**
+   * Runs an autonomous multi-step tool-calling agent loop.
+   *
+   * Repeatedly queries the model with available MCP tools, executes requested tool calls
+   * via the McpToolBridge, feeds results back into the conversation, and returns the final
+   * response and complete conversation history once the model finishes or maxSteps is reached.
+   */
+  public async runWithTools(
+    options: RunWithToolsOptions,
+  ): Promise<RunWithToolsResult> {
+    const maxSteps = options.maxSteps ?? 5;
+    const bridge = options.mcpBridge ?? this.mcp;
+    const currentMessages: ChatMessage[] = [...options.messages];
+    const steps: RunWithToolsStep[] = [];
+    let totalTokens = 0;
+    let latestResponse!: UnifiedApiResponse;
+
+    const tools =
+      options.tools && options.tools.length > 0
+        ? options.tools
+        : bridge.getTools();
+
+    for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex++) {
+      const stepStart = Date.now();
+      const req: CreateChatCompletionRequestNonStreaming = {
+        ...options,
+        messages: currentMessages,
+        stream: false,
+        tools: tools.length > 0 ? tools : undefined,
+      };
+
+      const response = (await this.chat.completions.create(
+        req,
+      )) as UnifiedApiResponse;
+      latestResponse = response;
+
+      const promptTokens = response.usage?.promptTokens || 0;
+      const completionTokens = response.usage?.completionTokens || 0;
+      const stepTokens =
+        response.usage?.totalTokens || promptTokens + completionTokens;
+      totalTokens += stepTokens;
+
+      const choice = response.choices?.[0];
+      const toolCalls = choice?.message?.tool_calls;
+
+      if (!toolCalls || toolCalls.length === 0) {
+        if (choice?.message) {
+          currentMessages.push(choice.message);
+        }
+        break;
+      }
+
+      currentMessages.push(choice.message);
+
+      const toolResults = await bridge.executeToolCalls(toolCalls, {
+        signal: options.signal,
+        user: options.user,
+      });
+
+      for (const tr of toolResults) {
+        currentMessages.push(tr);
+      }
+
+      const durationMs = Date.now() - stepStart;
+      const step: RunWithToolsStep = {
+        stepIndex,
+        assistantMessage: choice.message,
+        toolCalls,
+        toolResults,
+        durationMs,
+        usage: response.usage,
+      };
+      steps.push(step);
+
+      if (options.onStep) {
+        await options.onStep(step);
+      }
+    }
+
+    return {
+      response: latestResponse,
+      messages: currentMessages,
+      steps,
+      totalSteps: steps.length,
+      totalTokens,
+    };
   }
 }

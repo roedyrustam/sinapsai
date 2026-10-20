@@ -536,7 +536,7 @@ export interface OtelExportOptions {
      */
     serviceName?: string;
     /**
-     * Service version reported in resource attributes (default: '2.7.1').
+     * Service version reported in resource attributes (default: '2.8.0').
      */
     serviceVersion?: string;
     /**
@@ -598,6 +598,38 @@ export interface OtelResourceMetrics {
         }>;
     }>;
 }
+export interface RunWithToolsStep {
+    stepIndex: number;
+    assistantMessage: ChatMessage;
+    toolCalls: ToolCall[];
+    toolResults: ChatMessage[];
+    durationMs: number;
+    usage?: ApiUsage;
+}
+export interface RunWithToolsOptions extends CreateChatCompletionRequestNonStreaming {
+    /**
+     * Maximum number of autonomous tool calling iterations before returning.
+     * Default: 5
+     */
+    maxSteps?: number;
+    /**
+     * Optional custom McpToolBridge instance. If omitted, uses client.mcp.
+     */
+    mcpBridge?: import('../core/McpBridge.js').McpToolBridge;
+    /**
+     * Callback executed after each tool-calling step.
+     */
+    onStep?: (step: RunWithToolsStep) => void | Promise<void>;
+}
+export interface RunWithToolsResult {
+    response: UnifiedApiResponse;
+    messages: ChatMessage[];
+    steps: RunWithToolsStep[];
+    totalSteps: number;
+    totalTokens: number;
+    totalCostUsd?: number;
+}
+export { type McpContent, type McpImageContent, type McpJsonRpcRequest, type McpJsonRpcResponse, type McpResourceContent, type McpTextContent, type McpTool, McpToolBridge, type McpToolContext, type McpToolDefinition, type McpToolHandler, type McpToolInputSchema, type McpToolResult, } from '../core/McpBridge.js';
 export { GatewayRateLimitError, GatewayRateLimiter, } from '../core/RateLimiter.js';
 export type { RouterOptions } from '../core/Router.js';
 export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';

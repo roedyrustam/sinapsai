@@ -84,6 +84,9 @@ npx tsx examples/25-hedged-requests-tail-latency.ts
 
 # 26. In-Process Gateway Rate Limiting & Prometheus/OpenTelemetry Metrics Export
 npx tsx examples/26-gateway-rate-limiting-and-metrics-export.ts
+
+# 27. Model Context Protocol (MCP) Tool Bridge & Autonomous Agent Loop
+npx tsx examples/27-mcp-tool-bridge-and-agent-loop.ts
 ```
 
 

@@ -117,7 +117,16 @@
 - [x] **Universal Signal Detach & Memory Safety (`linkAbortSignal`)**: Pelepasan event listener deterministik pada blok `finally` dan pemutusan dini stream upstream saat pembatalan konsumen (`for await { break; }`).
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 26 (`examples/26-gateway-rate-limiting-and-metrics-export.ts`); total 357/357 tes lulus di 32 test suites, 100% Biome Clean.
 
-## Phase 15: Real-Time Multimodal Voice & Agentic Tool Protocols (Upcoming / v3.0.0)
+## Phase 15: In-Process Model Context Protocol (MCP) Tool Bridge & Autonomous Agent Loop (v2.8.0) - *Completed*
+- [x] **In-Process Model Context Protocol (MCP) Tool Bridge (`McpToolBridge`)**: Registri tools lokal zero-dependency dengan validasi skema JSON Schema dan handler asynchronous.
+- [x] **Bi-directional Schema Conversion**: Konversi mulus antara skema MCP (`McpTool`) dan spesifikasi OpenAI / Unified `ToolDefinition` (`toUnifiedTools`, `getTools`, `toToolDefinition`, `fromToolDefinition`).
+- [x] **Error-Resilient Tool Call Execution**: Eksekusi paralel `executeToolCalls(calls)` dengan parsing argumen tahan-kesalahan, penangkapan exception runtime (`isError: true`), dan konversi langsung ke `role: 'tool'` messages (`ChatMessage[]`).
+- [x] **Standard MCP JSON-RPC 2.0 Protocol Dispatcher**: Handler RPC `handleJsonRpc` siap integrasi dengan Stdio/SSE worker dan external MCP clients untuk metode `tools/list`, `tools/call`, dan `ping`.
+- [x] **Autonomous Agent Multi-Step Loop (`client.runWithTools`)**: Siklus eksekusi agen otonom multi-langkah (`maxSteps`) dengan agregasi token penggunaan, preservasi riwayat percakapan, dan pelaporan progres real-time (`onStep`).
+- [x] **Local & Cloud Reasoning Extraction**: Dukungan `reasoning_content` pada Ollama (DeepSeek-R1 / QwQ) dan Mistral AI, serta ekstraksi penggunaan streaming (`usage`) untuk rate limiting presisi.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 27 (`examples/27-mcp-tool-bridge-and-agent-loop.ts`); total 381/381 tes lulus di 33 test suites, 100% Biome Clean.
+
+## Phase 16: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
-- [ ] **MCP (Model Context Protocol) Local Tool Bridge**: Server/Client MCP terpadu in-process untuk menghubungkan LLM dengan tools lokal secara dinamis.
+
 

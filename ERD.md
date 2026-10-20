@@ -13,10 +13,12 @@ classDiagram
         -ContextCompressor contextCompressor
         -HedgedExecutor hedgedExecutor
         -GatewayRateLimiter rateLimiter
+        +McpToolBridge mcp
         +chat.completions.create(request)
         +embeddings.create(request)
         +batch.chat(requests, options)
         +batch.embeddings(requests, options)
+        +runWithTools(options)
         +checkHealth(options)
         +getMetrics()
         +getCircuitBreakerStatus()
@@ -189,6 +191,20 @@ classDiagram
         +adjustTokens(request, actualTokens, estimatedTokens, providerId)
     }
 
+    class McpToolBridge {
+        -Map tools
+        +registerTool(tool)
+        +unregisterTool(name)
+        +hasTool(name)
+        +getTool(name)
+        +listTools()
+        +toUnifiedTools()
+        +getTools()
+        +executeToolCall(call, context)
+        +executeToolCalls(calls, context)
+        +handleJsonRpc(request)
+    }
+
     StateStorage <|.. InMemoryStorage : implements
     StateStorage <|.. CloudflareKVStorage : implements
     StateStorage <|.. RedisStorage : implements
@@ -207,6 +223,7 @@ classDiagram
 
     SinapsClient "1" *-- "1" Router : delegates to
     SinapsClient "1" *-- "1" StateStorage : maintains
+    SinapsClient "1" *-- "1" McpToolBridge : orchestrates tools via
     SinapsClient "1" *-- "0..1" PIIGuardrails : safeguards with
     SinapsClient "1" *-- "0..1" SecurityGuardrails : secures with
     SinapsClient "1" *-- "0..1" BudgetGuardrails : caps budget with

@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-358%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-381%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -82,6 +82,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [29. Speculative Hedged Requests (Tail-Latency Reduction)](#29-speculative-hedged-requests-tail-latency-reduction)
   - [30. In-Process Gateway Rate Limiting (RPM & TPM)](#30-in-process-gateway-rate-limiting-rpm--tpm)
   - [31. Prometheus & OpenTelemetry Metrics Exporters](#31-prometheus--opentelemetry-metrics-exporters)
+  - [32. In-Process Model Context Protocol (MCP) Tool Bridge & Agent Loop](#32-in-process-model-context-protocol-mcp-tool-bridge--agent-loop)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -1161,9 +1162,60 @@ const prometheusMetrics = client.exportPrometheusMetrics({
 // 2. Export in standard OpenTelemetry (OTLP v1 JSON) ResourceMetrics format (or client.toOtelMetrics())
 const otelMetrics = client.exportOtelMetrics({
   serviceName: 'my-ai-gateway',
-  serviceVersion: '2.7.1',
+  serviceVersion: '2.8.0',
 });
 // Send directly to any OTLP/HTTP /v1/metrics collector endpoint via fetch
+```
+
+---
+
+### 32. In-Process Model Context Protocol (MCP) Tool Bridge & Agent Loop
+
+Connect local functions and dynamic tools directly to LLMs using the open **Model Context Protocol (MCP)** standard with zero external runtime dependencies. Register tools, convert schemas bi-directionally, handle JSON-RPC 2.0 requests, and run autonomous multi-step agent loops with `client.runWithTools()`:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+});
+
+// 1. Register in-process MCP tools with JSON Schema and async handlers
+client.mcp.registerTool({
+  name: 'get_stock_quote',
+  description: 'Fetches the current market quote for a stock symbol',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      symbol: { type: 'string', description: 'Stock ticker (e.g. AAPL, NVDA)' },
+    },
+    required: ['symbol'],
+  },
+  handler: async ({ symbol }) => {
+    return { symbol, price: 235.5, currency: 'USD' };
+  },
+});
+
+// 2. Run autonomous multi-step agent tool-calling loop
+const result = await client.runWithTools({
+  model: 'gpt-4o-mini',
+  messages: [{ role: 'user', content: 'What is the current stock price of Apple (AAPL)?' }],
+  maxSteps: 5,
+  onStep: (step) => {
+    console.log(`[Step ${step.stepIndex}] Executed ${step.toolCalls.length} tool calls in ${step.durationMs}ms`);
+  },
+});
+
+console.log(result.response.choices[0].message.content);
+// "The current stock price of Apple (AAPL) is $235.50 USD."
+
+// 3. Dispatch raw MCP JSON-RPC 2.0 requests from external clients / Stdio workers
+const rpcResponse = await client.mcp.handleJsonRpc({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'tools/call',
+  params: { name: 'get_stock_quote', arguments: { symbol: 'NVDA' } },
+});
 ```
 
 ---

@@ -11,7 +11,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-358%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-381%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
 </p>
 
@@ -84,6 +84,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [29. Permintaan Spekulatif Hedged (Pemberantasan Latensi Ekor)](#29-permintaan-spekulatif-hedged-pemberantasan-latensi-ekor)
   - [30. Pembatasan Laju In-Process Gateway (RPM & TPM)](#30-pembatasan-laju-in-process-gateway-rpm--tpm)
   - [31. Eksportir Metrik Prometheus & OpenTelemetry](#31-eksportir-metrik-prometheus--opentelemetry)
+  - [32. Model Context Protocol (MCP) Tool Bridge & Loop Agen Otonom](#32-model-context-protocol-mcp-tool-bridge--loop-agen-otonom)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -1165,9 +1166,60 @@ const prometheusMetrics = client.exportPrometheusMetrics({
 // 2. Ekspor dalam format standar OpenTelemetry (OTLP v1 JSON) ResourceMetrics (atau client.toOtelMetrics())
 const otelMetrics = client.exportOtelMetrics({
   serviceName: 'sinapsai-gateway',
-  serviceVersion: '2.7.1',
+  serviceVersion: '2.8.0',
 });
 // Kirim langsung ke endpoint collector OTLP/HTTP /v1/metrics menggunakan fetch
+```
+
+---
+
+### 32. Model Context Protocol (MCP) Tool Bridge & Loop Agen Otonom
+
+Hubungkan fungsi lokal dan tools dinamis langsung ke model LLM menggunakan standar terbuka **Model Context Protocol (MCP)** murni tanpa dependensi eksternal. Daftarkan tools, lakukan konversi skema dua arah, tangani permintaan JSON-RPC 2.0, dan jalankan loop agen otonom multi-langkah dengan `client.runWithTools()`:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+});
+
+// 1. Daftarkan tool MCP in-process dengan JSON Schema dan handler asynchronous
+client.mcp.registerTool({
+  name: 'get_stock_quote',
+  description: 'Mengambil harga pasar terkini untuk simbol saham',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      symbol: { type: 'string', description: 'Simbol saham (misal: AAPL, NVDA)' },
+    },
+    required: ['symbol'],
+  },
+  handler: async ({ symbol }) => {
+    return { symbol, price: 235.5, currency: 'USD' };
+  },
+});
+
+// 2. Jalankan loop agen otonom multi-langkah (autonomous tool-calling loop)
+const result = await client.runWithTools({
+  model: 'gpt-4o-mini',
+  messages: [{ role: 'user', content: 'Berapa harga saham Apple (AAPL) saat ini?' }],
+  maxSteps: 5,
+  onStep: (step) => {
+    console.log(`[Langkah ${step.stepIndex}] Eksekusi ${step.toolCalls.length} panggilan tool dalam ${step.durationMs}ms`);
+  },
+});
+
+console.log(result.response.choices[0].message.content);
+// "Harga saham Apple (AAPL) saat ini adalah $235.50 USD."
+
+// 3. Tangani permintaan protokol mentah MCP JSON-RPC 2.0 dari worker Stdio/klien eksternal
+const rpcResponse = await client.mcp.handleJsonRpc({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'tools/call',
+  params: { name: 'get_stock_quote', arguments: { symbol: 'NVDA' } },
+});
 ```
 
 ---

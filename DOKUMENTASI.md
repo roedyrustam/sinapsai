@@ -136,6 +136,22 @@ run();
 4. **Python Code Execution Sandbox**: Eksekusi sandbox Python di server Google (`codeExecution: true`) dengan perakitan output terstruktur.
 5. **FinOps 75% KV-Cache Pricing Discount**: Perhitungan biaya di Router secara otomatis memperhitungkan diskon 75% pada token prompt yang ter-cache.
 
+### Fitur Utama v2.8.0 (Model Context Protocol / MCP Tool Bridge & Loop Agen Otonom)
+1. **In-Process Model Context Protocol (MCP) Tool Bridge (`McpToolBridge`)**: Registri tools lokal zero-dependency dengan validasi skema JSON Schema dan handler asynchronous yang tangguh.
+2. **Konversi Skema Dua Arah (Bi-directional Schema Conversion)**: Konversi otomatis antara standar MCP (`McpTool`) dan spesifikasi OpenAI/Unified `ToolDefinition` via `toUnifiedTools()`, `getTools()`, `toToolDefinition()`, dan `fromToolDefinition()`.
+3. **Eksekusi Tool Paralel Tahan-Kesalahan (`executeToolCalls`)**: Eksekusi paralel panggilan tool dengan parsing JSON tahan-kesalahan, penangkapan error runtime (`isError: true`), dan konversi langsung ke `role: 'tool'` messages (`ChatMessage[]`).
+4. **Dispatcher Protokol Standar MCP JSON-RPC 2.0 (`handleJsonRpc`)**: Menangani pesan JSON-RPC 2.0 untuk `tools/list`, `tools/call`, dan `ping`, memungkinkan integrasi mulus dengan worker Stdio/SSE dan klien eksternal MCP.
+5. **Loop Agen Otonom Multi-Langkah (`client.runWithTools`)**: Mengotomasi siklus eksekusi agen LLM: berulang kali memanggil model dengan tools MCP, mengeksekusi tools, memasukkan hasil kembali ke riwayat obrolan, dan mengembalikan jawaban final lengkap beserta telemetri langkah (`onStep`).
+6. **Ekstraksi Reasoning & Streaming Usage di Ollama & Mistral**: Dukungan token penalaran (`reasoning_content`) pada model lokal (DeepSeek-R1, QwQ) dan Mistral AI, serta penjejakan usage streaming untuk penyesuaian rate limiter TPM secara presisi.
+
+### Fitur Utama v2.7.0 - v2.7.1 (Gateway Rate Limiting, Metrics Exporters & Canary Probing)
+1. **In-Process Gateway Rate Limiting (`GatewayRateLimiter`)**: Algoritma sliding-window counter berbobot sub-window tanpa dependensi eksternal, mendukung batasan Requests Per Minute (RPM) dan Tokens Per Minute (TPM) lintas request non-streaming dan streaming (`adjustTokens`).
+2. **Eksportir Metrik Prometheus & OpenMetrics (`exportPrometheusMetrics`, `toPrometheusMetrics`)**: Format eksposisi teks standar OpenMetrics/Prometheus tanpa dependensi runtime, mengekspos metrik request, status, token, biaya USD, serta latency gauge per provider.
+3. **Eksportir Metrik OpenTelemetry OTLP JSON (`exportOtelMetrics`, `toOtelMetrics`)**: Format JSON OTLP v1 `ResourceMetrics` siap kirim ke collector `/v1/metrics`.
+4. **Atribusi Provider Transparan (`response.provider`)**: Properti `provider` pada setiap respons `UnifiedApiResponse` yang menandai provider mana yang menyelesaikan permintaan.
+5. **Prompt Caching Native Anthropic Claude (`promptCaching`)**: Header `anthropic-beta: prompt-caching-2024-07-31` otomatis dan injeksi breakpoint `cache_control: { type: 'ephemeral' }` pada system prompt >1,024 token.
+6. **Proteksi Strict Canary Probing & Signal Detach**: Proteksi transisi Circuit Breaker `HALF_OPEN` dengan kanari tunggal dan pelepasan listener `AbortSignal` deterministik pada blok `finally`.
+
 ### Fitur Utama v2.5.0 (Context Compression, FinOps Budget, Speculative Hedging & Frontier Providers)
 1. **Dynamic Context Compressor (`ContextCompressor`)**: Estimasi token zero-dependency (~4 karakter per token) dan algoritma pemangkasan percakapan otomatis (`sliding-window` & `middle-out`) yang mengamankan instruksi sistem (`system`) serta mempertahankan grup pemanggilan fungsi (`tool_calls` dan `tool`) secara atomik agar tidak memicu error API.
 2. **FinOps Spend & Token Guardrails (`BudgetGuardrails`)**: Pembatasan pengeluaran kumulatif USD (`maxCostUsd`) dan volume token (`maxTotalTokens`) secara proaktif sebelum request dikirim, mendukung aksi pemblokiran keras (`BudgetExceededError`) atau peringatan lembut (`onBudgetWarning`).
@@ -175,9 +191,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 358/358 unit & integration tests lulus di 32 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 381/381 unit & integration tests lulus di 33 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge & loop agen otonom, semantic cache, batch engine, PII, budget, security, dan hedged requests.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **26 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 26) teruji dan 100% lulus kompilasi TypeScript.
+- **27 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 27) teruji dan 100% lulus kompilasi TypeScript.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.
