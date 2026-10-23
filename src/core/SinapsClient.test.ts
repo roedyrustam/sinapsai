@@ -1007,5 +1007,59 @@ describe('SinapsClient', () => {
         }),
       ).rejects.toThrow('Gateway rate limit exceeded');
     });
+
+    it('should reversibly tokenize outgoing messages and detokenize split tokens in streaming responses', async () => {
+      let capturedInput = '';
+      const mockStream = vi.fn().mockImplementation(async function* (req) {
+        capturedInput = req.messages[0].content as string;
+        yield {
+          id: 's1',
+          model: 'm',
+          choices: [
+            {
+              delta: { role: 'assistant', content: 'Replying to {{PII_' },
+              finishReason: null,
+            },
+          ],
+        };
+        yield {
+          id: 's1',
+          model: 'm',
+          choices: [
+            {
+              delta: { content: 'EMAIL_1}} now.' },
+              finishReason: 'stop',
+            },
+          ],
+        };
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'stream-pii-p',
+            name: 'StreamPII',
+            generateContent: mockStream,
+          },
+        ],
+        piiGuardrails: {
+          categories: ['email'],
+          reversible: true,
+        },
+      });
+
+      const stream = await client.chat.completions.create({
+        stream: true,
+        messages: [{ role: 'user', content: 'Email me at founder@sinaps.ai' }],
+      });
+
+      let fullOutput = '';
+      for await (const chunk of stream) {
+        fullOutput += chunk.choices[0]?.delta.content || '';
+      }
+
+      expect(capturedInput).toBe('Email me at {{PII_EMAIL_1}}');
+      expect(fullOutput).toBe('Replying to founder@sinaps.ai now.');
+    });
   });
 });

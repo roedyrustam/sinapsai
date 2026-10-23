@@ -5,6 +5,7 @@
  * @license MIT
  */
 
+import { GeminiAgentBooster } from '../core/GeminiAgentBooster.js';
 import type {
   CachedContentInfo,
   ContentPart,
@@ -129,7 +130,7 @@ export interface GeminiModelInfo {
 
 export interface GeminiProviderConfig extends ProviderConfig {
   safetySettings?: GeminiSafetySetting[];
-  thinkingBudget?: number;
+  thinkingBudget?: number | 'auto';
   cachedContent?: string;
   googleSearch?: boolean;
   codeExecution?: boolean;
@@ -397,7 +398,14 @@ export class GeminiProvider implements Provider {
       generationConfig.responseSchema = cleanSchema;
     }
 
-    let thinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    const rawThinkingBudget =
+      request.thinkingBudget ?? this.config.thinkingBudget;
+    let thinkingBudget: number | undefined;
+    if (rawThinkingBudget === 'auto') {
+      thinkingBudget = GeminiAgentBooster.computeDynamicThinkingBudget(request);
+    } else {
+      thinkingBudget = rawThinkingBudget;
+    }
     if (thinkingBudget === undefined && request.reasoningEffort) {
       if (request.reasoningEffort === 'low') {
         thinkingBudget = 2048;
@@ -433,8 +441,11 @@ export class GeminiProvider implements Provider {
     // biome-ignore lint/suspicious/noExplicitAny: gemini tools array
     const tools: any[] = [];
     if (request.tools && request.tools.length > 0) {
+      const canonicalTools = GeminiAgentBooster.canonicalizeTools(
+        request.tools,
+      );
       tools.push({
-        functionDeclarations: request.tools.map((t) => ({
+        functionDeclarations: canonicalTools.map((t) => ({
           name: t.function.name,
           description: t.function.description,
           parameters: t.function.parameters,

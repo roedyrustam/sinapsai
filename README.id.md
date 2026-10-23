@@ -1166,7 +1166,7 @@ const prometheusMetrics = client.exportPrometheusMetrics({
 // 2. Ekspor dalam format standar OpenTelemetry (OTLP v1 JSON) ResourceMetrics (atau client.toOtelMetrics())
 const otelMetrics = client.exportOtelMetrics({
   serviceName: 'sinapsai-gateway',
-  serviceVersion: '2.8.1',
+  serviceVersion: '2.9.0',
 });
 // Kirim langsung ke endpoint collector OTLP/HTTP /v1/metrics menggunakan fetch
 ```

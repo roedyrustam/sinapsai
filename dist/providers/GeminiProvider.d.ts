@@ -47,7 +47,7 @@ export interface GeminiModelInfo {
 }
 export interface GeminiProviderConfig extends ProviderConfig {
     safetySettings?: GeminiSafetySetting[];
-    thinkingBudget?: number;
+    thinkingBudget?: number | 'auto';
     cachedContent?: string;
     googleSearch?: boolean;
     codeExecution?: boolean;

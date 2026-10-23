@@ -194,7 +194,7 @@ export interface EmbeddingModelV1 {
 }
 export interface SinapsModelSettings {
     fallbackModels?: string[];
-    thinkingBudget?: number;
+    thinkingBudget?: number | 'auto';
     reasoningEffort?: 'low' | 'medium' | 'high';
     cachedContent?: string;
     googleSearch?: boolean;

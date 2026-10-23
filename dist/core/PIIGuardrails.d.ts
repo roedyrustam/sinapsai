@@ -10,7 +10,7 @@
  * @copyright 2026 Roedy Rustam
  * @license MIT
  */
-import type { UnifiedApiResponse } from '../types/index.js';
+import type { UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 export type PIICategory = 'email' | 'phone' | 'credit_card' | 'ssn' | 'ip_address' | 'iban' | 'passport' | 'date_of_birth' | 'url' | 'jwt';
 export interface PIIMatch {
     category: PIICategory;
@@ -138,6 +138,20 @@ export declare class PIIGuardrails {
      * Restores original PII values in a UnifiedApiResponse (content, reasoning, and tool call arguments).
      */
     restoreResponse(response: UnifiedApiResponse, vault: Map<string, string> | Record<string, string>): UnifiedApiResponse;
+    /**
+     * Creates a stateful sliding-window string detokenizer for streaming chunks.
+     * Only buffers characters when the tail of the current chunk matches a proper prefix
+     * of an active token in the vault, guaranteeing 0ms buffering delay for normal text.
+     */
+    createStreamTextRestorer(vault: Map<string, string> | Record<string, string>): {
+        push: (chunkText: string) => string;
+        flush: () => string;
+    };
+    /**
+     * Transforms an async stream of UnifiedApiStreamChunk, seamlessly restoring
+     * surrogate PII tokens even when split across multiple arbitrary SSE chunk boundaries.
+     */
+    restoreStream(stream: AsyncIterable<UnifiedApiStreamChunk>, vault: Map<string, string> | Record<string, string>): AsyncIterable<UnifiedApiStreamChunk>;
     private formatRedaction;
 }
 //# sourceMappingURL=PIIGuardrails.d.ts.map

@@ -11,7 +11,10 @@
  * @license MIT
  */
 
-import type { UnifiedApiResponse } from '../types/index.js';
+import type {
+  UnifiedApiResponse,
+  UnifiedApiStreamChunk,
+} from '../types/index.js';
 
 export type PIICategory =
   | 'email'
@@ -395,16 +398,23 @@ export class PIIGuardrails {
     let result = text;
     let nextIndex = vault.size + 1;
 
-    for (const match of matches) {
-      let token = originalToToken.get(match.original);
-      if (!token) {
-        token = this.tokenFormat
+    // Assign surrogate token indices in natural left-to-right reading order
+    const ascendingMatches = [...matches].sort(
+      (a, b) => a.startIndex - b.startIndex,
+    );
+    for (const match of ascendingMatches) {
+      if (!originalToToken.has(match.original)) {
+        const token = this.tokenFormat
           .replace('{category}', match.category.toUpperCase())
           .replace('{index}', String(nextIndex++));
         vault.set(token, match.original);
         originalToToken.set(match.original, token);
       }
+    }
 
+    // Replace from back to front (descending startIndex) to preserve string offsets
+    for (const match of matches) {
+      const token = originalToToken.get(match.original) as string;
       result =
         result.slice(0, match.startIndex) +
         token +
@@ -508,6 +518,185 @@ export class PIIGuardrails {
       ...response,
       choices: restoredChoices,
     };
+  }
+
+  /**
+   * Creates a stateful sliding-window string detokenizer for streaming chunks.
+   * Only buffers characters when the tail of the current chunk matches a proper prefix
+   * of an active token in the vault, guaranteeing 0ms buffering delay for normal text.
+   */
+  createStreamTextRestorer(
+    vault: Map<string, string> | Record<string, string>,
+  ): {
+    push: (chunkText: string) => string;
+    flush: () => string;
+  } {
+    const entries: Array<[string, string]> =
+      vault instanceof Map
+        ? Array.from(vault.entries())
+        : Object.entries(vault);
+    const tokens = entries.map(([token]) => token).filter((t) => t.length > 0);
+    const maxTokenLen =
+      tokens.length > 0 ? Math.max(...tokens.map((t) => t.length)) : 0;
+    let pending = '';
+
+    return {
+      push: (chunkText: string): string => {
+        if (tokens.length === 0) return chunkText;
+        let combined = pending + chunkText;
+        if (!combined) return '';
+
+        for (const [token, original] of entries) {
+          if (combined.includes(token)) {
+            combined = combined.replaceAll(token, original);
+          }
+        }
+
+        const maxCheck = Math.min(combined.length, maxTokenLen - 1);
+        let matchedSuffixLen = 0;
+
+        for (let len = maxCheck; len >= 1; len--) {
+          const suffix = combined.slice(combined.length - len);
+          if (tokens.some((t) => t.startsWith(suffix))) {
+            matchedSuffixLen = len;
+            break;
+          }
+        }
+
+        if (matchedSuffixLen > 0) {
+          const emit = combined.slice(0, combined.length - matchedSuffixLen);
+          pending = combined.slice(combined.length - matchedSuffixLen);
+          return emit;
+        }
+
+        pending = '';
+        return combined;
+      },
+      flush: (): string => {
+        if (!pending) return '';
+        const finalOut = this.restore(pending, vault);
+        pending = '';
+        return finalOut;
+      },
+    };
+  }
+
+  /**
+   * Transforms an async stream of UnifiedApiStreamChunk, seamlessly restoring
+   * surrogate PII tokens even when split across multiple arbitrary SSE chunk boundaries.
+   */
+  restoreStream(
+    stream: AsyncIterable<UnifiedApiStreamChunk>,
+    vault: Map<string, string> | Record<string, string>,
+  ): AsyncIterable<UnifiedApiStreamChunk> {
+    const entriesCount =
+      vault instanceof Map ? vault.size : Object.keys(vault || {}).length;
+    if (!vault || entriesCount === 0) {
+      return stream;
+    }
+
+    const contentRestorer = this.createStreamTextRestorer(vault);
+    const reasoningRestorer = this.createStreamTextRestorer(vault);
+    const toolArgsRestorers = new Map<
+      number,
+      ReturnType<PIIGuardrails['createStreamTextRestorer']>
+    >();
+
+    const getToolRestorer = (index: number) => {
+      let restorer = toolArgsRestorers.get(index);
+      if (!restorer) {
+        restorer = this.createStreamTextRestorer(vault);
+        toolArgsRestorers.set(index, restorer);
+      }
+      return restorer;
+    };
+
+    return (async function* () {
+      let lastChunkMeta: { id: string; model: string; provider?: string } = {
+        id: 'stream-flush',
+        model: 'default',
+      };
+
+      for await (const chunk of stream) {
+        lastChunkMeta = {
+          id: chunk.id,
+          model: chunk.model,
+          provider: chunk.provider,
+        };
+
+        const restoredChoices = chunk.choices.map((choice) => {
+          const delta = { ...choice.delta };
+
+          if (typeof delta.content === 'string') {
+            delta.content = contentRestorer.push(delta.content);
+          }
+          if (typeof delta.reasoning_content === 'string') {
+            delta.reasoning_content = reasoningRestorer.push(
+              delta.reasoning_content,
+            );
+          }
+          if (Array.isArray(delta.tool_calls)) {
+            delta.tool_calls = delta.tool_calls.map((tc) => {
+              if (tc.function?.arguments) {
+                const restorer = getToolRestorer(tc.index ?? 0);
+                return {
+                  ...tc,
+                  function: {
+                    ...tc.function,
+                    arguments: restorer.push(tc.function.arguments),
+                  },
+                };
+              }
+              return tc;
+            });
+          }
+
+          if (choice.finishReason !== null) {
+            const flushedContent = contentRestorer.flush();
+            if (flushedContent) {
+              delta.content = (delta.content ?? '') + flushedContent;
+            }
+            const flushedReasoning = reasoningRestorer.flush();
+            if (flushedReasoning) {
+              delta.reasoning_content =
+                (delta.reasoning_content ?? '') + flushedReasoning;
+            }
+          }
+
+          return {
+            ...choice,
+            delta,
+          };
+        });
+
+        yield {
+          ...chunk,
+          choices: restoredChoices,
+        };
+      }
+
+      const remainingContent = contentRestorer.flush();
+      const remainingReasoning = reasoningRestorer.flush();
+      if (remainingContent || remainingReasoning) {
+        yield {
+          id: lastChunkMeta.id,
+          model: lastChunkMeta.model,
+          provider: lastChunkMeta.provider,
+          choices: [
+            {
+              delta: {
+                role: 'assistant',
+                ...(remainingContent ? { content: remainingContent } : {}),
+                ...(remainingReasoning
+                  ? { reasoning_content: remainingReasoning }
+                  : {}),
+              },
+              finishReason: null,
+            },
+          ],
+        };
+      }
+    })();
   }
 
   private formatRedaction(category: PIICategory | string): string {

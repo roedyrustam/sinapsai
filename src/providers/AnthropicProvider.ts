@@ -5,6 +5,7 @@
  * @license MIT
  */
 
+import { GeminiAgentBooster } from '../core/GeminiAgentBooster.js';
 import type {
   ContentPart,
   ProviderConfig,
@@ -73,13 +74,18 @@ export class AnthropicProvider implements Provider {
       messages: [],
     };
 
-    if (request.thinkingBudget !== undefined && request.thinkingBudget > 0) {
+    const resolvedThinkingBudget =
+      request.thinkingBudget === 'auto'
+        ? GeminiAgentBooster.computeDynamicThinkingBudget(request)
+        : request.thinkingBudget;
+
+    if (resolvedThinkingBudget !== undefined && resolvedThinkingBudget > 0) {
       payload.thinking = {
         type: 'enabled',
-        budget_tokens: request.thinkingBudget,
+        budget_tokens: resolvedThinkingBudget,
       };
-      if (!request.maxTokens || request.maxTokens <= request.thinkingBudget) {
-        payload.max_tokens = request.thinkingBudget + 4096;
+      if (!request.maxTokens || request.maxTokens <= resolvedThinkingBudget) {
+        payload.max_tokens = resolvedThinkingBudget + 4096;
       }
       payload.temperature = 1.0;
     } else if (request.temperature !== undefined) {

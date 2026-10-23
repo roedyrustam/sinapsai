@@ -1,6 +1,6 @@
 {
   "name": "sinapsai",
-  "version": "2.8.1",
+  "version": "2.9.0",
   "description": "Zero-dependency in-process AI Gateway & Control Plane with Circuit Breaker, MCP Tool Bridge, Autonomous Agent Loop, Rate Limiting, PII/Security Guardrails, KV-Cache Tracking, and Unified LLM API for Node.js, Edge & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",

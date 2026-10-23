@@ -33,6 +33,7 @@ import {
 } from '../utils/metricsExporter.js';
 import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
+import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import { HedgedExecutor, type HedgingOptions } from './HedgedExecutor.js';
 import type { StateStorage } from './StateStorage.js';
 
@@ -500,7 +501,9 @@ export class Router {
       msgs: request.messages,
       t: request.temperature,
       max: request.maxTokens,
-      tools: request.tools,
+      tools: request.tools
+        ? GeminiAgentBooster.canonicalizeTools(request.tools)
+        : undefined,
       tc: request.toolChoice,
       rf: request.responseFormat,
       tb: request.thinkingBudget,

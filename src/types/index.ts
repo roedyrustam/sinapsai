@@ -126,7 +126,7 @@ export interface UnifiedApiRequest {
     | { type: 'function'; function: { name: string } };
   responseFormat?: ResponseFormat;
   fallbackModels?: string[];
-  thinkingBudget?: number;
+  thinkingBudget?: number | 'auto';
   reasoningEffort?: 'low' | 'medium' | 'high';
   cachedContent?: string;
   googleSearch?: boolean;
@@ -661,7 +661,7 @@ export interface OtelExportOptions {
    */
   serviceName?: string;
   /**
-   * Service version reported in resource attributes (default: '2.8.1').
+   * Service version reported in resource attributes (default: '2.9.0').
    */
   serviceVersion?: string;
   /**
@@ -760,6 +760,56 @@ export interface RunWithToolsResult {
   totalTokens: number;
   totalCostUsd?: number;
 }
+
+export type AgentStreamEvent =
+  | {
+      type: 'step-start';
+      stepIndex: number;
+    }
+  | {
+      type: 'text-delta';
+      stepIndex: number;
+      textDelta: string;
+      chunk: UnifiedApiStreamChunk;
+    }
+  | {
+      type: 'reasoning-delta';
+      stepIndex: number;
+      reasoningDelta: string;
+      chunk: UnifiedApiStreamChunk;
+    }
+  | {
+      type: 'tool-call-start';
+      stepIndex: number;
+      toolCalls: ToolCall[];
+    }
+  | {
+      type: 'tool-call-result';
+      stepIndex: number;
+      toolCallId: string;
+      toolName: string;
+      result: import('../core/McpBridge.js').McpToolResult;
+      toolMessage: ChatMessage;
+    }
+  | {
+      type: 'step-finish';
+      stepIndex: number;
+      step: RunWithToolsStep;
+    }
+  | {
+      type: 'done';
+      result: RunWithToolsResult;
+    };
+
+export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
+
+export {
+  type ContextCacheEligibility,
+  canonicalizeJsonValue,
+  GeminiAgentBooster,
+  type ThinkingBudgetTier,
+  type ThinkingComplexityAnalysis,
+} from '../core/GeminiAgentBooster.js';
 
 export {
   type McpContent,

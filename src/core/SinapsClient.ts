@@ -8,6 +8,8 @@
 
 import type { Provider } from '../providers/Provider.js';
 import type {
+  AgentStreamEvent,
+  ApiUsage,
   BatchOptions,
   BatchResult,
   BudgetOptions,
@@ -20,6 +22,7 @@ import type {
   CreateEmbeddingResponse,
   GatewayHealthReport,
   GatewayRateLimitOptions,
+  GroundingMetadata,
   HealthCheckOptions,
   OtelExportOptions,
   OtelResourceMetrics,
@@ -27,9 +30,11 @@ import type {
   RunWithToolsOptions,
   RunWithToolsResult,
   RunWithToolsStep,
+  RunWithToolsStreamOptions,
   SecurityGuardrailsOptions,
   SinapsEventHooks,
   SinapsMetrics,
+  ToolCall,
   UnifiedApiRequest,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
@@ -248,7 +253,7 @@ export class SinapsClient {
 
         // Apply PII redaction or reversible tokenization if guardrails are enabled
         if (this.guardrails) {
-          if (this.isReversiblePII && !request.stream) {
+          if (this.isReversiblePII) {
             const tokenized = this.guardrails.tokenizeMessages(messages);
             messages = tokenized.messages;
             piiVault = tokenized.vault;
@@ -317,38 +322,53 @@ export class SinapsClient {
           );
         }
 
-        // Adjust rate limit tokens upon streaming completion
-        if (this.rateLimiter && request.stream) {
-          const limiter = this.rateLimiter;
-          const stream = res as AsyncIterable<UnifiedApiStreamChunk>;
-          return (async function* () {
-            let actualStreamTokens: number | undefined;
-            let streamProviderId: string | undefined = candidateProviderId;
-            try {
-              for await (const chunk of stream) {
-                if (chunk.provider) {
-                  streamProviderId = chunk.provider;
+        if (request.stream) {
+          let streamResult = res as AsyncIterable<UnifiedApiStreamChunk>;
+
+          // Adjust rate limit tokens upon streaming completion
+          if (this.rateLimiter) {
+            const limiter = this.rateLimiter;
+            const upstream = streamResult;
+            streamResult = (async function* () {
+              let actualStreamTokens: number | undefined;
+              let streamProviderId: string | undefined = candidateProviderId;
+              try {
+                for await (const chunk of upstream) {
+                  if (chunk.provider) {
+                    streamProviderId = chunk.provider;
+                  }
+                  if (chunk.usage) {
+                    const calculated =
+                      chunk.usage.totalTokens ??
+                      (chunk.usage.promptTokens || 0) +
+                        (chunk.usage.completionTokens || 0);
+                    actualStreamTokens =
+                      calculated > 0 ? calculated : undefined;
+                  }
+                  yield chunk;
                 }
-                if (chunk.usage) {
-                  const calculated =
-                    chunk.usage.totalTokens ??
-                    (chunk.usage.promptTokens || 0) +
-                      (chunk.usage.completionTokens || 0);
-                  actualStreamTokens = calculated > 0 ? calculated : undefined;
+              } finally {
+                if (actualStreamTokens !== undefined) {
+                  await limiter.adjustTokens(
+                    fullReq,
+                    actualStreamTokens,
+                    estimatedTokens,
+                    streamProviderId,
+                  );
                 }
-                yield chunk;
               }
-            } finally {
-              if (actualStreamTokens !== undefined) {
-                await limiter.adjustTokens(
-                  fullReq,
-                  actualStreamTokens,
-                  estimatedTokens,
-                  streamProviderId,
-                );
-              }
-            }
-          })();
+            })();
+          }
+
+          // Reversibly restore PII tokens across streaming chunk boundaries
+          if (this.guardrails && piiVault && piiVault.size > 0) {
+            streamResult = this.guardrails.restoreStream(
+              streamResult,
+              piiVault,
+            );
+          }
+
+          return streamResult;
         }
 
         // Reversibly restore PII values if vault contains tokens
@@ -356,7 +376,6 @@ export class SinapsClient {
           this.guardrails &&
           piiVault &&
           piiVault.size > 0 &&
-          !request.stream &&
           'choices' in (res as UnifiedApiResponse)
         ) {
           return this.guardrails.restoreResponse(
@@ -713,5 +732,250 @@ export class SinapsClient {
       totalTokens,
       totalCostUsd,
     };
+  }
+
+  /**
+   * Runs a streaming autonomous multi-step tool-calling agent loop.
+   *
+   * Yields real-time `AgentStreamEvent` items (`step-start`, `text-delta`, `reasoning-delta`,
+   * `tool-call-start`, `tool-call-result`, `step-finish`, and `done`) while accumulating
+   * fragmented streaming tool call arguments and executing MCP tools between turns.
+   */
+  public async *runWithToolsStream(
+    options: RunWithToolsStreamOptions,
+  ): AsyncGenerator<AgentStreamEvent, RunWithToolsResult, unknown> {
+    const maxSteps = options.maxSteps ?? 5;
+    const bridge = options.mcpBridge ?? this.mcp;
+    const currentMessages: ChatMessage[] = [...options.messages];
+    const steps: RunWithToolsStep[] = [];
+    const startCost = this.getMetrics().estimatedCostUsd;
+    let totalTokens = 0;
+    let latestResponse!: UnifiedApiResponse;
+
+    const tools =
+      options.tools && options.tools.length > 0
+        ? options.tools
+        : bridge.getTools();
+
+    for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex++) {
+      if (options.signal?.aborted) {
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
+
+      yield { type: 'step-start', stepIndex };
+
+      const stepStart = Date.now();
+      const req: CreateChatCompletionRequestStreaming = {
+        ...options,
+        messages: currentMessages,
+        stream: true,
+        tools: tools.length > 0 ? tools : undefined,
+      };
+
+      const stream = await this.chat.completions.create(req);
+
+      let responseId = `agent-step-${stepIndex}`;
+      let responseModel = options.model || 'default';
+      let responseProvider: string | undefined;
+      let contentAcc = '';
+      let reasoningAcc = '';
+      let finishReason = 'stop';
+      let stepUsage: ApiUsage | undefined;
+      let stepGrounding: GroundingMetadata | undefined;
+      const toolCallsMap = new Map<
+        number,
+        { id: string; name: string; arguments: string }
+      >();
+
+      for await (const chunk of stream) {
+        if (chunk.id) responseId = chunk.id;
+        if (chunk.model) responseModel = chunk.model;
+        if (chunk.provider) responseProvider = chunk.provider;
+        if (chunk.usage) stepUsage = chunk.usage;
+        if (chunk.grounding) stepGrounding = chunk.grounding;
+
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+
+        if (choice.finishReason) {
+          finishReason = choice.finishReason;
+        }
+
+        const delta = choice.delta;
+        if (
+          typeof delta.reasoning_content === 'string' &&
+          delta.reasoning_content
+        ) {
+          reasoningAcc += delta.reasoning_content;
+          yield {
+            type: 'reasoning-delta',
+            stepIndex,
+            reasoningDelta: delta.reasoning_content,
+            chunk,
+          };
+        }
+
+        if (typeof delta.content === 'string' && delta.content) {
+          contentAcc += delta.content;
+          yield {
+            type: 'text-delta',
+            stepIndex,
+            textDelta: delta.content,
+            chunk,
+          };
+        }
+
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            const existing = toolCallsMap.get(idx) || {
+              id: '',
+              name: '',
+              arguments: '',
+            };
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name += tc.function.name;
+            if (tc.function?.arguments) {
+              existing.arguments += tc.function.arguments;
+            }
+            toolCallsMap.set(idx, existing);
+          }
+        }
+      }
+
+      const assembledToolCalls: ToolCall[] = Array.from(toolCallsMap.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([idx, tc]) => ({
+          id: tc.id || `call_${stepIndex}_${idx}`,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: tc.arguments || '{}',
+          },
+        }));
+
+      const assistantMessage: UnifiedApiResponse['choices'][number]['message'] =
+        {
+          role: 'assistant',
+          content: contentAcc.length > 0 ? contentAcc : null,
+          ...(reasoningAcc.length > 0
+            ? { reasoning_content: reasoningAcc }
+            : {}),
+          ...(assembledToolCalls.length > 0
+            ? { tool_calls: assembledToolCalls }
+            : {}),
+          ...(stepGrounding ? { grounding: stepGrounding } : {}),
+        };
+
+      latestResponse = {
+        id: responseId,
+        model: responseModel,
+        provider: responseProvider,
+        choices: [
+          {
+            message: assistantMessage,
+            finishReason:
+              assembledToolCalls.length > 0 ? 'tool_calls' : finishReason,
+          },
+        ],
+        usage: stepUsage,
+        grounding: stepGrounding,
+      };
+
+      if (stepUsage) {
+        const promptTokens = stepUsage.promptTokens || 0;
+        const completionTokens = stepUsage.completionTokens || 0;
+        totalTokens += stepUsage.totalTokens || promptTokens + completionTokens;
+      }
+
+      if (assembledToolCalls.length === 0) {
+        currentMessages.push(assistantMessage);
+        break;
+      }
+
+      currentMessages.push(assistantMessage);
+
+      yield {
+        type: 'tool-call-start',
+        stepIndex,
+        toolCalls: assembledToolCalls,
+      };
+
+      const toolResults: ChatMessage[] = [];
+      for (const tc of assembledToolCalls) {
+        const mcpRes = await bridge.executeToolCall(tc, {
+          signal: options.signal,
+          user: options.user,
+          timeoutMs: options.toolTimeoutMs,
+        });
+        const textOutput = mcpRes.content
+          .map((c) => {
+            if (c.type === 'text') return c.text;
+            if (c.type === 'resource') {
+              return c.resource.text ?? `[Resource: ${c.resource.uri}]`;
+            }
+            return `[Image: ${c.mimeType}]`;
+          })
+          .join('\n');
+
+        const toolMessage: ChatMessage = {
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: textOutput,
+        };
+        toolResults.push(toolMessage);
+        currentMessages.push(toolMessage);
+
+        yield {
+          type: 'tool-call-result',
+          stepIndex,
+          toolCallId: tc.id,
+          toolName: tc.function.name,
+          result: mcpRes,
+          toolMessage,
+        };
+      }
+
+      const durationMs = Date.now() - stepStart;
+      const step: RunWithToolsStep = {
+        stepIndex,
+        assistantMessage,
+        toolCalls: assembledToolCalls,
+        toolResults,
+        durationMs,
+        usage: stepUsage,
+      };
+      steps.push(step);
+
+      if (options.onStep) {
+        await options.onStep(step);
+      }
+
+      yield {
+        type: 'step-finish',
+        stepIndex,
+        step,
+      };
+    }
+
+    const endCost = this.getMetrics().estimatedCostUsd;
+    const totalCostUsd = Number(Math.max(0, endCost - startCost).toFixed(6));
+
+    const finalResult: RunWithToolsResult = {
+      response: latestResponse,
+      messages: currentMessages,
+      steps,
+      totalSteps: steps.length,
+      totalTokens,
+      totalCostUsd,
+    };
+
+    yield {
+      type: 'done',
+      result: finalResult,
+    };
+
+    return finalResult;
   }
 }

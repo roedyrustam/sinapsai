@@ -360,5 +360,78 @@ describe('PIIGuardrails', () => {
         'Invoice sent to bob@example.com successfully.',
       );
     });
+
+    it('restores surrogate PII tokens split across multiple streaming chunks with zero normal-text delay', async () => {
+      const g = new PIIGuardrails({ categories: ['email', 'phone'] });
+      const { vault } = g.tokenize(
+        'Email alice@example.com or call +1-555-867-5309',
+      );
+
+      const rawFragments = [
+        'Hello! Sending to {{PII_',
+        'EMAIL_1',
+        '}} and calling {{',
+        'PII_PHONE_2}} right ',
+        'now.',
+      ];
+
+      async function* mockStream() {
+        for (let i = 0; i < rawFragments.length; i++) {
+          yield {
+            id: 'stream-1',
+            model: 'test-model',
+            choices: [
+              {
+                delta: {
+                  role: 'assistant' as const,
+                  content: rawFragments[i],
+                },
+                finishReason: i === rawFragments.length - 1 ? 'stop' : null,
+              },
+            ],
+          };
+        }
+      }
+
+      const restoredChunks: string[] = [];
+      for await (const chunk of g.restoreStream(mockStream(), vault)) {
+        const text = chunk.choices[0]?.delta.content;
+        if (text) restoredChunks.push(text);
+      }
+
+      expect(restoredChunks.join('')).toBe(
+        'Hello! Sending to alice@example.com and calling +1-555-867-5309 right now.',
+      );
+    });
+
+    it('restores single-character streaming chunks and flushes incomplete false-positive prefixes', async () => {
+      const g = new PIIGuardrails({ categories: ['email'] });
+      const { vault } = g.tokenize('User: dev@sinaps.ai');
+
+      const fullText = 'Contact {{PII_EMAIL_1}} or {{NOT_A_TOKEN}} end {';
+      async function* charStream() {
+        for (let i = 0; i < fullText.length; i++) {
+          yield {
+            id: 'stream-char',
+            model: 'test-model',
+            choices: [
+              {
+                delta: {
+                  content: fullText[i],
+                },
+                finishReason: i === fullText.length - 1 ? 'stop' : null,
+              },
+            ],
+          };
+        }
+      }
+
+      let combined = '';
+      for await (const chunk of g.restoreStream(charStream(), vault)) {
+        combined += chunk.choices[0]?.delta.content || '';
+      }
+
+      expect(combined).toBe('Contact dev@sinaps.ai or {{NOT_A_TOKEN}} end {');
+    });
   });
 });

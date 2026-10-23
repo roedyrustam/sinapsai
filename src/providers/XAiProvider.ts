@@ -5,6 +5,7 @@
  * @license MIT
  */
 
+import { GeminiAgentBooster } from '../core/GeminiAgentBooster.js';
 import type {
   CreateEmbeddingRequest,
   CreateEmbeddingResponse,
@@ -105,12 +106,16 @@ export class XAiProvider implements Provider {
     if (request.maxTokens !== undefined) {
       payload.max_tokens = request.maxTokens;
     }
+    const resolvedThinkingBudget =
+      request.thinkingBudget === 'auto'
+        ? GeminiAgentBooster.computeDynamicThinkingBudget(request)
+        : request.thinkingBudget;
     if (request.reasoningEffort) {
       payload.reasoning_effort =
         request.reasoningEffort === 'medium' ? 'high' : request.reasoningEffort;
-    } else if (request.thinkingBudget && request.thinkingBudget > 0) {
+    } else if (resolvedThinkingBudget && resolvedThinkingBudget > 0) {
       payload.reasoning_effort =
-        request.thinkingBudget >= 2048 ? 'high' : 'low';
+        resolvedThinkingBudget >= 2048 ? 'high' : 'low';
     }
     if (request.tools) {
       payload.tools = request.tools;

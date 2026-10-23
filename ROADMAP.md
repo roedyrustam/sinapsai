@@ -126,7 +126,15 @@
 - [x] **Local & Cloud Reasoning Extraction**: Dukungan `reasoning_content` pada Ollama (DeepSeek-R1 / QwQ) dan Mistral AI, serta ekstraksi penggunaan streaming (`usage`) untuk rate limiting presisi.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 27 (`examples/27-mcp-tool-bridge-and-agent-loop.ts`); total 387/387 tes lulus di 33 test suites, 100% Biome Clean.
 
-## Phase 16: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
+## Phase 16: Gemini Agent Booster, Streaming Autonomous Agent Loop & Streaming Reversible PII Vault (v2.8.1 - v2.9.0) - *Completed*
+- [x] **Gemini Agent Booster & Dynamic Thinking Budget (`thinkingBudget: 'auto'`)**: Alokasi anggaran penalaran dinamis berbasis analisis kompleksitas multi-sinyal (`0`, `2048`, `8192`, `32768` token) lintas Gemini 4 Argon/Pro, Anthropic Claude, dan xAI Grok.
+- [x] **Deterministic KV-Cache Prefix Pinning (`canonicalizeTools`, `canonicalizeRequest`)**: Kanonikalisasi urutan tools dan properti JSON Schema secara leksikografis untuk memaksimalkan hit rate Prompt Caching (75%–90% penghematan biaya) dan exact cache 64-bit.
+- [x] **Streaming Autonomous Agent Loop (`client.runWithToolsStream`)**: Loop agen MCP multi-langkah secara streaming (`step-start`, `text-delta`, `reasoning-delta`, `tool-call-start`, `tool-call-result`, `step-finish`, `done`) dengan rekonstruksi argumen tool terfragmentasi.
+- [x] **Streaming Reversible PII Tokenization Vault (`PIIGuardrails.restoreStream`)**: Detokenisasi sliding-window real-time untuk memulihkan token surrogate PII yang terpotong lintas chunk SSE dengan latensi 0ms pada teks normal.
+- [x] **Multimodal Security Guardrails & Gemini 4 Argon Fallbacks**: Inspeksi prompt injection pada array `ContentPart[]` multimodal serta dukungan `GEMINI_MODELS.ARGON_4` (`gemini-4-argon`) dengan fallback otomatis ke `gemini-3.8-flash`.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 28 (`examples/28-gemini-agent-booster-and-streaming-agent.ts`); total 404/404 tes lulus di 34 test suites, 100% Biome Clean.
+
+## Phase 17: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
 
 

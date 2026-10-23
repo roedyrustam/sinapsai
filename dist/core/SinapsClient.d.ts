@@ -6,7 +6,7 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
@@ -192,5 +192,13 @@ export declare class SinapsClient {
      * response and complete conversation history once the model finishes or maxSteps is reached.
      */
     runWithTools(options: RunWithToolsOptions): Promise<RunWithToolsResult>;
+    /**
+     * Runs a streaming autonomous multi-step tool-calling agent loop.
+     *
+     * Yields real-time `AgentStreamEvent` items (`step-start`, `text-delta`, `reasoning-delta`,
+     * `tool-call-start`, `tool-call-result`, `step-finish`, and `done`) while accumulating
+     * fragmented streaming tool call arguments and executing MCP tools between turns.
+     */
+    runWithToolsStream(options: RunWithToolsStreamOptions): AsyncGenerator<AgentStreamEvent, RunWithToolsResult, unknown>;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

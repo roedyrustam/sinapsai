@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.9.0] - 2026-10-23
+### Added
+- **Gemini Agent Booster & KV-Cache Prefix Optimizer (`GeminiAgentBooster`, `canonicalizeJsonValue`)**:
+  - **Dynamic Thinking Budget Allocation (`thinkingBudget: 'auto'`)**: Automatically analyzes prompt complexity (context length, code/math blocks, architectural/debugging signals, tool count, JSON schema enforcement, and turn depth) and maps it to optimal token budgets (`0`, `2048`, `8192`, or `32768`) across `GeminiProvider`, `AnthropicProvider`, and `XAiProvider`.
+  - **Deterministic KV-Cache Prefix Pinning (`canonicalizeTools`, `canonicalizeRequest`)**: Lexicographically sorts tool definitions by `function.name` and recursively sorts `parameters` JSON schema keys so identical tool sets always generate byte-identical prefixes for 75%–90% prompt cache hits and exact router cache hits.
+  - **Context Cache Eligibility Analyzer (`evaluateContextCacheEligibility`)**: Estimates static prefix tokens (system instructions + canonical tool schemas) and reports eligibility and FinOps savings ratio against the 32,768-token threshold.
+- **Streaming Autonomous Multi-Step Agent Loop (`client.runWithToolsStream()`)**:
+  - Async generator (`AsyncGenerator<AgentStreamEvent, RunWithToolsResult>`) yielding real-time events (`step-start`, `text-delta`, `reasoning-delta`, `tool-call-start`, `tool-call-result`, `step-finish`, and `done`).
+  - Reconstructs fragmented `tool_calls` arguments across arbitrary SSE chunks, invokes registered MCP tools via `McpToolBridge`, appends `role: 'tool'` results to conversation history, and tracks `totalTokens` and `totalCostUsd`.
+- **Streaming Reversible PII Tokenization Vault (`PIIGuardrails.restoreStream`, `createStreamTextRestorer`)**:
+  - Stateful sliding-window detokenizer that restores surrogate PII tokens (`{{PII_EMAIL_1}}`, etc.) across arbitrary SSE chunk boundaries with 0ms buffering delay for normal text.
+  - Automatically enabled in `SinapsClient.chat.completions.create({ stream: true })` when `piiGuardrails: { reversible: true }` is configured.
+  - Deterministic left-to-right surrogate token index assignment (`_1`, `_2`) in `PIIGuardrails.tokenize()`.
+- **Runnable Example 28 (`examples/28-gemini-agent-booster-and-streaming-agent.ts`)**:
+  - End-to-end showcase of `GeminiAgentBooster`, `thinkingBudget: 'auto'`, Streaming Reversible PII Vault, and `client.runWithToolsStream()`.
+
 ## [2.8.1] - 2026-10-23
 ### Added
 - **Gemini 4 Argon & Availability Fallback Invariant (`GEMINI_MODELS.ARGON_4`, `GEMINI_AVAILABILITY_FALLBACKS`)**:

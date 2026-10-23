@@ -1040,7 +1040,7 @@ var McpToolBridge = class _McpToolBridge {
             },
             serverInfo: {
               name: "sinapsai-mcp",
-              version: "2.8.1"
+              version: "2.9.0"
             }
           }
         };
@@ -1302,13 +1302,18 @@ var PIIGuardrails = class {
     }
     let result = text;
     let nextIndex = vault.size + 1;
-    for (const match of matches) {
-      let token = originalToToken.get(match.original);
-      if (!token) {
-        token = this.tokenFormat.replace("{category}", match.category.toUpperCase()).replace("{index}", String(nextIndex++));
+    const ascendingMatches = [...matches].sort(
+      (a, b) => a.startIndex - b.startIndex
+    );
+    for (const match of ascendingMatches) {
+      if (!originalToToken.has(match.original)) {
+        const token = this.tokenFormat.replace("{category}", match.category.toUpperCase()).replace("{index}", String(nextIndex++));
         vault.set(token, match.original);
         originalToToken.set(match.original, token);
       }
+    }
+    for (const match of matches) {
+      const token = originalToToken.get(match.original);
       result = result.slice(0, match.startIndex) + token + result.slice(match.endIndex);
     }
     return { text: result, vault };
@@ -1385,6 +1390,148 @@ var PIIGuardrails = class {
       ...response,
       choices: restoredChoices
     };
+  }
+  /**
+   * Creates a stateful sliding-window string detokenizer for streaming chunks.
+   * Only buffers characters when the tail of the current chunk matches a proper prefix
+   * of an active token in the vault, guaranteeing 0ms buffering delay for normal text.
+   */
+  createStreamTextRestorer(vault) {
+    const entries = vault instanceof Map ? Array.from(vault.entries()) : Object.entries(vault);
+    const tokens = entries.map(([token]) => token).filter((t) => t.length > 0);
+    const maxTokenLen = tokens.length > 0 ? Math.max(...tokens.map((t) => t.length)) : 0;
+    let pending = "";
+    return {
+      push: (chunkText) => {
+        if (tokens.length === 0) return chunkText;
+        let combined = pending + chunkText;
+        if (!combined) return "";
+        for (const [token, original] of entries) {
+          if (combined.includes(token)) {
+            combined = combined.replaceAll(token, original);
+          }
+        }
+        const maxCheck = Math.min(combined.length, maxTokenLen - 1);
+        let matchedSuffixLen = 0;
+        for (let len = maxCheck; len >= 1; len--) {
+          const suffix = combined.slice(combined.length - len);
+          if (tokens.some((t) => t.startsWith(suffix))) {
+            matchedSuffixLen = len;
+            break;
+          }
+        }
+        if (matchedSuffixLen > 0) {
+          const emit = combined.slice(0, combined.length - matchedSuffixLen);
+          pending = combined.slice(combined.length - matchedSuffixLen);
+          return emit;
+        }
+        pending = "";
+        return combined;
+      },
+      flush: () => {
+        if (!pending) return "";
+        const finalOut = this.restore(pending, vault);
+        pending = "";
+        return finalOut;
+      }
+    };
+  }
+  /**
+   * Transforms an async stream of UnifiedApiStreamChunk, seamlessly restoring
+   * surrogate PII tokens even when split across multiple arbitrary SSE chunk boundaries.
+   */
+  restoreStream(stream, vault) {
+    const entriesCount = vault instanceof Map ? vault.size : Object.keys(vault || {}).length;
+    if (!vault || entriesCount === 0) {
+      return stream;
+    }
+    const contentRestorer = this.createStreamTextRestorer(vault);
+    const reasoningRestorer = this.createStreamTextRestorer(vault);
+    const toolArgsRestorers = /* @__PURE__ */ new Map();
+    const getToolRestorer = (index) => {
+      let restorer = toolArgsRestorers.get(index);
+      if (!restorer) {
+        restorer = this.createStreamTextRestorer(vault);
+        toolArgsRestorers.set(index, restorer);
+      }
+      return restorer;
+    };
+    return (async function* () {
+      let lastChunkMeta = {
+        id: "stream-flush",
+        model: "default"
+      };
+      for await (const chunk of stream) {
+        lastChunkMeta = {
+          id: chunk.id,
+          model: chunk.model,
+          provider: chunk.provider
+        };
+        const restoredChoices = chunk.choices.map((choice) => {
+          const delta = { ...choice.delta };
+          if (typeof delta.content === "string") {
+            delta.content = contentRestorer.push(delta.content);
+          }
+          if (typeof delta.reasoning_content === "string") {
+            delta.reasoning_content = reasoningRestorer.push(
+              delta.reasoning_content
+            );
+          }
+          if (Array.isArray(delta.tool_calls)) {
+            delta.tool_calls = delta.tool_calls.map((tc) => {
+              if (tc.function?.arguments) {
+                const restorer = getToolRestorer(tc.index ?? 0);
+                return {
+                  ...tc,
+                  function: {
+                    ...tc.function,
+                    arguments: restorer.push(tc.function.arguments)
+                  }
+                };
+              }
+              return tc;
+            });
+          }
+          if (choice.finishReason !== null) {
+            const flushedContent = contentRestorer.flush();
+            if (flushedContent) {
+              delta.content = (delta.content ?? "") + flushedContent;
+            }
+            const flushedReasoning = reasoningRestorer.flush();
+            if (flushedReasoning) {
+              delta.reasoning_content = (delta.reasoning_content ?? "") + flushedReasoning;
+            }
+          }
+          return {
+            ...choice,
+            delta
+          };
+        });
+        yield {
+          ...chunk,
+          choices: restoredChoices
+        };
+      }
+      const remainingContent = contentRestorer.flush();
+      const remainingReasoning = reasoningRestorer.flush();
+      if (remainingContent || remainingReasoning) {
+        yield {
+          id: lastChunkMeta.id,
+          model: lastChunkMeta.model,
+          provider: lastChunkMeta.provider,
+          choices: [
+            {
+              delta: {
+                role: "assistant",
+                ...remainingContent ? { content: remainingContent } : {},
+                ...remainingReasoning ? { reasoning_content: remainingReasoning } : {}
+              },
+              finishReason: null
+            }
+          ]
+        };
+      }
+    })();
   }
   formatRedaction(category) {
     return this.redactionFormat.replace("{category}", category.toUpperCase());
@@ -1609,6 +1756,221 @@ var GatewayRateLimiter = class {
   }
 };
 
+// src/core/GeminiAgentBooster.ts
+var COMPLEX_REASONING_REGEX = /\b(architect(?:ure)?|refactor|optimiz(?:e|ation)|vulnerabilit(?:y|ies)|security\s+audit|prove|theorem|algorithm|concurren(?:t|cy)|deadlock|race\s+condition|distributed|microkernel|step[\s-]by[\s-]step|root\s+cause|stack\s+trace|benchmark|formal\s+verification)\b/i;
+var CODE_OR_MATH_REGEX = /```[\s\S]*?```|\b(?:function|class|interface|SELECT\s+.+\s+FROM|CREATE\s+TABLE|async\s+function|Promise\.all|TypeError:|ReferenceError:|Error:\s+at\s+)\b|\$\$[\s\S]+?\$\$/i;
+var SIMPLE_INTENT_REGEX = /^(?:hi|hello|hey|halo|ping|ok|okay|thanks|thank\s+you|terima\s+kasih|yes|no|ya|tidak|translate\s+to\s+\w+:|classify\s*:)/i;
+function canonicalizeJsonValue(value) {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJsonValue);
+  }
+  const record = value;
+  const sortedKeys = Object.keys(record).sort();
+  const result = {};
+  for (const key of sortedKeys) {
+    result[key] = canonicalizeJsonValue(record[key]);
+  }
+  return result;
+}
+function extractMessagesText(messages) {
+  const allParts = [];
+  const systemParts = [];
+  let lastUserText = "";
+  let nonSystemTurnCount = 0;
+  for (const msg of messages) {
+    let msgText = "";
+    if (typeof msg.content === "string") {
+      msgText = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      msgText = msg.content.map((p) => p.type === "text" ? p.text : "").filter(Boolean).join("\n");
+    }
+    if (msg.role === "system") {
+      if (msgText) systemParts.push(msgText);
+    } else {
+      nonSystemTurnCount++;
+      if (msg.role === "user" && msgText) {
+        lastUserText = msgText;
+      }
+    }
+    if (msgText) {
+      allParts.push(msgText);
+    }
+  }
+  return {
+    totalText: allParts.join("\n"),
+    lastUserText,
+    systemText: systemParts.join("\n"),
+    nonSystemTurnCount
+  };
+}
+var GeminiAgentBooster = class _GeminiAgentBooster {
+  /**
+   * Analyzes a UnifiedApiRequest and computes a complexity score [0..1],
+   * thinking tier ('none' | 'low' | 'medium' | 'high'), and recommended thinkingBudget.
+   */
+  static analyzeComplexity(request) {
+    const signals = [];
+    let score = 0;
+    const { totalText, lastUserText, nonSystemTurnCount } = extractMessagesText(
+      request.messages || []
+    );
+    const trimmedLastUser = lastUserText.trim();
+    const totalChars = totalText.length;
+    const toolCount = request.tools?.length ?? 0;
+    if (toolCount === 0 && !request.responseFormat && totalChars < 80 && (totalChars === 0 || SIMPLE_INTENT_REGEX.test(trimmedLastUser)) && !CODE_OR_MATH_REGEX.test(totalText) && !COMPLEX_REASONING_REGEX.test(totalText)) {
+      signals.push("simple_intent_short_prompt");
+      return {
+        score: 0.05,
+        tier: "none",
+        recommendedBudget: 0,
+        signals
+      };
+    }
+    if (totalChars > 8e3) {
+      score += 0.35;
+      signals.push("long_context_8k+");
+    } else if (totalChars > 2e3) {
+      score += 0.25;
+      signals.push("medium_context_2k+");
+    } else if (totalChars > 300) {
+      score += 0.15;
+      signals.push("standard_context_300+");
+    } else if (totalChars > 60) {
+      score += 0.1;
+      signals.push("concise_prompt");
+    }
+    if (CODE_OR_MATH_REGEX.test(totalText)) {
+      score += 0.3;
+      signals.push("code_or_math_detected");
+    }
+    if (COMPLEX_REASONING_REGEX.test(totalText)) {
+      score += 0.3;
+      signals.push("complex_reasoning_keywords");
+    }
+    if (toolCount >= 4) {
+      score += 0.3;
+      signals.push(`multi_tool_orchestration(${toolCount})`);
+    } else if (toolCount >= 1) {
+      score += 0.2;
+      signals.push(`tool_calling(${toolCount})`);
+    }
+    if (request.responseFormat?.type === "json_schema") {
+      score += 0.15;
+      signals.push("strict_json_schema");
+    } else if (request.responseFormat?.type === "json_object") {
+      score += 0.1;
+      signals.push("json_object_mode");
+    }
+    if (nonSystemTurnCount >= 6) {
+      score += 0.15;
+      signals.push(`deep_conversation(${nonSystemTurnCount}_turns)`);
+    }
+    const clampedScore = Math.min(1, Number(score.toFixed(2)));
+    if (clampedScore < 0.15) {
+      return {
+        score: clampedScore,
+        tier: "none",
+        recommendedBudget: 0,
+        signals
+      };
+    }
+    if (clampedScore < 0.45) {
+      return {
+        score: clampedScore,
+        tier: "low",
+        recommendedBudget: 2048,
+        signals
+      };
+    }
+    if (clampedScore < 0.75) {
+      return {
+        score: clampedScore,
+        tier: "medium",
+        recommendedBudget: 8192,
+        signals
+      };
+    }
+    return {
+      score: clampedScore,
+      tier: "high",
+      recommendedBudget: 32768,
+      signals
+    };
+  }
+  /**
+   * Computes a concrete numerical thinking token budget for `thinkingBudget: 'auto'`.
+   */
+  static computeDynamicThinkingBudget(request) {
+    return _GeminiAgentBooster.analyzeComplexity(request).recommendedBudget;
+  }
+  /**
+   * Deterministically sorts tool definitions by `function.name` and recursively
+   * canonicalizes `function.parameters` keys so identical tool sets always produce
+   * byte-identical JSON prefixes for KV-Cache reuse.
+   */
+  static canonicalizeTools(tools) {
+    if (!Array.isArray(tools) || tools.length === 0) {
+      return tools;
+    }
+    return [...tools].sort((a, b) => a.function.name.localeCompare(b.function.name)).map((tool) => ({
+      ...tool,
+      function: {
+        ...tool.function,
+        parameters: tool.function.parameters ? canonicalizeJsonValue(tool.function.parameters) : tool.function.parameters
+      }
+    }));
+  }
+  /**
+   * Canonicalizes a UnifiedApiRequest for optimal KV-Cache hit rates and resolves
+   * `thinkingBudget: 'auto'` if specified.
+   *
+   * - Pins all `system` messages to the leading prefix in their relative order.
+   * - Sorts `tools` and their JSON schema keys deterministically.
+   * - Resolves `thinkingBudget: 'auto'` into a concrete numerical token budget.
+   */
+  static canonicalizeRequest(request) {
+    const systemMessages = [];
+    const conversationMessages = [];
+    for (const msg of request.messages) {
+      if (msg.role === "system") {
+        systemMessages.push(msg);
+      } else {
+        conversationMessages.push(msg);
+      }
+    }
+    const canonicalMessages = systemMessages.length > 0 ? [...systemMessages, ...conversationMessages] : request.messages;
+    const canonicalTools = request.tools ? _GeminiAgentBooster.canonicalizeTools(request.tools) : void 0;
+    const resolvedThinkingBudget = request.thinkingBudget === "auto" ? _GeminiAgentBooster.computeDynamicThinkingBudget(request) : request.thinkingBudget;
+    return {
+      ...request,
+      messages: canonicalMessages,
+      tools: canonicalTools,
+      thinkingBudget: resolvedThinkingBudget
+    };
+  }
+  /**
+   * Evaluates whether a request's static prefix (system instructions + tool definitions)
+   * meets the token threshold for Google Context Caching (default: 32,768 tokens).
+   */
+  static evaluateContextCacheEligibility(request, minTokenThreshold = 32768) {
+    const { systemText } = extractMessagesText(request.messages || []);
+    const toolsJson = request.tools && request.tools.length > 0 ? JSON.stringify(_GeminiAgentBooster.canonicalizeTools(request.tools)) : "";
+    const totalStaticChars = systemText.length + toolsJson.length;
+    const estimatedPrefixTokens = Math.ceil(totalStaticChars / 4);
+    const eligible = estimatedPrefixTokens >= minTokenThreshold;
+    return {
+      eligible,
+      estimatedPrefixTokens,
+      thresholdTokens: minTokenThreshold,
+      estimatedSavingsRatio: eligible ? 0.75 : 0,
+      systemText
+    };
+  }
+};
+
 // src/types/index.ts
 var BudgetExceededError = class extends Error {
   currentCostUsd;
@@ -1721,7 +2083,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.8.1";
+  const serviceVersion = options.serviceVersion || "2.9.0";
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
@@ -2364,7 +2726,7 @@ var Router = class {
       msgs: request.messages,
       t: request.temperature,
       max: request.maxTokens,
-      tools: request.tools,
+      tools: request.tools ? GeminiAgentBooster.canonicalizeTools(request.tools) : void 0,
       tc: request.toolChoice,
       rf: request.responseFormat,
       tb: request.thinkingBudget,
@@ -3435,7 +3797,7 @@ var SinapsClient = class {
           messages = scan.messages;
         }
         if (this.guardrails) {
-          if (this.isReversiblePII && !request.stream) {
+          if (this.isReversiblePII) {
             const tokenized = this.guardrails.tokenizeMessages(messages);
             messages = tokenized.messages;
             piiVault = tokenized.vault;
@@ -3495,36 +3857,46 @@ var SinapsClient = class {
             res.provider || candidateProviderId
           );
         }
-        if (this.rateLimiter && request.stream) {
-          const limiter = this.rateLimiter;
-          const stream = res;
-          return (async function* () {
-            let actualStreamTokens;
-            let streamProviderId = candidateProviderId;
-            try {
-              for await (const chunk of stream) {
-                if (chunk.provider) {
-                  streamProviderId = chunk.provider;
+        if (request.stream) {
+          let streamResult = res;
+          if (this.rateLimiter) {
+            const limiter = this.rateLimiter;
+            const upstream = streamResult;
+            streamResult = (async function* () {
+              let actualStreamTokens;
+              let streamProviderId = candidateProviderId;
+              try {
+                for await (const chunk of upstream) {
+                  if (chunk.provider) {
+                    streamProviderId = chunk.provider;
+                  }
+                  if (chunk.usage) {
+                    const calculated = chunk.usage.totalTokens ?? (chunk.usage.promptTokens || 0) + (chunk.usage.completionTokens || 0);
+                    actualStreamTokens = calculated > 0 ? calculated : void 0;
+                  }
+                  yield chunk;
                 }
-                if (chunk.usage) {
-                  const calculated = chunk.usage.totalTokens ?? (chunk.usage.promptTokens || 0) + (chunk.usage.completionTokens || 0);
-                  actualStreamTokens = calculated > 0 ? calculated : void 0;
+              } finally {
+                if (actualStreamTokens !== void 0) {
+                  await limiter.adjustTokens(
+                    fullReq,
+                    actualStreamTokens,
+                    estimatedTokens,
+                    streamProviderId
+                  );
                 }
-                yield chunk;
               }
-            } finally {
-              if (actualStreamTokens !== void 0) {
-                await limiter.adjustTokens(
-                  fullReq,
-                  actualStreamTokens,
-                  estimatedTokens,
-                  streamProviderId
-                );
-              }
-            }
-          })();
+            })();
+          }
+          if (this.guardrails && piiVault && piiVault.size > 0) {
+            streamResult = this.guardrails.restoreStream(
+              streamResult,
+              piiVault
+            );
+          }
+          return streamResult;
         }
-        if (this.guardrails && piiVault && piiVault.size > 0 && !request.stream && "choices" in res) {
+        if (this.guardrails && piiVault && piiVault.size > 0 && "choices" in res) {
           return this.guardrails.restoreResponse(
             res,
             piiVault
@@ -3789,6 +4161,200 @@ var SinapsClient = class {
       totalTokens,
       totalCostUsd
     };
+  }
+  /**
+   * Runs a streaming autonomous multi-step tool-calling agent loop.
+   *
+   * Yields real-time `AgentStreamEvent` items (`step-start`, `text-delta`, `reasoning-delta`,
+   * `tool-call-start`, `tool-call-result`, `step-finish`, and `done`) while accumulating
+   * fragmented streaming tool call arguments and executing MCP tools between turns.
+   */
+  async *runWithToolsStream(options) {
+    const maxSteps = options.maxSteps ?? 5;
+    const bridge = options.mcpBridge ?? this.mcp;
+    const currentMessages = [...options.messages];
+    const steps = [];
+    const startCost = this.getMetrics().estimatedCostUsd;
+    let totalTokens = 0;
+    let latestResponse;
+    const tools = options.tools && options.tools.length > 0 ? options.tools : bridge.getTools();
+    for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex++) {
+      if (options.signal?.aborted) {
+        throw new DOMException("The user aborted a request.", "AbortError");
+      }
+      yield { type: "step-start", stepIndex };
+      const stepStart = Date.now();
+      const req = {
+        ...options,
+        messages: currentMessages,
+        stream: true,
+        tools: tools.length > 0 ? tools : void 0
+      };
+      const stream = await this.chat.completions.create(req);
+      let responseId = `agent-step-${stepIndex}`;
+      let responseModel = options.model || "default";
+      let responseProvider;
+      let contentAcc = "";
+      let reasoningAcc = "";
+      let finishReason = "stop";
+      let stepUsage;
+      let stepGrounding;
+      const toolCallsMap = /* @__PURE__ */ new Map();
+      for await (const chunk of stream) {
+        if (chunk.id) responseId = chunk.id;
+        if (chunk.model) responseModel = chunk.model;
+        if (chunk.provider) responseProvider = chunk.provider;
+        if (chunk.usage) stepUsage = chunk.usage;
+        if (chunk.grounding) stepGrounding = chunk.grounding;
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        if (choice.finishReason) {
+          finishReason = choice.finishReason;
+        }
+        const delta = choice.delta;
+        if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+          reasoningAcc += delta.reasoning_content;
+          yield {
+            type: "reasoning-delta",
+            stepIndex,
+            reasoningDelta: delta.reasoning_content,
+            chunk
+          };
+        }
+        if (typeof delta.content === "string" && delta.content) {
+          contentAcc += delta.content;
+          yield {
+            type: "text-delta",
+            stepIndex,
+            textDelta: delta.content,
+            chunk
+          };
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            const existing = toolCallsMap.get(idx) || {
+              id: "",
+              name: "",
+              arguments: ""
+            };
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name += tc.function.name;
+            if (tc.function?.arguments) {
+              existing.arguments += tc.function.arguments;
+            }
+            toolCallsMap.set(idx, existing);
+          }
+        }
+      }
+      const assembledToolCalls = Array.from(toolCallsMap.entries()).sort(([a], [b]) => a - b).map(([idx, tc]) => ({
+        id: tc.id || `call_${stepIndex}_${idx}`,
+        type: "function",
+        function: {
+          name: tc.name,
+          arguments: tc.arguments || "{}"
+        }
+      }));
+      const assistantMessage = {
+        role: "assistant",
+        content: contentAcc.length > 0 ? contentAcc : null,
+        ...reasoningAcc.length > 0 ? { reasoning_content: reasoningAcc } : {},
+        ...assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {},
+        ...stepGrounding ? { grounding: stepGrounding } : {}
+      };
+      latestResponse = {
+        id: responseId,
+        model: responseModel,
+        provider: responseProvider,
+        choices: [
+          {
+            message: assistantMessage,
+            finishReason: assembledToolCalls.length > 0 ? "tool_calls" : finishReason
+          }
+        ],
+        usage: stepUsage,
+        grounding: stepGrounding
+      };
+      if (stepUsage) {
+        const promptTokens = stepUsage.promptTokens || 0;
+        const completionTokens = stepUsage.completionTokens || 0;
+        totalTokens += stepUsage.totalTokens || promptTokens + completionTokens;
+      }
+      if (assembledToolCalls.length === 0) {
+        currentMessages.push(assistantMessage);
+        break;
+      }
+      currentMessages.push(assistantMessage);
+      yield {
+        type: "tool-call-start",
+        stepIndex,
+        toolCalls: assembledToolCalls
+      };
+      const toolResults = [];
+      for (const tc of assembledToolCalls) {
+        const mcpRes = await bridge.executeToolCall(tc, {
+          signal: options.signal,
+          user: options.user,
+          timeoutMs: options.toolTimeoutMs
+        });
+        const textOutput = mcpRes.content.map((c) => {
+          if (c.type === "text") return c.text;
+          if (c.type === "resource") {
+            return c.resource.text ?? `[Resource: ${c.resource.uri}]`;
+          }
+          return `[Image: ${c.mimeType}]`;
+        }).join("\n");
+        const toolMessage = {
+          role: "tool",
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: textOutput
+        };
+        toolResults.push(toolMessage);
+        currentMessages.push(toolMessage);
+        yield {
+          type: "tool-call-result",
+          stepIndex,
+          toolCallId: tc.id,
+          toolName: tc.function.name,
+          result: mcpRes,
+          toolMessage
+        };
+      }
+      const durationMs = Date.now() - stepStart;
+      const step = {
+        stepIndex,
+        assistantMessage,
+        toolCalls: assembledToolCalls,
+        toolResults,
+        durationMs,
+        usage: stepUsage
+      };
+      steps.push(step);
+      if (options.onStep) {
+        await options.onStep(step);
+      }
+      yield {
+        type: "step-finish",
+        stepIndex,
+        step
+      };
+    }
+    const endCost = this.getMetrics().estimatedCostUsd;
+    const totalCostUsd = Number(Math.max(0, endCost - startCost).toFixed(6));
+    const finalResult = {
+      response: latestResponse,
+      messages: currentMessages,
+      steps,
+      totalSteps: steps.length,
+      totalTokens,
+      totalCostUsd
+    };
+    yield {
+      type: "done",
+      result: finalResult
+    };
+    return finalResult;
   }
 };
 
@@ -4247,6 +4813,19 @@ var sinapsai = createSinapsAI;
  * In-process automatic redaction of Personally Identifiable Information (PII)
  * from outgoing LLM payloads before they leave the network boundary.
  * No external dependencies, no data leaves the process unprotected.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Gemini Agent Booster & KV-Cache Prefix Optimizer (2026 Frontier Edition)
+ *
+ * Implements:
+ * 1. Dynamic Thinking Budget Allocation (`thinkingBudget: 'auto'`) based on multi-signal prompt complexity.
+ * 2. Deterministic KV-Cache Prefix Pinning (canonical lexicographical tool & JSON schema sorting).
+ * 3. Context Caching Eligibility & FinOps Savings Analyzer (>32k token static prefix detection).
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

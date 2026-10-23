@@ -467,7 +467,7 @@ describe('McpToolBridge', () => {
       expect(initRes.id).toBe(10);
       expect(initRes.result.protocolVersion).toBe('2024-11-05');
       expect(initRes.result.serverInfo.name).toBe('sinapsai-mcp');
-      expect(initRes.result.serverInfo.version).toBe('2.8.1');
+      expect(initRes.result.serverInfo.version).toBe('2.9.0');
 
       const notifRes = await bridge.handleJsonRpc({
         jsonrpc: '2.0',
@@ -747,5 +747,156 @@ describe('SinapsClient.runWithTools', () => {
     expect(result.response.choices[0].message.content).toBe('finished.');
     expect(result.totalCostUsd).toBeDefined();
     expect(result.totalCostUsd).toBeGreaterThanOrEqual(0);
+  });
+
+  it('streams multi-step tool-calling loop via client.runWithToolsStream() with fragmented tool arguments', async () => {
+    let callTurn = 0;
+    const mockProvider: Provider = {
+      id: 'stream-agent-p',
+      name: 'StreamAgentProvider',
+      promptCostPer1k: 0.001,
+      completionCostPer1k: 0.002,
+      generateContent: vi.fn().mockImplementation(async function* () {
+        callTurn++;
+        if (callTurn === 1) {
+          yield {
+            id: 's1-1',
+            model: 'm-stream',
+            choices: [
+              {
+                delta: {
+                  role: 'assistant',
+                  reasoning_content: 'Thinking about weather...',
+                },
+                finishReason: null,
+              },
+            ],
+          };
+          yield {
+            id: 's1-2',
+            model: 'm-stream',
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_w1',
+                      type: 'function',
+                      function: {
+                        name: 'lookup_weather',
+                        arguments: '{"city":"Jak',
+                      },
+                    },
+                  ],
+                },
+                finishReason: null,
+              },
+            ],
+          };
+          yield {
+            id: 's1-3',
+            model: 'm-stream',
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: 'arta"}',
+                      },
+                    },
+                  ],
+                },
+                finishReason: 'tool_calls',
+              },
+            ],
+            usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+          };
+        } else {
+          yield {
+            id: 's2-1',
+            model: 'm-stream',
+            choices: [
+              {
+                delta: {
+                  role: 'assistant',
+                  content: 'The weather in Jakarta is ',
+                },
+                finishReason: null,
+              },
+            ],
+          };
+          yield {
+            id: 's2-2',
+            model: 'm-stream',
+            choices: [
+              {
+                delta: {
+                  content: '31°C and sunny.',
+                },
+                finishReason: 'stop',
+              },
+            ],
+            usage: { promptTokens: 35, completionTokens: 15, totalTokens: 50 },
+          };
+        }
+      }),
+    };
+
+    const client = new SinapsClient({
+      providers: [mockProvider],
+    });
+
+    client.mcp.registerTool({
+      name: 'lookup_weather',
+      inputSchema: {
+        type: 'object',
+        properties: { city: { type: 'string' } },
+        required: ['city'],
+      },
+      handler: async (args) => ({
+        city: args.city,
+        tempC: 31,
+        condition: 'Sunny',
+      }),
+    });
+
+    const events: string[] = [];
+    const textDeltas: string[] = [];
+    const reasoningDeltas: string[] = [];
+    let finalDoneResult: unknown;
+
+    for await (const ev of client.runWithToolsStream({
+      model: 'm-stream',
+      messages: [{ role: 'user', content: 'Weather in Jakarta?' }],
+    })) {
+      events.push(ev.type);
+      if (ev.type === 'text-delta') textDeltas.push(ev.textDelta);
+      if (ev.type === 'reasoning-delta')
+        reasoningDeltas.push(ev.reasoningDelta);
+      if (ev.type === 'done') finalDoneResult = ev.result;
+    }
+
+    expect(events).toEqual([
+      'step-start',
+      'reasoning-delta',
+      'tool-call-start',
+      'tool-call-result',
+      'step-finish',
+      'step-start',
+      'text-delta',
+      'text-delta',
+      'done',
+    ]);
+    expect(reasoningDeltas.join('')).toBe('Thinking about weather...');
+    expect(textDeltas.join('')).toBe(
+      'The weather in Jakarta is 31°C and sunny.',
+    );
+    expect(finalDoneResult).toBeDefined();
+    const res = finalDoneResult as { totalSteps: number; totalTokens: number };
+    expect(res.totalSteps).toBe(1);
+    expect(res.totalTokens).toBe(80);
   });
 });
