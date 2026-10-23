@@ -278,14 +278,21 @@ export class SinapsClient {
           fallbackModels: request.fallbackModels,
           thinkingBudget: request.thinkingBudget,
           reasoningEffort: request.reasoningEffort,
+          cachedContent: request.cachedContent,
+          googleSearch: request.googleSearch,
+          codeExecution: request.codeExecution,
           user: request.user,
         };
 
         let estimatedTokens = 0;
+        let candidateProviderId: string | undefined;
         if (this.rateLimiter) {
+          candidateProviderId =
+            this.router.getPrimaryCandidateProviderId(fullReq);
           estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
           const check = await this.rateLimiter.check(fullReq, {
             estimatedTokens,
+            providerId: candidateProviderId,
           });
           if (!check.allowed && check.violation) {
             this.hooks?.onGatewayRateLimitWarning?.(check.violation);
@@ -306,7 +313,7 @@ export class SinapsClient {
             fullReq,
             actualTokens,
             estimatedTokens,
-            (res as UnifiedApiResponse).provider,
+            (res as UnifiedApiResponse).provider || candidateProviderId,
           );
         }
 
@@ -316,8 +323,12 @@ export class SinapsClient {
           const stream = res as AsyncIterable<UnifiedApiStreamChunk>;
           return (async function* () {
             let actualStreamTokens: number | undefined;
+            let streamProviderId: string | undefined = candidateProviderId;
             try {
               for await (const chunk of stream) {
+                if (chunk.provider) {
+                  streamProviderId = chunk.provider;
+                }
                 if (chunk.usage) {
                   const calculated =
                     chunk.usage.totalTokens ??
@@ -333,6 +344,7 @@ export class SinapsClient {
                   fullReq,
                   actualStreamTokens,
                   estimatedTokens,
+                  streamProviderId,
                 );
               }
             }
@@ -448,6 +460,8 @@ export class SinapsClient {
           messages: [],
           user: request.user,
         };
+        const candidateProviderId =
+          this.router.getPrimaryCandidateProviderId(dummyReq);
         const inputTokens = Array.isArray(request.input)
           ? request.input.reduce(
               (acc, str) => acc + Math.ceil(str.length / 4),
@@ -456,6 +470,7 @@ export class SinapsClient {
           : Math.ceil(request.input.length / 4);
         const check = await this.rateLimiter.check(dummyReq, {
           estimatedTokens: inputTokens,
+          providerId: candidateProviderId,
         });
         if (!check.allowed && check.violation) {
           this.hooks?.onGatewayRateLimitWarning?.(check.violation);

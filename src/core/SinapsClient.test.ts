@@ -848,5 +848,164 @@ describe('SinapsClient', () => {
 
       expect(received).toEqual(['chunk 1', 'chunk 2']);
     });
+
+    it('should forward cachedContent, googleSearch, and codeExecution through SinapsClient', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: 'gemini-res',
+        model: 'gemini-4-pro',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Grounded answer' },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'gemini-1',
+            name: 'Gemini',
+            generateContent: mockGenerate,
+          },
+        ],
+      });
+
+      await client.chat.completions.create({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'user', content: 'Check cache and grounding' }],
+        cachedContent: 'cachedContents/repo-123',
+        googleSearch: true,
+        codeExecution: true,
+      });
+
+      expect(mockGenerate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gemini-4-pro',
+          cachedContent: 'cachedContents/repo-123',
+          googleSearch: true,
+          codeExecution: true,
+        }),
+      );
+    });
+
+    it('should differentiate exact cache keys by responseFormat, tools, and embedding dimensions', async () => {
+      const mockGenerate = vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: 'res-text',
+          model: 'm',
+          choices: [
+            {
+              message: { role: 'assistant', content: 'plain text' },
+              finishReason: 'stop',
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          id: 'res-json',
+          model: 'm',
+          choices: [
+            {
+              message: { role: 'assistant', content: '{"ok":true}' },
+              finishReason: 'stop',
+            },
+          ],
+        });
+
+      const mockEmbed = vi
+        .fn()
+        .mockResolvedValueOnce({
+          object: 'list',
+          data: [{ index: 0, embedding: [0.1, 0.2], object: 'embedding' }],
+          model: 'emb',
+        })
+        .mockResolvedValueOnce({
+          object: 'list',
+          data: [
+            { index: 0, embedding: [0.1, 0.2, 0.3, 0.4], object: 'embedding' },
+          ],
+          model: 'emb',
+        });
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'p1',
+            name: 'P1',
+            generateContent: mockGenerate,
+            generateEmbedding: mockEmbed,
+          },
+        ],
+        cache: { enabled: true, ttlSeconds: 60 },
+      });
+
+      const res1 = await client.chat.completions.create({
+        model: 'm',
+        messages: [{ role: 'user', content: 'same prompt' }],
+      });
+      const res2 = await client.chat.completions.create({
+        model: 'm',
+        messages: [{ role: 'user', content: 'same prompt' }],
+        responseFormat: { type: 'json_object' },
+      });
+
+      expect(res1.choices[0].message.content).toBe('plain text');
+      expect(res2.choices[0].message.content).toBe('{"ok":true}');
+      expect(mockGenerate).toHaveBeenCalledTimes(2);
+
+      const emb1 = await client.embeddings.create({
+        model: 'emb',
+        input: 'same text',
+        dimensions: 2,
+      });
+      const emb2 = await client.embeddings.create({
+        model: 'emb',
+        input: 'same text',
+        dimensions: 4,
+      });
+
+      expect(emb1.data[0].embedding).toHaveLength(2);
+      expect(emb2.data[0].embedding).toHaveLength(4);
+      expect(mockEmbed).toHaveBeenCalledTimes(2);
+    });
+
+    it('should enforce providerRules rate limiting via SinapsClient', async () => {
+      const mockGenerate = vi.fn().mockResolvedValue({
+        id: '1',
+        model: 'm',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'ok' },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'groq-instance-1',
+            name: 'Groq',
+            generateContent: mockGenerate,
+          },
+        ],
+        rateLimiting: {
+          providerRules: {
+            groq: { requestsPerMinute: 1 },
+          },
+        },
+      });
+
+      await client.chat.completions.create({
+        messages: [{ role: 'user', content: 'first' }],
+      });
+
+      await expect(
+        client.chat.completions.create({
+          messages: [{ role: 'user', content: 'second' }],
+        }),
+      ).rejects.toThrow('Gateway rate limit exceeded');
+    });
   });
 });

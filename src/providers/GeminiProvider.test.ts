@@ -16,6 +16,7 @@ describe('GeminiProvider', () => {
   describe('resolveModel & GEMINI_MODELS', () => {
     it('should expose canonical GEMINI_MODELS constants', () => {
       expect(GEMINI_MODELS.PRO_4).toBe('gemini-4-pro');
+      expect(GEMINI_MODELS.ARGON_4).toBe('gemini-4-argon');
       expect(GEMINI_MODELS.FLASH_4).toBe('gemini-4-flash');
       expect(GEMINI_MODELS.PROJECT_ASTRA).toBe('gemini-4-flash');
       expect(GEMINI_MODELS.FLASH_2_5).toBe('gemini-2.5-flash');
@@ -625,17 +626,23 @@ describe('GeminiProvider', () => {
       });
 
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining(
-          '/models/gemini-embedding-001:embedContent?key=test-key',
-        ),
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent',
         expect.objectContaining({
           method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': 'test-key',
+          },
           body: JSON.stringify({
             content: { parts: [{ text: 'Hello semantic search' }] },
             outputDimensionality: 512,
           }),
         }),
       );
+
+      // biome-ignore lint/suspicious/noExplicitAny: mock calls
+      const calledUrl = (global.fetch as any).mock.calls[0][0];
+      expect(calledUrl).not.toContain('key=');
 
       expect(response.object).toBe('list');
       expect(response.model).toBe('gemini-embedding-001');
@@ -661,11 +668,13 @@ describe('GeminiProvider', () => {
       });
 
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining(
-          '/models/gemini-embedding-2:batchEmbedContents?key=test-key',
-        ),
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents',
         expect.objectContaining({
           method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': 'test-key',
+          },
           body: JSON.stringify({
             requests: [
               {
@@ -1005,6 +1014,24 @@ describe('GeminiProvider', () => {
       await expect(
         provider.deleteCachedContent('cache-xyz-123'),
       ).resolves.toBeUndefined();
+    });
+
+    it('should resolve pricing and availability fallback for gemini-4-argon and gemini-4-pro', () => {
+      const argonProvider = new GeminiProvider({
+        apiKey: 'test',
+        defaultModel: GEMINI_MODELS.ARGON_4,
+        enableAvailabilityFallback: true,
+      });
+
+      expect(argonProvider.promptCostPer1k).toBe(0.0005);
+      expect(argonProvider.completionCostPer1k).toBe(0.002);
+      expect(argonProvider.fallbackModels).toEqual([GEMINI_MODELS.FLASH_3_8]);
+      expect(
+        GeminiProvider.getAvailabilityFallbacks(GEMINI_MODELS.PRO_4),
+      ).toEqual([GEMINI_MODELS.FLASH_3_8]);
+      expect(
+        GeminiProvider.getAvailabilityFallbacks(GEMINI_MODELS.ARGON_4),
+      ).toEqual([GEMINI_MODELS.FLASH_3_8]);
     });
   });
 });

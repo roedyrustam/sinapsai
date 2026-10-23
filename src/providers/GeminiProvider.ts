@@ -25,6 +25,7 @@ import type { Provider } from './Provider.js';
 
 export const GEMINI_MODELS = {
   PRO_4: 'gemini-4-pro',
+  ARGON_4: 'gemini-4-argon',
   FLASH_4: 'gemini-4-flash',
   PROJECT_ASTRA: 'gemini-4-flash',
   FLASH_3_8: 'gemini-3.8-flash',
@@ -45,11 +46,17 @@ export const GEMINI_MODELS = {
   TEXT_EMBEDDING_004: 'text-embedding-004',
 } as const;
 
+export const GEMINI_AVAILABILITY_FALLBACKS: Record<string, string[]> = {
+  'gemini-4-pro': ['gemini-3.8-flash'],
+  'gemini-4-argon': ['gemini-3.8-flash'],
+};
+
 export const GEMINI_DEFAULT_PRICING: Record<
   string,
   { promptCostPer1k: number; completionCostPer1k: number }
 > = {
   'gemini-4-pro': { promptCostPer1k: 0.00125, completionCostPer1k: 0.005 },
+  'gemini-4-argon': { promptCostPer1k: 0.0005, completionCostPer1k: 0.002 },
   'gemini-4-flash': { promptCostPer1k: 0.000075, completionCostPer1k: 0.0003 },
   'gemini-3.8-flash': {
     promptCostPer1k: 0.000075,
@@ -126,6 +133,11 @@ export interface GeminiProviderConfig extends ProviderConfig {
   cachedContent?: string;
   googleSearch?: boolean;
   codeExecution?: boolean;
+  /**
+   * Automatically append 'gemini-3.8-flash' fallback when using Gemini 4 frontier models
+   * ('gemini-4-pro' or 'gemini-4-argon') to satisfy the Availability Fallback Invariant.
+   */
+  enableAvailabilityFallback?: boolean;
 }
 
 export class GeminiProvider implements Provider {
@@ -169,7 +181,21 @@ export class GeminiProvider implements Provider {
   }
 
   get fallbackModels(): string[] | undefined {
-    return this.config.fallbackModels;
+    if (this.config.fallbackModels) {
+      return this.config.fallbackModels;
+    }
+    if (this.config.enableAvailabilityFallback) {
+      const target = this.defaultModel || 'gemini-4-pro';
+      return GEMINI_AVAILABILITY_FALLBACKS[target] || [GEMINI_MODELS.FLASH_3_8];
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns the canonical availability fallback models for a given Gemini frontier model.
+   */
+  public static getAvailabilityFallbacks(model: string): string[] {
+    return GEMINI_AVAILABILITY_FALLBACKS[model] || [];
   }
 
   get defaultModel(): string | undefined {
@@ -745,8 +771,7 @@ export class GeminiProvider implements Provider {
 
     const isBatch = Array.isArray(request.input);
     const endpoint = isBatch ? 'batchEmbedContents' : 'embedContent';
-    const keyParam = this.config.apiKey ? `?key=${this.config.apiKey}` : '';
-    const url = `${baseUrl}/models/${targetModel}:${endpoint}${keyParam}`;
+    const url = `${baseUrl}/models/${targetModel}:${endpoint}`;
 
     // biome-ignore lint/suspicious/noExplicitAny: gemini embedding payload
     let bodyPayload: any;
@@ -773,55 +798,69 @@ export class GeminiProvider implements Provider {
       }
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': this.config.apiKey || '',
-      },
-      body: JSON.stringify(bodyPayload),
-      signal: request.signal,
-    });
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      const err = new Error(
-        `Gemini Embedding API Error (${response.status}): ${errorText}`,
-      ) as Error & { status?: number };
-      err.status = response.status;
-      throw err;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: response json
-    const data = (await response.json()) as any;
-    const embeddingsList = isBatch
-      ? (data.embeddings || []).map(
-          // biome-ignore lint/suspicious/noExplicitAny: embedding item
-          (e: any, idx: number) => ({
-            index: idx,
-            embedding: e.values || [],
-            object: 'embedding' as const,
-          }),
-        )
-      : [
-          {
-            index: 0,
-            embedding: data.embedding?.values || [],
-            object: 'embedding' as const,
-          },
-        ];
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
 
-    return {
-      object: 'list',
-      data: embeddingsList,
-      model: targetModel,
-      usage: data.usageMetadata
-        ? {
-            promptTokens: data.usageMetadata.promptTokenCount || 0,
-            totalTokens: data.usageMetadata.totalTokenCount || 0,
-          }
-        : undefined,
-    };
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': this.config.apiKey || '',
+        },
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Gemini Embedding API Error (${response.status}): ${errorText}`,
+        ) as Error & { status?: number };
+        err.status = response.status;
+        throw err;
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: response json
+      const data = (await response.json()) as any;
+      const embeddingsList = isBatch
+        ? (data.embeddings || []).map(
+            // biome-ignore lint/suspicious/noExplicitAny: embedding item
+            (e: any, idx: number) => ({
+              index: idx,
+              embedding: e.values || [],
+              object: 'embedding' as const,
+            }),
+          )
+        : [
+            {
+              index: 0,
+              embedding: data.embedding?.values || [],
+              object: 'embedding' as const,
+            },
+          ];
+
+      return {
+        object: 'list',
+        data: embeddingsList,
+        model: targetModel,
+        usage: data.usageMetadata
+          ? {
+              promptTokens: data.usageMetadata.promptTokenCount || 0,
+              totalTokens: data.usageMetadata.totalTokenCount || 0,
+            }
+          : undefined,
+      };
+    } finally {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   }
 
   static async fetchAvailableModels(options: {

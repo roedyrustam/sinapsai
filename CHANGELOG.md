@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.8.1] - 2026-10-23
+### Added
+- **Gemini 4 Argon & Availability Fallback Invariant (`GEMINI_MODELS.ARGON_4`, `GEMINI_AVAILABILITY_FALLBACKS`)**:
+  - Added canonical `GEMINI_MODELS.ARGON_4` (`'gemini-4-argon'`) and `GEMINI_MODELS.FLASH_3_8` (`'gemini-3.8-flash'`) constants with built-in 2026 pricing in `GEMINI_DEFAULT_PRICING`.
+  - Added automatic availability fallback matrix (`GEMINI_AVAILABILITY_FALLBACKS`) and `enableAvailabilityFallback` option in `GeminiProvider`, degrading `gemini-4-argon`, `gemini-4-pro`, and `gemini-4-flash` seamlessly to `gemini-3.8-flash` (and `gemini-2.0-flash`) when unprovisioned or rate-limited.
+- **Provider Attribution on Streaming Chunks (`chunk.provider`)**:
+  - Enriched `UnifiedApiStreamChunk` with optional `provider?: string` property so streaming consumers and rate limiters know the exact provider ID serving each stream chunk.
+### Fixed
+- **Gemini Frontier Options Forwarding (`SinapsClient` & Vercel AI SDK Adapter)**:
+  - Forwarded `cachedContent`, `googleSearch`, and `codeExecution` through `SinapsClient.chat.completions.create()` and `SinapsModelSettings` (`SinapsLanguageModel`) so native Google Context Caching, Live Search Grounding, and Python Code Execution Sandbox work end-to-end.
+- **Multimodal Prompt Injection Inspection (`SecurityGuardrails.scanMessages`)**:
+  - Extended `SecurityGuardrails` to inspect and sanitize text parts inside multimodal `ContentPart[]` arrays, closing a security bypass where prompt injections or custom blocked patterns embedded in multimodal messages could evade detection.
+- **Collision-Resistant 64-Bit Cache Keys (`Router.computeCacheKey`, `Router.computeEmbeddingCacheKey`)**:
+  - Upgraded exact cache hashing from 32-bit DJB2 to a 64-bit dual-hash (`hashString64`) and included `tools`, `toolChoice`, `responseFormat`, `thinkingBudget`, `reasoningEffort`, `cachedContent`, `googleSearch`, and `codeExecution` in `computeCacheKey` (plus `dimensions` in `computeEmbeddingCacheKey`) to prevent cross-configuration cache collisions.
+- **Provider-Scoped Rate Limiting & Streaming Token Balancing (`GatewayRateLimiter`, `SinapsClient`)**:
+  - Added `Router.getPrimaryCandidateProviderId()` and prefix-aware `GatewayRateLimiter.matchProviderRule()` (e.g., matching `'groq'` against auto-generated `'groq-xxx'` provider IDs) so `providerRules` enforce and adjust tokens accurately across both non-streaming and streaming completions.
+- **Gemini Embedding API Key Security & Timeout (`GeminiProvider.generateEmbedding`)**:
+  - Removed API key leakage from the query string (`?key=...`) in `GeminiProvider.generateEmbedding`, sending credentials exclusively via the `x-goog-api-key` HTTP header, and added `AbortController` timeout enforcement (`timeoutMs`) with `linkAbortSignal` cleanup.
+
 ## [2.8.0] - 2026-10-20
 ### Added
 - **In-Process Model Context Protocol (MCP) Tool Bridge (`McpToolBridge`)**:

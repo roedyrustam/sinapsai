@@ -136,6 +136,10 @@ export interface ApiUsage {
 export interface UnifiedApiStreamChunk {
     id: string;
     model: string;
+    /**
+     * Identifier of the provider emitting the stream chunk.
+     */
+    provider?: string;
     choices: Array<{
         delta: {
             role?: 'assistant';
@@ -536,7 +540,7 @@ export interface OtelExportOptions {
      */
     serviceName?: string;
     /**
-     * Service version reported in resource attributes (default: '2.8.0').
+     * Service version reported in resource attributes (default: '2.8.1').
      */
     serviceVersion?: string;
     /**

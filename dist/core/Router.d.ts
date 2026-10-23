@@ -44,6 +44,10 @@ export declare class Router {
     constructor(providers: Provider[], circuitBreaker: CircuitBreaker, options?: RouterOptions);
     getProviderById(id: string): Provider | undefined;
     getProviders(): Provider[];
+    /**
+     * Returns the primary candidate provider ID according to the configured routing strategy.
+     */
+    getPrimaryCandidateProviderId(request?: UnifiedApiRequest): string | undefined;
     getHedgedExecutor(): HedgedExecutor | undefined;
     getMetrics(): SinapsMetrics;
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
@@ -59,6 +63,7 @@ export declare class Router {
     private checkBudget;
     private estimateRequestCost;
     calculateAdaptiveScore(provider: Provider, request?: UnifiedApiRequest): number;
+    private hashString64;
     private computeCacheKey;
     private isRetryableError;
     private getCandidateModels;

@@ -136,6 +136,48 @@ export class Router {
     return [...this.providers];
   }
 
+  /**
+   * Returns the primary candidate provider ID according to the configured routing strategy.
+   */
+  public getPrimaryCandidateProviderId(
+    request?: UnifiedApiRequest,
+  ): string | undefined {
+    if (this.providers.length === 0) return undefined;
+    if (this.strategy === 'load-balance') {
+      return this.providers[this.currentProviderIndex % this.providers.length]
+        ?.id;
+    }
+    if (this.strategy === 'lowest-cost' && request) {
+      const sorted = [...this.providers].sort(
+        (a, b) =>
+          this.estimateRequestCost(a, request) -
+          this.estimateRequestCost(b, request),
+      );
+      return sorted[0]?.id;
+    }
+    if (this.strategy === 'lowest-latency') {
+      const sorted = [...this.providers].sort((a, b) => {
+        const reqA = this.metrics.providerMetrics[a.id]?.requests ?? 0;
+        const reqB = this.metrics.providerMetrics[b.id]?.requests ?? 0;
+        if (reqA === 0 && reqB > 0) return -1;
+        if (reqB === 0 && reqA > 0) return 1;
+        const latA = this.metrics.providerMetrics[a.id]?.averageLatencyMs ?? 0;
+        const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
+        return latA - latB;
+      });
+      return sorted[0]?.id;
+    }
+    if (this.strategy === 'adaptive' || this.strategy === 'smart-hybrid') {
+      const sorted = [...this.providers].sort(
+        (a, b) =>
+          this.calculateAdaptiveScore(b, request) -
+          this.calculateAdaptiveScore(a, request),
+      );
+      return sorted[0]?.id;
+    }
+    return this.providers[0]?.id;
+  }
+
   public getHedgedExecutor(): HedgedExecutor | undefined {
     return this.hedgedExecutor;
   }
@@ -413,7 +455,8 @@ export class Router {
     const successRate = (pm.successes + 1) / (pm.requests + 2);
 
     // 2. Latency score (faster = higher score, clamped to min 30ms)
-    const rawLatency = pm.averageLatencyMs !== undefined ? pm.averageLatencyMs : 200;
+    const rawLatency =
+      pm.averageLatencyMs !== undefined ? pm.averageLatencyMs : 200;
     const avgLatency = Math.max(30, rawLatency);
     const latencyScore = 1000 / avgLatency;
 
@@ -431,18 +474,42 @@ export class Router {
     return successRate ** 2 * latencyScore * costFactor * 100;
   }
 
+  private hashString64(raw: string): string {
+    let h1 = 0xdeadbeef ^ raw.length;
+    let h2 = 0x41c6ce57 ^ raw.length;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 =
+      Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+      Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 =
+      Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+      Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (
+      (h2 >>> 0).toString(16).padStart(8, '0') +
+      (h1 >>> 0).toString(16).padStart(8, '0')
+    );
+  }
+
   private computeCacheKey(request: UnifiedApiRequest): string {
     const raw = JSON.stringify({
       m: request.model,
       msgs: request.messages,
       t: request.temperature,
       max: request.maxTokens,
+      tools: request.tools,
+      tc: request.toolChoice,
+      rf: request.responseFormat,
+      tb: request.thinkingBudget,
+      re: request.reasoningEffort,
+      cc: request.cachedContent,
+      gs: request.googleSearch,
+      ce: request.codeExecution,
     });
-    let hash = 5381;
-    for (let i = 0; i < raw.length; i++) {
-      hash = (hash * 33) ^ raw.charCodeAt(i);
-    }
-    return `cache:${request.model}:${(hash >>> 0).toString(16)}`;
+    return `cache:${request.model}:${this.hashString64(raw)}`;
   }
 
   private isRetryableError(error: Error): boolean {
@@ -799,7 +866,10 @@ export class Router {
                           chunk.usage.cachedPromptTokens ||
                           collectedCachedPromptTokens;
                       }
-                      yield chunk;
+                      yield {
+                        ...chunk,
+                        provider: provider.id,
+                      };
                     }
                     const totalLatencyMs = Date.now() - startTime;
                     const ttftMs = firstChunkTime
@@ -1188,12 +1258,9 @@ export class Router {
     const raw = JSON.stringify({
       m: request.model,
       inp: request.input,
+      dim: request.dimensions,
     });
-    let hash = 5381;
-    for (let i = 0; i < raw.length; i++) {
-      hash = (hash * 33) ^ raw.charCodeAt(i);
-    }
-    return `cache:emb:${request.model}:${(hash >>> 0).toString(16)}`;
+    return `cache:emb:${request.model}:${this.hashString64(raw)}`;
   }
 
   async executeEmbedding(

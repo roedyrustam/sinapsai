@@ -1162,7 +1162,7 @@ const prometheusMetrics = client.exportPrometheusMetrics({
 // 2. Export in standard OpenTelemetry (OTLP v1 JSON) ResourceMetrics format (or client.toOtelMetrics())
 const otelMetrics = client.exportOtelMetrics({
   serviceName: 'my-ai-gateway',
-  serviceVersion: '2.8.0',
+  serviceVersion: '2.8.1',
 });
 // Send directly to any OTLP/HTTP /v1/metrics collector endpoint via fetch
 ```

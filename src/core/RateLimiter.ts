@@ -57,6 +57,30 @@ export class GatewayRateLimiter {
   }
 
   /**
+   * Matches a providerId against configured providerRules (supporting exact id or prefix match like 'groq-123' -> 'groq').
+   */
+  private matchProviderRule(providerId?: string): {
+    key: string;
+    rule: GatewayRateLimitRule;
+  } | null {
+    if (!providerId || !this.options.providerRules) return null;
+    if (this.options.providerRules[providerId]) {
+      return {
+        key: providerId,
+        rule: this.options.providerRules[providerId],
+      };
+    }
+    const lowerId = providerId.toLowerCase();
+    for (const [ruleKey, rule] of Object.entries(this.options.providerRules)) {
+      const lowerKey = ruleKey.toLowerCase();
+      if (lowerId === lowerKey || lowerId.startsWith(`${lowerKey}-`)) {
+        return { key: ruleKey, rule };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Resolves the matching rate limit rule for a request based on:
    * 1. Model-specific rule (options.modelRules[model])
    * 2. Provider-specific rule (options.providerRules[providerId])
@@ -69,8 +93,9 @@ export class GatewayRateLimiter {
     if (model && this.options.modelRules?.[model]) {
       return this.options.modelRules[model];
     }
-    if (providerId && this.options.providerRules?.[providerId]) {
-      return this.options.providerRules[providerId];
+    const matchedProvider = this.matchProviderRule(providerId);
+    if (matchedProvider) {
+      return matchedProvider.rule;
     }
     return this.options.defaultRule;
   }
@@ -128,11 +153,11 @@ export class GatewayRateLimiter {
     const retryAfterSec = Math.max(1, Math.ceil(resetMs / 1000));
 
     const baseKey = this.getKey(request);
+    const matchedProvider = this.matchProviderRule(checkOptions?.providerId);
     const scope: 'global' | 'user' | 'model' | 'provider' = this.options
       .modelRules?.[request.model]
       ? 'model'
-      : checkOptions?.providerId &&
-          this.options.providerRules?.[checkOptions.providerId]
+      : matchedProvider
         ? 'provider'
         : baseKey.startsWith('user:')
           ? 'user'
@@ -141,8 +166,8 @@ export class GatewayRateLimiter {
     const scopeKey =
       scope === 'model'
         ? `${baseKey}:m:${request.model}`
-        : scope === 'provider' && checkOptions?.providerId
-          ? `${baseKey}:p:${checkOptions.providerId}`
+        : scope === 'provider' && matchedProvider
+          ? `${baseKey}:p:${matchedProvider.key}`
           : baseKey;
 
     // 1. Check Requests Limit (RPM)
@@ -167,7 +192,7 @@ export class GatewayRateLimiter {
           resetMs,
           retryAfterSec,
           model: request.model,
-          providerId: checkOptions?.providerId,
+          providerId: matchedProvider?.key ?? checkOptions?.providerId,
         };
 
         this.options.onRateLimitExceeded?.(violation);
@@ -204,7 +229,7 @@ export class GatewayRateLimiter {
           resetMs,
           retryAfterSec,
           model: request.model,
-          providerId: checkOptions?.providerId,
+          providerId: matchedProvider?.key ?? checkOptions?.providerId,
         };
 
         this.options.onRateLimitExceeded?.(violation);
@@ -271,10 +296,11 @@ export class GatewayRateLimiter {
     if (!rule || rule.tokensPerMinute === undefined) return;
 
     const baseKey = this.getKey(request);
+    const matchedProvider = this.matchProviderRule(providerId);
     const scope: 'global' | 'user' | 'model' | 'provider' = this.options
       .modelRules?.[request.model]
       ? 'model'
-      : providerId && this.options.providerRules?.[providerId]
+      : matchedProvider
         ? 'provider'
         : baseKey.startsWith('user:')
           ? 'user'
@@ -283,8 +309,8 @@ export class GatewayRateLimiter {
     const scopeKey =
       scope === 'model'
         ? `${baseKey}:m:${request.model}`
-        : scope === 'provider' && providerId
-          ? `${baseKey}:p:${providerId}`
+        : scope === 'provider' && matchedProvider
+          ? `${baseKey}:p:${matchedProvider.key}`
           : baseKey;
 
     const windowMs = rule.windowMs || 60000;

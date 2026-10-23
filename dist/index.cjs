@@ -1108,7 +1108,7 @@ var McpToolBridge = class _McpToolBridge {
             },
             serverInfo: {
               name: "sinapsai-mcp",
-              version: "2.8.0"
+              version: "2.8.1"
             }
           }
         };
@@ -1490,6 +1490,26 @@ var GatewayRateLimiter = class {
     this.action = options.action || "block";
   }
   /**
+   * Matches a providerId against configured providerRules (supporting exact id or prefix match like 'groq-123' -> 'groq').
+   */
+  matchProviderRule(providerId) {
+    if (!providerId || !this.options.providerRules) return null;
+    if (this.options.providerRules[providerId]) {
+      return {
+        key: providerId,
+        rule: this.options.providerRules[providerId]
+      };
+    }
+    const lowerId = providerId.toLowerCase();
+    for (const [ruleKey, rule] of Object.entries(this.options.providerRules)) {
+      const lowerKey = ruleKey.toLowerCase();
+      if (lowerId === lowerKey || lowerId.startsWith(`${lowerKey}-`)) {
+        return { key: ruleKey, rule };
+      }
+    }
+    return null;
+  }
+  /**
    * Resolves the matching rate limit rule for a request based on:
    * 1. Model-specific rule (options.modelRules[model])
    * 2. Provider-specific rule (options.providerRules[providerId])
@@ -1499,8 +1519,9 @@ var GatewayRateLimiter = class {
     if (model && this.options.modelRules?.[model]) {
       return this.options.modelRules[model];
     }
-    if (providerId && this.options.providerRules?.[providerId]) {
-      return this.options.providerRules[providerId];
+    const matchedProvider = this.matchProviderRule(providerId);
+    if (matchedProvider) {
+      return matchedProvider.rule;
     }
     return this.options.defaultRule;
   }
@@ -1546,8 +1567,9 @@ var GatewayRateLimiter = class {
     const resetMs = Math.max(0, windowMs - elapsedInWindow);
     const retryAfterSec = Math.max(1, Math.ceil(resetMs / 1e3));
     const baseKey = this.getKey(request);
-    const scope = this.options.modelRules?.[request.model] ? "model" : checkOptions?.providerId && this.options.providerRules?.[checkOptions.providerId] ? "provider" : baseKey.startsWith("user:") ? "user" : "global";
-    const scopeKey = scope === "model" ? `${baseKey}:m:${request.model}` : scope === "provider" && checkOptions?.providerId ? `${baseKey}:p:${checkOptions.providerId}` : baseKey;
+    const matchedProvider = this.matchProviderRule(checkOptions?.providerId);
+    const scope = this.options.modelRules?.[request.model] ? "model" : matchedProvider ? "provider" : baseKey.startsWith("user:") ? "user" : "global";
+    const scopeKey = scope === "model" ? `${baseKey}:m:${request.model}` : scope === "provider" && matchedProvider ? `${baseKey}:p:${matchedProvider.key}` : baseKey;
     let currReqCount = 0;
     let estimatedReqs = 0;
     const reqKeyCurrent = `gw:rl:req:${scopeKey}:${currentWindowId}`;
@@ -1567,7 +1589,7 @@ var GatewayRateLimiter = class {
           resetMs,
           retryAfterSec,
           model: request.model,
-          providerId: checkOptions?.providerId
+          providerId: matchedProvider?.key ?? checkOptions?.providerId
         };
         this.options.onRateLimitExceeded?.(violation);
         return {
@@ -1598,7 +1620,7 @@ var GatewayRateLimiter = class {
           resetMs,
           retryAfterSec,
           model: request.model,
-          providerId: checkOptions?.providerId
+          providerId: matchedProvider?.key ?? checkOptions?.providerId
         };
         this.options.onRateLimitExceeded?.(violation);
         return {
@@ -1642,8 +1664,9 @@ var GatewayRateLimiter = class {
     const rule = this.resolveRule(request.model, providerId);
     if (!rule || rule.tokensPerMinute === void 0) return;
     const baseKey = this.getKey(request);
-    const scope = this.options.modelRules?.[request.model] ? "model" : providerId && this.options.providerRules?.[providerId] ? "provider" : baseKey.startsWith("user:") ? "user" : "global";
-    const scopeKey = scope === "model" ? `${baseKey}:m:${request.model}` : scope === "provider" && providerId ? `${baseKey}:p:${providerId}` : baseKey;
+    const matchedProvider = this.matchProviderRule(providerId);
+    const scope = this.options.modelRules?.[request.model] ? "model" : matchedProvider ? "provider" : baseKey.startsWith("user:") ? "user" : "global";
+    const scopeKey = scope === "model" ? `${baseKey}:m:${request.model}` : scope === "provider" && matchedProvider ? `${baseKey}:p:${matchedProvider.key}` : baseKey;
     const windowMs = rule.windowMs || 6e4;
     const currentWindowId = Math.floor(Date.now() / windowMs);
     const tokKeyCurrent = `gw:rl:tok:${scopeKey}:${currentWindowId}`;
@@ -1766,7 +1789,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.8.0";
+  const serviceVersion = options.serviceVersion || "2.8.1";
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
@@ -2140,6 +2163,40 @@ var Router = class {
   getProviders() {
     return [...this.providers];
   }
+  /**
+   * Returns the primary candidate provider ID according to the configured routing strategy.
+   */
+  getPrimaryCandidateProviderId(request) {
+    if (this.providers.length === 0) return void 0;
+    if (this.strategy === "load-balance") {
+      return this.providers[this.currentProviderIndex % this.providers.length]?.id;
+    }
+    if (this.strategy === "lowest-cost" && request) {
+      const sorted = [...this.providers].sort(
+        (a, b) => this.estimateRequestCost(a, request) - this.estimateRequestCost(b, request)
+      );
+      return sorted[0]?.id;
+    }
+    if (this.strategy === "lowest-latency") {
+      const sorted = [...this.providers].sort((a, b) => {
+        const reqA = this.metrics.providerMetrics[a.id]?.requests ?? 0;
+        const reqB = this.metrics.providerMetrics[b.id]?.requests ?? 0;
+        if (reqA === 0 && reqB > 0) return -1;
+        if (reqB === 0 && reqA > 0) return 1;
+        const latA = this.metrics.providerMetrics[a.id]?.averageLatencyMs ?? 0;
+        const latB = this.metrics.providerMetrics[b.id]?.averageLatencyMs ?? 0;
+        return latA - latB;
+      });
+      return sorted[0]?.id;
+    }
+    if (this.strategy === "adaptive" || this.strategy === "smart-hybrid") {
+      const sorted = [...this.providers].sort(
+        (a, b) => this.calculateAdaptiveScore(b, request) - this.calculateAdaptiveScore(a, request)
+      );
+      return sorted[0]?.id;
+    }
+    return this.providers[0]?.id;
+  }
   getHedgedExecutor() {
     return this.hedgedExecutor;
   }
@@ -2357,18 +2414,34 @@ var Router = class {
     }
     return successRate ** 2 * latencyScore * costFactor * 100;
   }
+  hashString64(raw) {
+    let h1 = 3735928559 ^ raw.length;
+    let h2 = 1103547991 ^ raw.length;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507) ^ Math.imul(h2 ^ h2 >>> 13, 3266489909);
+    h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507) ^ Math.imul(h1 ^ h1 >>> 13, 3266489909);
+    return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+  }
   computeCacheKey(request) {
     const raw = JSON.stringify({
       m: request.model,
       msgs: request.messages,
       t: request.temperature,
-      max: request.maxTokens
+      max: request.maxTokens,
+      tools: request.tools,
+      tc: request.toolChoice,
+      rf: request.responseFormat,
+      tb: request.thinkingBudget,
+      re: request.reasoningEffort,
+      cc: request.cachedContent,
+      gs: request.googleSearch,
+      ce: request.codeExecution
     });
-    let hash = 5381;
-    for (let i = 0; i < raw.length; i++) {
-      hash = hash * 33 ^ raw.charCodeAt(i);
-    }
-    return `cache:${request.model}:${(hash >>> 0).toString(16)}`;
+    return `cache:${request.model}:${this.hashString64(raw)}`;
   }
   isRetryableError(error) {
     const status = error.status;
@@ -2640,7 +2713,10 @@ var Router = class {
                         collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
                         collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
                       }
-                      yield chunk;
+                      yield {
+                        ...chunk,
+                        provider: provider.id
+                      };
                     }
                     const totalLatencyMs = Date.now() - startTime;
                     const ttftMs = firstChunkTime ? firstChunkTime - startTime : totalLatencyMs;
@@ -2909,13 +2985,10 @@ var Router = class {
   computeEmbeddingCacheKey(request) {
     const raw = JSON.stringify({
       m: request.model,
-      inp: request.input
+      inp: request.input,
+      dim: request.dimensions
     });
-    let hash = 5381;
-    for (let i = 0; i < raw.length; i++) {
-      hash = hash * 33 ^ raw.charCodeAt(i);
-    }
-    return `cache:emb:${request.model}:${(hash >>> 0).toString(16)}`;
+    return `cache:emb:${request.model}:${this.hashString64(raw)}`;
   }
   async executeEmbedding(request) {
     this.checkBudget();
@@ -3291,6 +3364,28 @@ var SecurityGuardrails = class {
           ...msg,
           content: this.action === "sanitize" ? scanResult.sanitizedText : msg.content
         });
+      } else if (Array.isArray(msg.content)) {
+        const updatedParts = msg.content.map((part) => {
+          if (part.type === "text" && typeof part.text === "string") {
+            const scanResult = this.scan(part.text);
+            if (!scanResult.safe) {
+              for (const v of scanResult.violations) {
+                allViolations.push({ ...v, messageIndex: i });
+              }
+            }
+            if (this.action === "sanitize") {
+              return {
+                ...part,
+                text: scanResult.sanitizedText
+              };
+            }
+          }
+          return part;
+        });
+        updatedMessages.push({
+          ...msg,
+          content: updatedParts
+        });
       } else {
         updatedMessages.push(msg);
       }
@@ -3434,13 +3529,19 @@ var SinapsClient = class {
           fallbackModels: request.fallbackModels,
           thinkingBudget: request.thinkingBudget,
           reasoningEffort: request.reasoningEffort,
+          cachedContent: request.cachedContent,
+          googleSearch: request.googleSearch,
+          codeExecution: request.codeExecution,
           user: request.user
         };
         let estimatedTokens = 0;
+        let candidateProviderId;
         if (this.rateLimiter) {
+          candidateProviderId = this.router.getPrimaryCandidateProviderId(fullReq);
           estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
           const check = await this.rateLimiter.check(fullReq, {
-            estimatedTokens
+            estimatedTokens,
+            providerId: candidateProviderId
           });
           if (!check.allowed && check.violation) {
             this.hooks?.onGatewayRateLimitWarning?.(check.violation);
@@ -3459,7 +3560,7 @@ var SinapsClient = class {
             fullReq,
             actualTokens,
             estimatedTokens,
-            res.provider
+            res.provider || candidateProviderId
           );
         }
         if (this.rateLimiter && request.stream) {
@@ -3467,8 +3568,12 @@ var SinapsClient = class {
           const stream = res;
           return (async function* () {
             let actualStreamTokens;
+            let streamProviderId = candidateProviderId;
             try {
               for await (const chunk of stream) {
+                if (chunk.provider) {
+                  streamProviderId = chunk.provider;
+                }
                 if (chunk.usage) {
                   const calculated = chunk.usage.totalTokens ?? (chunk.usage.promptTokens || 0) + (chunk.usage.completionTokens || 0);
                   actualStreamTokens = calculated > 0 ? calculated : void 0;
@@ -3480,7 +3585,8 @@ var SinapsClient = class {
                 await limiter.adjustTokens(
                   fullReq,
                   actualStreamTokens,
-                  estimatedTokens
+                  estimatedTokens,
+                  streamProviderId
                 );
               }
             }
@@ -3553,12 +3659,14 @@ var SinapsClient = class {
           messages: [],
           user: request.user
         };
+        const candidateProviderId = this.router.getPrimaryCandidateProviderId(dummyReq);
         const inputTokens = Array.isArray(request.input) ? request.input.reduce(
           (acc, str) => acc + Math.ceil(str.length / 4),
           0
         ) : Math.ceil(request.input.length / 4);
         const check = await this.rateLimiter.check(dummyReq, {
-          estimatedTokens: inputTokens
+          estimatedTokens: inputTokens,
+          providerId: candidateProviderId
         });
         if (!check.allowed && check.violation) {
           this.hooks?.onGatewayRateLimitWarning?.(check.violation);
@@ -3988,6 +4096,10 @@ var SinapsLanguageModel = class {
       fallbackModels: this.settings?.fallbackModels,
       thinkingBudget: this.settings?.thinkingBudget,
       reasoningEffort: this.settings?.reasoningEffort,
+      cachedContent: this.settings?.cachedContent,
+      googleSearch: this.settings?.googleSearch,
+      codeExecution: this.settings?.codeExecution,
+      user: this.settings?.user,
       signal: options.abortSignal
     };
     const response = await this.client.chat.completions.create(
@@ -4039,6 +4151,10 @@ var SinapsLanguageModel = class {
       fallbackModels: this.settings?.fallbackModels,
       thinkingBudget: this.settings?.thinkingBudget,
       reasoningEffort: this.settings?.reasoningEffort,
+      cachedContent: this.settings?.cachedContent,
+      googleSearch: this.settings?.googleSearch,
+      codeExecution: this.settings?.codeExecution,
+      user: this.settings?.user,
       signal: options.abortSignal
     };
     const client = this.client;
@@ -5603,6 +5719,7 @@ var DeepSeekProvider = class {
 init_stream();
 var GEMINI_MODELS = {
   PRO_4: "gemini-4-pro",
+  ARGON_4: "gemini-4-argon",
   FLASH_4: "gemini-4-flash",
   PROJECT_ASTRA: "gemini-4-flash",
   FLASH_3_8: "gemini-3.8-flash",
@@ -5622,8 +5739,13 @@ var GEMINI_MODELS = {
   EMBEDDING_2: "gemini-embedding-2",
   TEXT_EMBEDDING_004: "text-embedding-004"
 };
+var GEMINI_AVAILABILITY_FALLBACKS = {
+  "gemini-4-pro": ["gemini-3.8-flash"],
+  "gemini-4-argon": ["gemini-3.8-flash"]
+};
 var GEMINI_DEFAULT_PRICING = {
   "gemini-4-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "gemini-4-argon": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
   "gemini-4-flash": { promptCostPer1k: 75e-6, completionCostPer1k: 3e-4 },
   "gemini-3.8-flash": {
     promptCostPer1k: 75e-6,
@@ -5700,7 +5822,20 @@ var GeminiProvider = class {
     return this.config.retryDelayMs;
   }
   get fallbackModels() {
-    return this.config.fallbackModels;
+    if (this.config.fallbackModels) {
+      return this.config.fallbackModels;
+    }
+    if (this.config.enableAvailabilityFallback) {
+      const target = this.defaultModel || "gemini-4-pro";
+      return GEMINI_AVAILABILITY_FALLBACKS[target] || [GEMINI_MODELS.FLASH_3_8];
+    }
+    return void 0;
+  }
+  /**
+   * Returns the canonical availability fallback models for a given Gemini frontier model.
+   */
+  static getAvailabilityFallbacks(model) {
+    return GEMINI_AVAILABILITY_FALLBACKS[model] || [];
   }
   get defaultModel() {
     return this.config.defaultModel;
@@ -6201,8 +6336,7 @@ ${part.codeExecutionResult.output || ""}
     const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
     const isBatch = Array.isArray(request.input);
     const endpoint = isBatch ? "batchEmbedContents" : "embedContent";
-    const keyParam = this.config.apiKey ? `?key=${this.config.apiKey}` : "";
-    const url = `${baseUrl}/models/${targetModel}:${endpoint}${keyParam}`;
+    const url = `${baseUrl}/models/${targetModel}:${endpoint}`;
     let bodyPayload;
     if (isBatch) {
       bodyPayload = {
@@ -6225,47 +6359,58 @@ ${part.codeExecutionResult.output || ""}
         bodyPayload.outputDimensionality = request.dimensions;
       }
     }
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": this.config.apiKey || ""
-      },
-      body: JSON.stringify(bodyPayload),
-      signal: request.signal
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      const err = new Error(
-        `Gemini Embedding API Error (${response.status}): ${errorText}`
-      );
-      err.status = response.status;
-      throw err;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
     }
-    const data = await response.json();
-    const embeddingsList = isBatch ? (data.embeddings || []).map(
-      // biome-ignore lint/suspicious/noExplicitAny: embedding item
-      (e, idx) => ({
-        index: idx,
-        embedding: e.values || [],
-        object: "embedding"
-      })
-    ) : [
-      {
-        index: 0,
-        embedding: data.embedding?.values || [],
-        object: "embedding"
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.config.apiKey || ""
+        },
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Gemini Embedding API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
       }
-    ];
-    return {
-      object: "list",
-      data: embeddingsList,
-      model: targetModel,
-      usage: data.usageMetadata ? {
-        promptTokens: data.usageMetadata.promptTokenCount || 0,
-        totalTokens: data.usageMetadata.totalTokenCount || 0
-      } : void 0
-    };
+      const data = await response.json();
+      const embeddingsList = isBatch ? (data.embeddings || []).map(
+        // biome-ignore lint/suspicious/noExplicitAny: embedding item
+        (e, idx) => ({
+          index: idx,
+          embedding: e.values || [],
+          object: "embedding"
+        })
+      ) : [
+        {
+          index: 0,
+          embedding: data.embedding?.values || [],
+          object: "embedding"
+        }
+      ];
+      return {
+        object: "list",
+        data: embeddingsList,
+        model: targetModel,
+        usage: data.usageMetadata ? {
+          promptTokens: data.usageMetadata.promptTokenCount || 0,
+          totalTokens: data.usageMetadata.totalTokenCount || 0
+        } : void 0
+      };
+    } finally {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   }
   static async fetchAvailableModels(options) {
     const baseUrl = options.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
@@ -8048,6 +8193,7 @@ exports.CohereProvider = CohereProvider;
 exports.ContextCompressor = ContextCompressor;
 exports.D1Storage = D1Storage;
 exports.DeepSeekProvider = DeepSeekProvider;
+exports.GEMINI_AVAILABILITY_FALLBACKS = GEMINI_AVAILABILITY_FALLBACKS;
 exports.GEMINI_DEFAULT_PRICING = GEMINI_DEFAULT_PRICING;
 exports.GEMINI_MODELS = GEMINI_MODELS;
 exports.GatewayRateLimitError = GatewayRateLimitError;

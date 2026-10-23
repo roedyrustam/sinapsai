@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
       - name: Build Distribution Bundle
         run: npm run build
 
-      - name: Publish to NPM if Version Bumped
+      - name: Publish to NPM & Create GitHub Release if Version Bumped
         run: |
           if [ -n "$NODE_AUTH_TOKEN" ]; then
             echo "🔐 Menggunakan autentikasi NPM Token..."
@@ -58,6 +58,13 @@ jobs:
           else
             echo "ℹ️ Version $CURRENT_VERSION is already published on NPM. Skipping publish."
           fi
+
+          if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
+            echo "🏷️ Creating GitHub Release v$CURRENT_VERSION..."
+            gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 

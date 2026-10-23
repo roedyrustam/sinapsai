@@ -247,6 +247,10 @@ export interface SinapsModelSettings {
   fallbackModels?: string[];
   thinkingBudget?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
+  cachedContent?: string;
+  googleSearch?: boolean;
+  codeExecution?: boolean;
+  user?: string;
 }
 
 export interface SinapsEmbeddingSettings {

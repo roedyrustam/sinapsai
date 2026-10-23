@@ -8,6 +8,7 @@ import type { CachedContentInfo, CreateCachedContentOptions, CreateEmbeddingRequ
 import type { Provider } from './Provider.js';
 export declare const GEMINI_MODELS: {
     readonly PRO_4: 'gemini-4-pro';
+    readonly ARGON_4: 'gemini-4-argon';
     readonly FLASH_4: 'gemini-4-flash';
     readonly PROJECT_ASTRA: 'gemini-4-flash';
     readonly FLASH_3_8: 'gemini-3.8-flash';
@@ -27,6 +28,7 @@ export declare const GEMINI_MODELS: {
     readonly EMBEDDING_2: 'gemini-embedding-2';
     readonly TEXT_EMBEDDING_004: 'text-embedding-004';
 };
+export declare const GEMINI_AVAILABILITY_FALLBACKS: Record<string, string[]>;
 export declare const GEMINI_DEFAULT_PRICING: Record<string, {
     promptCostPer1k: number;
     completionCostPer1k: number;
@@ -49,6 +51,11 @@ export interface GeminiProviderConfig extends ProviderConfig {
     cachedContent?: string;
     googleSearch?: boolean;
     codeExecution?: boolean;
+    /**
+     * Automatically append 'gemini-3.8-flash' fallback when using Gemini 4 frontier models
+     * ('gemini-4-pro' or 'gemini-4-argon') to satisfy the Availability Fallback Invariant.
+     */
+    enableAvailabilityFallback?: boolean;
 }
 export declare class GeminiProvider implements Provider {
     id: string;
@@ -61,6 +68,10 @@ export declare class GeminiProvider implements Provider {
     get retries(): number | undefined;
     get retryDelayMs(): number | undefined;
     get fallbackModels(): string[] | undefined;
+    /**
+     * Returns the canonical availability fallback models for a given Gemini frontier model.
+     */
+    static getAvailabilityFallbacks(model: string): string[];
     get defaultModel(): string | undefined;
     resolveModel(model: string): string;
     formatRequest(request: UnifiedApiRequest): any;

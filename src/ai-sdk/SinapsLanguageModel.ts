@@ -68,6 +68,10 @@ export class SinapsLanguageModel implements LanguageModelV1 {
       fallbackModels: this.settings?.fallbackModels,
       thinkingBudget: this.settings?.thinkingBudget,
       reasoningEffort: this.settings?.reasoningEffort,
+      cachedContent: this.settings?.cachedContent,
+      googleSearch: this.settings?.googleSearch,
+      codeExecution: this.settings?.codeExecution,
+      user: this.settings?.user,
       signal: options.abortSignal,
     };
 
@@ -131,6 +135,10 @@ export class SinapsLanguageModel implements LanguageModelV1 {
       fallbackModels: this.settings?.fallbackModels,
       thinkingBudget: this.settings?.thinkingBudget,
       reasoningEffort: this.settings?.reasoningEffort,
+      cachedContent: this.settings?.cachedContent,
+      googleSearch: this.settings?.googleSearch,
+      codeExecution: this.settings?.codeExecution,
+      user: this.settings?.user,
       signal: options.abortSignal,
     };
 

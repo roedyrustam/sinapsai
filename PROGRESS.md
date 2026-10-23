@@ -17,3 +17,4 @@
 - [x] PHASE 15: In-Process Gateway Rate Limiting, Sliding-Window RPM/TPM, Prometheus & OpenTelemetry Exporters, Anthropic Prompt Caching & Canary Circuit Breaker (v2.7.0)
 - [x] PHASE 16: Production Hardening, Streaming Token Balancing, Provider Attribution & Zero Tech Debt (358/358 Tests Pass, 100% Biome Clean, Zero Warnings, Strict Types, Zero Runtime Dependencies, 26/26 Examples Validated, Production-Ready v2.7.1)
 - [x] PHASE 17: In-Process Model Context Protocol (MCP) Tool Bridge, JSON-RPC 2.0 Dispatcher & Autonomous Multi-Step Agent Loop (387/387 Tests Pass across 33 suites, 100% Biome Clean, Zero Warnings, Strict Types, Zero Runtime Dependencies, 27/27 Examples Validated, Production-Ready v2.8.0)
+- [x] PHASE 18: Multimodal Security Hardening, 64-Bit Collision-Resistant Cache Keys, Provider-Scoped Rate Limiting & Gemini 4 Argon Availability Fallbacks (392/392 Tests Pass across 33 suites, 100% Biome Clean, Production-Ready v2.8.1)

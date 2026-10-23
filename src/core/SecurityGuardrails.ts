@@ -237,6 +237,28 @@ export class SecurityGuardrails {
           content:
             this.action === 'sanitize' ? scanResult.sanitizedText : msg.content,
         });
+      } else if (Array.isArray(msg.content)) {
+        const updatedParts = msg.content.map((part) => {
+          if (part.type === 'text' && typeof part.text === 'string') {
+            const scanResult = this.scan(part.text);
+            if (!scanResult.safe) {
+              for (const v of scanResult.violations) {
+                allViolations.push({ ...v, messageIndex: i });
+              }
+            }
+            if (this.action === 'sanitize') {
+              return {
+                ...part,
+                text: scanResult.sanitizedText,
+              };
+            }
+          }
+          return part;
+        });
+        updatedMessages.push({
+          ...msg,
+          content: updatedParts,
+        });
       } else {
         updatedMessages.push(msg);
       }
