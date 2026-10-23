@@ -7,15 +7,16 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/v/sinapsai.svg" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
+  <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
+  <img src="https://img.shields.io/badge/Tests-404%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-387%20Passed-brightgreen.svg" alt="Tests Passed" />
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
+  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
-**SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, and custom endpoints) through a single, standardized **Unified API**.
+**SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js, Edge Runtimes, and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, and custom endpoints) through a single, standardized **Unified API**.
 
 Engineered with a **100% in-process / in-memory** architecture, SinapsAI eliminates downtime via automatic failover, load balancing, lowest-latency routing, and a resilient **Circuit Breaker**—without requiring intermediary proxy servers, external Redis dependencies, or adding measurable latency (<10ms overhead).
 
@@ -36,7 +37,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 | **Automatic Multi-Provider Failover** | ✅ **Built-in** | ❌ None | ✅ Yes | ✅ Yes |
 | **Lowest-Latency Auto-Routing** | ✅ **Built-in** | ❌ None | ⚠️ Cloud feature | ⚠️ Custom setup |
 | **Lowest-Cost Auto-Routing** | ✅ **Built-in** | ❌ None | ⚠️ Paid tier | ✅ Yes |
-| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude 3.7/Gemini/Groq** | ⚠️ Fragmented | ⚠️ Inconsistent | ⚠️ Partial |
+| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude/Gemini 4/Grok** | ⚠️ Fragmented | ⚠️ Inconsistent | ⚠️ Partial |
 | **KV-Cache / Prompt Cache Tracking**| ✅ **Built-in (`cachedPromptTokens`)** | ⚠️ Varies | ⚠️ Paid | ⚠️ Partial |
 | **TypeScript Native (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Varies | ❌ Separate Service | ❌ Python |
 
@@ -83,6 +84,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [30. In-Process Gateway Rate Limiting (RPM & TPM)](#30-in-process-gateway-rate-limiting-rpm--tpm)
   - [31. Prometheus & OpenTelemetry Metrics Exporters](#31-prometheus--opentelemetry-metrics-exporters)
   - [32. In-Process Model Context Protocol (MCP) Tool Bridge & Agent Loop](#32-in-process-model-context-protocol-mcp-tool-bridge--agent-loop)
+  - [33. Gemini Agent Booster, Streaming Agent Loop & Streaming Reversible PII Vault](#33-gemini-agent-booster-streaming-agent-loop--streaming-reversible-pii-vault)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -1220,15 +1222,62 @@ const rpcResponse = await client.mcp.handleJsonRpc({
 
 ---
 
+### 33. Gemini Agent Booster, Streaming Agent Loop & Streaming Reversible PII Vault
+
+Optimize reasoning token spend with `thinkingBudget: 'auto'` (powered by `GeminiAgentBooster`), guarantee deterministic KV-Cache prefix hits across tool definitions, detokenize surrogate PII values across split SSE chunks in real time, and stream multi-step MCP agent loops via `client.runWithToolsStream()`:
+
+```typescript
+import { GEMINI_MODELS, GeminiAgentBooster, GeminiProvider, SinapsClient } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GeminiProvider({
+      apiKey: process.env.GEMINI_API_KEY!,
+      defaultModel: GEMINI_MODELS.ARGON_4,
+      enableAvailabilityFallback: true, // Auto-degrades to gemini-3.8-flash if unprovisioned
+    }),
+  ],
+  piiGuardrails: {
+    categories: ['email', 'phone'],
+    reversible: true, // Works seamlessly in both non-streaming AND streaming (SSE) modes!
+  },
+});
+
+// 1. Analyze prompt complexity & KV-Cache eligibility directly
+const complexity = GeminiAgentBooster.analyzeComplexity({
+  messages: [{ role: 'user', content: 'Audit this function for race conditions...' }],
+});
+console.log(complexity.tier, complexity.recommendedBudget); // 'medium' | 'high' -> 8192 | 32768
+
+// 2. Stream a multi-step autonomous MCP agent loop with real-time events
+for await (const event of client.runWithToolsStream({
+  model: GEMINI_MODELS.ARGON_4,
+  thinkingBudget: 'auto', // Dynamically allocates 0, 2048, 8192, or 32768 tokens
+  messages: [{ role: 'user', content: 'Look up subscription status for cto@acme.io' }],
+})) {
+  if (event.type === 'reasoning-delta') {
+    process.stdout.write(event.reasoningDelta);
+  } else if (event.type === 'tool-call-start') {
+    console.log('Executing tools:', event.toolCalls.map((t) => t.function.name));
+  } else if (event.type === 'text-delta') {
+    process.stdout.write(event.textDelta); // PII tokens ({{PII_EMAIL_1}}) are automatically restored!
+  } else if (event.type === 'done') {
+    console.log(`\nCompleted in ${event.result.totalSteps} steps ($${event.result.totalCostUsd})`);
+  }
+}
+```
+
+---
+
 ## 🧩 Supported Providers
 
 | Provider | Exported Class | Options Supported |
 | :--- | :--- | :--- |
 | **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
-| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
-| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
+| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `promptCaching`, `thinkingBudget` (`number \| 'auto'`) |
+| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget` (`number \| 'auto'`), `cachedContent`, `googleSearch`, `codeExecution`, `enableAvailabilityFallback`, `GEMINI_MODELS`, `fetchAvailableModels()` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning tokens (`reasoning_content`) |
-| **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `XAI_MODELS` |
+| **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `thinkingBudget` (`number \| 'auto'`), `XAI_MODELS` |
 | **Cohere** | `CohereProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `COHERE_MODELS` |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0), `fallbackModels` |
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
@@ -1280,7 +1329,7 @@ export class OllamaProvider implements Provider {
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `providers` | `Provider[]` | *(Required)* | List of provider instances to register |
-| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency' \| 'adaptive'` | `'failover'` | Routing algorithm for requests |
+| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency' \| 'adaptive' \| 'smart-hybrid'` | `'failover'` | Routing algorithm for requests |
 | `storage` | `StateStorage` | `InMemoryStorage` | State store for circuit breaker and caching |
 | `circuitBreaker` | `CircuitBreakerOptions` | `{}` | Fault tolerance parameters |
 | `cache` | `CacheOptions` | `{}` | In-process exact & semantic response caching configuration |
@@ -1289,8 +1338,10 @@ export class OllamaProvider implements Provider {
 | `fallbackModels` | `string[]` | `undefined` | Global candidate model fallback list |
 | `budget` | `BudgetOptions` | `undefined` | FinOps spend & token cap guardrails (`maxCostUsd`, `maxTotalTokens`, `action: 'block' \| 'warn'`) |
 | `contextCompression` | `ContextCompressionOptions` | `undefined` | In-process conversation turn truncation (`sliding-window` or `middle-out`) |
-| `piiGuardrails` | `ExtendedPIIGuardrailsOptions \| boolean` | `undefined` | In-process redaction and reversible tokenization of sensitive PII |
-| `securityGuardrails` | `SecurityGuardrailsOptions \| boolean` | `undefined` | Prompt injection, jailbreak, and system prompt override defense |
+| `piiGuardrails` | `ExtendedPIIGuardrailsOptions \| boolean` | `undefined` | In-process redaction and streaming/non-streaming reversible tokenization of sensitive PII |
+| `securityGuardrails` | `SecurityGuardrailsOptions \| boolean` | `undefined` | Multimodal prompt injection, jailbreak, and system prompt override defense |
+| `rateLimiting` | `GatewayRateLimitOptions \| boolean` | `undefined` | Sliding-window RPM & TPM rate limiter across global, user, model, and provider scopes |
+| `mcpBridge` | `McpToolBridge` | `new McpToolBridge()` | In-process Model Context Protocol (MCP) tool registry and JSON-RPC 2.0 dispatcher |
 | `modelAliases` | `Record<string, string>` | `undefined` | Virtual model alias mapping (e.g. `{ 'fast': 'gpt-4o-mini' }`) |
 | `hedging` | `HedgingOptions` | `undefined` | Speculative hedged requests for P99 tail latency reduction (`delayMs`, `maxHedges`) |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |

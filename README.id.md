@@ -7,15 +7,16 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/v/sinapsai.svg" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
+  <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
+  <img src="https://img.shields.io/badge/Tests-404%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Ready-blue.svg" alt="TypeScript Ready" /></a>
-  <img src="https://img.shields.io/badge/Tests-387%20Passed-brightgreen.svg" alt="Tests Passed" />
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%3E%3D18.0.0-green.svg" alt="Node >= 18.0.0" /></a>
+  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
-**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
+**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js, Edge Runtimes, dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
 
 Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, perutean latensi terendah (*lowest-latency*), dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
 
@@ -37,7 +38,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 | **Perutean Latensi Terendah (Lowest Latency)**| ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Fitur cloud | ⚠️ Kustom |
 | **Round-Robin Load Balancing** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
 | **Perutean Biaya Terendah (Lowest Cost)** | ✅ **Bawaan (Dual Token Pricing)** | ❌ Tidak ada | ⚠️ Paket berbayar | ✅ Ya |
-| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude 3.7/Gemini/Groq** | ⚠️ Terfragmentasi | ⚠️ Tidak konsisten | ⚠️ Sebagian |
+| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude/Gemini 4/Grok** | ⚠️ Terfragmentasi | ⚠️ Tidak konsisten | ⚠️ Sebagian |
 | **Penjejakan KV-Cache / Prompt Cache**| ✅ **Bawaan (`cachedPromptTokens`)** | ⚠️ Bervariasi | ⚠️ Berbayar | ⚠️ Sebagian |
 | **Telemetri In-Process (`getMetrics`)** | ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Cloud Dashboard | ⚠️ External DB |
 | **Native TypeScript (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Bervariasi | ❌ Layanan terpisah | ❌ Python |
@@ -85,6 +86,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [30. Pembatasan Laju In-Process Gateway (RPM & TPM)](#30-pembatasan-laju-in-process-gateway-rpm--tpm)
   - [31. Eksportir Metrik Prometheus & OpenTelemetry](#31-eksportir-metrik-prometheus--opentelemetry)
   - [32. Model Context Protocol (MCP) Tool Bridge & Loop Agen Otonom](#32-model-context-protocol-mcp-tool-bridge--loop-agen-otonom)
+  - [33. Gemini Agent Booster, Loop Agen Streaming & Vault PII Reversibel Streaming](#33-gemini-agent-booster-loop-agen-streaming--vault-pii-reversibel-streaming)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -1224,15 +1226,62 @@ const rpcResponse = await client.mcp.handleJsonRpc({
 
 ---
 
+### 33. Gemini Agent Booster, Loop Agen Streaming & Vault PII Reversibel Streaming
+
+Optimalkan anggaran token penalaran secara otomatis dengan `thinkingBudget: 'auto'` (ditenagai oleh `GeminiAgentBooster`), pastikan determinisme KV-Cache prefix pada definisi tools, pulihkan token surrogate PII yang terpotong lintas chunk SSE secara real-time, dan jalankan loop agen MCP multi-langkah secara streaming melalui `client.runWithToolsStream()`:
+
+```typescript
+import { GEMINI_MODELS, GeminiAgentBooster, GeminiProvider, SinapsClient } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GeminiProvider({
+      apiKey: process.env.GEMINI_API_KEY!,
+      defaultModel: GEMINI_MODELS.ARGON_4,
+      enableAvailabilityFallback: true, // Otomatis fallback ke gemini-3.8-flash bila belum tersedia
+    }),
+  ],
+  piiGuardrails: {
+    categories: ['email', 'phone'],
+    reversible: true, // Bekerja mulus baik pada mode non-streaming maupun streaming (SSE)!
+  },
+});
+
+// 1. Analisis kompleksitas prompt & kelayakan Context Caching secara langsung
+const complexity = GeminiAgentBooster.analyzeComplexity({
+  messages: [{ role: 'user', content: 'Audit fungsi berikut terhadap celah race condition...' }],
+});
+console.log(complexity.tier, complexity.recommendedBudget); // 'medium' | 'high' -> 8192 | 32768
+
+// 2. Jalankan loop agen MCP otonom secara streaming dengan event real-time
+for await (const event of client.runWithToolsStream({
+  model: GEMINI_MODELS.ARGON_4,
+  thinkingBudget: 'auto', // Mengalokasikan 0, 2048, 8192, atau 32768 token secara dinamis
+  messages: [{ role: 'user', content: 'Cek status langganan untuk cto@acme.io' }],
+})) {
+  if (event.type === 'reasoning-delta') {
+    process.stdout.write(event.reasoningDelta);
+  } else if (event.type === 'tool-call-start') {
+    console.log('Mengeksekusi tools:', event.toolCalls.map((t) => t.function.name));
+  } else if (event.type === 'text-delta') {
+    process.stdout.write(event.textDelta); // Token PII ({{PII_EMAIL_1}}) otomatis dipulihkan!
+  } else if (event.type === 'done') {
+    console.log(`\nSelesai dalam ${event.result.totalSteps} langkah ($${event.result.totalCostUsd})`);
+  }
+}
+```
+
+---
+
 ## 🧩 Penyedia yang Didukung (Providers)
 
 | Provider | Kelas Ekspor | Parameter Tambahan |
 | :--- | :--- | :--- |
 | **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
-| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
-| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget`, `outputDimensionality`, `GEMINI_MODELS`, `fetchAvailableModels()` |
+| **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `promptCaching`, `thinkingBudget` (`number \| 'auto'`) |
+| **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget` (`number \| 'auto'`), `cachedContent`, `googleSearch`, `codeExecution`, `enableAvailabilityFallback`, `GEMINI_MODELS`, `fetchAvailableModels()` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, token penalaran (`reasoning_content`) |
-| **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `XAI_MODELS` |
+| **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `thinkingBudget` (`number \| 'auto'`), `XAI_MODELS` |
 | **Cohere** | `CohereProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `COHERE_MODELS` |
 | **Ollama (Local)** | `OllamaProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens` (default: 0), `fallbackModels` |
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, ekstraksi reasoning (`reasoning_format: 'parsed'`, `reasoning_content`), durasi rate limit (`7.66s`, `2m59.56s`), penyesuaian suhu, sanitasi nama pesan |
@@ -1284,7 +1333,7 @@ export class OllamaProvider implements Provider {
 | Properti | Tipe | Nilai Default | Keterangan |
 | :--- | :--- | :--- | :--- |
 | `providers` | `Provider[]` | *(Wajib)* | Daftar instance provider yang digunakan |
-| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency' \| 'adaptive'` | `'failover'` | Algoritma perutean request |
+| `strategy` | `'failover' \| 'load-balance' \| 'lowest-cost' \| 'lowest-latency' \| 'adaptive' \| 'smart-hybrid'` | `'failover'` | Algoritma perutean request |
 | `storage` | `StateStorage` | `InMemoryStorage` | Tempat penyimpanan state sirkuit breaker dan cache |
 | `circuitBreaker` | `CircuitBreakerOptions` | `{}` | Konfigurasi toleransi kegagalan sirkuit |
 | `cache` | `CacheOptions` | `{}` | Konfigurasi caching respons in-process (exact & semantik) |
@@ -1293,8 +1342,10 @@ export class OllamaProvider implements Provider {
 | `fallbackModels` | `string[]` | `undefined` | Daftar global model cadangan sekunder |
 | `budget` | `BudgetOptions` | `undefined` | Guardrail anggaran FinOps untuk biaya USD & limit token (`maxCostUsd`, `maxTotalTokens`, `action`) |
 | `contextCompression` | `ContextCompressionOptions` | `undefined` | Pemotongan percakapan in-process (`sliding-window` atau `middle-out`) |
-| `piiGuardrails` | `ExtendedPIIGuardrailsOptions \| boolean` | `undefined` | Redaksi in-process dan tokenisasi reversibel data PII sensitif |
-| `securityGuardrails` | `SecurityGuardrailsOptions \| boolean` | `undefined` | Pertahanan prompt injection, jailbreak, dan manipulasi system prompt |
+| `piiGuardrails` | `ExtendedPIIGuardrailsOptions \| boolean` | `undefined` | Redaksi in-process dan tokenisasi reversibel streaming/non-streaming data PII sensitif |
+| `securityGuardrails` | `SecurityGuardrailsOptions \| boolean` | `undefined` | Pertahanan prompt injection multimodal, jailbreak, dan manipulasi system prompt |
+| `rateLimiting` | `GatewayRateLimitOptions \| boolean` | `undefined` | Pembatas laju sliding-window RPM & TPM lintas cakupan global, user, model, dan provider |
+| `mcpBridge` | `McpToolBridge` | `new McpToolBridge()` | Registri tools Model Context Protocol (MCP) in-process dan dispatcher JSON-RPC 2.0 |
 | `modelAliases` | `Record<string, string>` | `undefined` | Pemetaan alias model virtual (contoh: `{ 'fast': 'gpt-4o-mini' }`) |
 | `hedging` | `HedgingOptions` | `undefined` | Permintaan spekulatif hedged untuk reduksi latensi P99 (`delayMs`, `maxHedges`) |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
