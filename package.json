@@ -92,7 +92,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.14",
+    "@biomejs/biome": "^2.6.2",
     "@types/node": "^26.6.3",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
