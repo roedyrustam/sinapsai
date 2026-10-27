@@ -55,13 +55,13 @@ jobs:
             echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
             npm publish --access public --provenance
             echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM!"
+
+            if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
+              echo "[Release] Creating GitHub Release v$CURRENT_VERSION..."
+              gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
+            fi
           else
             echo "[Skip] Version $CURRENT_VERSION is already published on NPM. Skipping publish."
-          fi
-
-          if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
-            echo "[Release] Creating GitHub Release v$CURRENT_VERSION..."
-            gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
