@@ -120,21 +120,23 @@ run();
 
 ## Fitur Utama per Versi Rilis
 
-### Fitur Utama v2.7.0 (In-Process Gateway Rate Limiting, Prometheus & OpenTelemetry Exporters & Canary Hardening)
-1. **In-Process Gateway Rate Limiting (`GatewayRateLimiter`, `GatewayRateLimitError`)**: Algoritma sliding-window counter berbobot sub-window tanpa dependensi eksternal untuk mencegah lonjakan batas burst, melacak kuota Requests Per Minute (RPM) dan Tokens Per Minute (TPM) secara presisi dengan penyesuaian paska-respons (`adjustTokens`) lintas eksekusi non-streaming dan streaming.
-2. **Aturan Rate Limit Berlapis (Multi-Tier Rules)**: Mendukung aturan default global (`defaultRule`), aturan spesifik model (`modelRules`), batas provider (`providerRules`), serta partisi berbasis user atau tenant (`keyGenerator` atau `request.user`) dengan aksi `block` (melempar `GatewayRateLimitError`) atau `warn` (`onGatewayRateLimitWarning`).
-3. **Eksportir Metrik Native Prometheus & OpenMetrics (`exportPrometheusMetrics`, `toPrometheusMetrics`)**: Format eksposisi teks standar OpenMetrics/Prometheus tanpa runtime dependencies untuk di-scrape langsung oleh Prometheus, Grafana Agent, atau VictoriaMetrics.
-4. **Eksportir Metrik Native OpenTelemetry OTLP JSON (`exportOtelMetrics`, `toOtelMetrics`)**: Format skema JSON OTLP v1 `ResourceMetrics` siap kirim ke endpoint collector `/v1/metrics`.
-5. **Native Anthropic Prompt Caching (`promptCaching`)**: Injeksi header `anthropic-beta: prompt-caching-2024-07-31` otomatis dan breakpoint `cache_control: { type: 'ephemeral' }` pada system prompt >1,024 token serta pemetaan token terpadu ke `cachedPromptTokens`.
-6. **Strict `HALF_OPEN` Canary Probing Anti-Thundering-Herd**: Isolasi kanari tunggal saat masa pemulihan Circuit Breaker dari `OPEN` ke `HALF_OPEN`, mencegah crash downstream akibat lonjakan permintaan konkuren seketika.
-7. **Pelepasan Signal Universal & Severing Stream Dini (`linkAbortSignal`)**: Pembersihan event listener deterministik pada blok `finally` di seluruh 10 provider, serta pemutusan koneksi HTTP upstream seketika saat konsumen stream keluar lebih awal (`break`).
+### Fitur Utama v2.10.0 (ReDoS & Prototype Pollution Hardening, Atomic Storage Counters, Parallel Tools & Context Caching)
+1. **Pencegahan ReDoS Infinite Loop pada Guardrail Keamanan**: Proteksi regex zero-length match pada `SecurityGuardrails` untuk mencegah `lastIndex` hang (100% CPU lock), isolasi `allowedPatterns` tanpa flag `/g`, dan perbaikan substitusi string `$1`/`$&` dengan replacer function `() => redactedReplacement`.
+2. **Kekebalan Prototype Pollution pada Kanonikalisasi Tools**: Filter ketat atribut berbahaya (`__proto__`, `constructor`, `prototype`) pada `GeminiAgentBooster.canonicalizeTools()` sebelum rekonstruksi objek skema JSON.
+3. **Penyimpanan Counter Atomik (`storage.increment`)**: Penambahan method atomik `increment(key, ttlSeconds)` pada `StateStorage`, `InMemoryStorage`, `RedisStorage`, `D1Storage`, dan `CloudflareKVStorage`, menghapus *race condition* konkurensi awal pada `RateLimiter`.
+4. **Google Gemini Explicit Context Caching API (`client.contextCache`)**: Manajemen siklus hidup penuh untuk cache konteks besar (>32k token) dengan penghematan biaya 75%–90% via `client.contextCache.create()`, `.get()`, `.list()`, `.delete()`, dan `.evaluateEligibility()`.
+5. **Eksekusi Tool Paralel Massal pada Loop Agen Streaming (`runWithToolsStream`)**: Menjalankan banyak tool call secara serentak via `Promise.all` ketika model mengembalikan 2–5 pemanggilan fungsi sekaligus dalam 1 putaran agen, memangkas latensi putaran agen hingga 80%.
+6. **Gemini 4 Frontier Availability Fallback Invariant**: Otomatis menyisipkan `gemini-3.8-flash` sebagai kandidat fallback bila `gemini-4-pro`, `gemini-4-argon`, atau `gemini-4-flash` diminta dengan `enableAvailabilityFallback: true`.
 
-### Fitur Utama v2.6.0 (Google Gemini 4.x Models, Context Caching, Grounding & Code Execution)
-1. **Penyelarasan Model Frontier Gemini 4.x (2026 Edition)**: Konstanta model resmi (`gemini-4-pro`, `gemini-4-flash`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-2.0-flash-thinking-exp`) dan tabel FinOps default 2026 (`GEMINI_DEFAULT_PRICING`).
-2. **Native Google Context Caching (`cachedContent`)**: Pemanfaatan cache konteks Google Gemini (>32k tokens) dengan diskon 75%–90% pada penjejakan FinOps, dilengkapi helper in-process lifecycle (`createCachedContent`, `getCachedContent`, `listCachedContents`, `deleteCachedContent`).
-3. **Live Search Grounding & Dynamic Citations**: Injeksi live Google Search (`googleSearch: true`) dengan ekstraksi sitasi terverifikasi ke dalam `response.grounding`.
-4. **Python Code Execution Sandbox**: Eksekusi sandbox Python di server Google (`codeExecution: true`) dengan perakitan output terstruktur.
-5. **FinOps 75% KV-Cache Pricing Discount**: Perhitungan biaya di Router secara otomatis memperhitungkan diskon 75% pada token prompt yang ter-cache.
+### Fitur Utama v2.9.0 (Gemini Agent Booster, Streaming Autonomous Agent Loop & Streaming Reversible PII Vault)
+1. **Gemini Agent Booster (`GeminiAgentBooster`)**: Alokasi anggaran penalaran dinamis `thinkingBudget: 'auto'` (0, 2048, 8192, atau 32768 token) berdasarkan analisis kompleksitas prompt, serta kanonikalisasi deterministik skema tools untuk memaksimalkan KV-cache prefix hit.
+2. **Loop Agen Otonom Streaming Real-Time (`client.runWithToolsStream`)**: Asynchronous generator (`for await...of`) yang mengekspos event real-time granular (`reasoning-delta`, `text-delta`, `tool-call-start`, `tool-call-result`, `step-finish`, `done`).
+3. **Streaming Reversible PII Vault**: Dekripsi dan pemulihan token surrogate PII (`{{PII_EMAIL_1}}`) secara real-time langsung pada aliran chunk SSE (`textDelta`), bahkan ketika token terbelah di perbatasan paket jaringan.
+
+### Fitur Utama v2.8.1 (Multimodal Security Hardening & 64-Bit Collision-Resistant Cache Keys)
+1. **Pemeriksaan Keamanan Multi-Modal (`SecurityGuardrails`)**: Pengecekan keamanan mendalam pada payload multimodal `ContentPart[]` (teks, gambar, audio).
+2. **Kunci Cache 64-Bit Tahan Kolisi**: Caching prompt menggunakan hashing FNV-1a 64-bit yang meminimalkan risiko tabrakan kunci pada volume request tinggi.
+3. **Pembatasan Laju Berbasis Provider**: Opsi pembatasan RPM/TPM spesifik per provider pada gateway rate limiting.
 
 ### Fitur Utama v2.8.0 (Model Context Protocol / MCP Tool Bridge & Loop Agen Otonom)
 1. **In-Process Model Context Protocol (MCP) Tool Bridge (`McpToolBridge`)**: Registri tools lokal zero-dependency dengan validasi skema JSON Schema dan handler asynchronous yang tangguh.
@@ -191,9 +193,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 387/387 unit & integration tests lulus di 33 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge & loop agen otonom, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 411/411 unit & integration tests lulus di 34 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge, parallel tool execution, Gemini Context Caching, ReDoS hardening, prototype pollution immunity, semantic cache, batch engine, PII, budget, security, dan hedged requests.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **27 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 27) teruji dan 100% lulus kompilasi TypeScript.
+- **29 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 29) teruji dan 100% lulus kompilasi TypeScript.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

@@ -14,11 +14,13 @@ classDiagram
         -HedgedExecutor hedgedExecutor
         -GatewayRateLimiter rateLimiter
         +McpToolBridge mcp
+        +contextCache
         +chat.completions.create(request)
         +embeddings.create(request)
         +batch.chat(requests, options)
         +batch.embeddings(requests, options)
         +runWithTools(options)
+        +runWithToolsStream(options)
         +checkHealth(options)
         +getMetrics()
         +getCircuitBreakerStatus()
@@ -205,6 +207,13 @@ classDiagram
         +handleJsonRpc(request)
     }
 
+    class GeminiAgentBooster {
+        +analyzeComplexity(options)
+        +canonicalizeTools(tools)
+        +extractGroundingCitations(metadata)
+        +extractCodeExecution(metadata)
+    }
+
     StateStorage <|.. InMemoryStorage : implements
     StateStorage <|.. CloudflareKVStorage : implements
     StateStorage <|.. RedisStorage : implements
@@ -224,6 +233,7 @@ classDiagram
     SinapsClient "1" *-- "1" Router : delegates to
     SinapsClient "1" *-- "1" StateStorage : maintains
     SinapsClient "1" *-- "1" McpToolBridge : orchestrates tools via
+    SinapsClient "1" *-- "0..1" GeminiAgentBooster : optimizes via
     SinapsClient "1" *-- "0..1" PIIGuardrails : safeguards with
     SinapsClient "1" *-- "0..1" SecurityGuardrails : secures with
     SinapsClient "1" *-- "0..1" BudgetGuardrails : caps budget with

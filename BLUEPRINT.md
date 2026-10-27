@@ -23,18 +23,19 @@ SinapsAI is a universal in-process AI gateway and control plane NPM package (zer
    - `HedgedExecutor`: Speculative hedged requests launching backup calls if primary latency exceeds `delayMs` to eliminate P99 tail-latencies.
    - `BudgetGuardrails`: FinOps spend tracking enforcing hard USD caps (`maxCostUsd`) and token limits (`maxTotalTokens`) with blocking or warning callbacks.
    - `ContextCompressor`: Zero-dependency token estimation and dynamic conversation trimming (`sliding-window` and `middle-out`) with atomic tool-call preservation.
-   - `SecurityGuardrails`: Zero-dependency heuristic scanner protecting against prompt injections, jailbreaks, delimiter hijacking, and system prompt exfiltration.
-   - `PIIGuardrails`: Zero-dependency in-process PII detection and redaction (email, phone, credit card with Luhn validation, SSN, IP, IBAN, passport, JWT, URL) with two-way Reversible Tokenization Vault.
+   - `SecurityGuardrails`: Zero-dependency heuristic scanner protecting against prompt injections, jailbreaks, delimiter hijacking, and system prompt exfiltration, hardened against ReDoS with zero-length regex advancing and injection-safe string replacers.
+   - `GeminiAgentBooster`: Dynamic thinking budget estimation (`thinkingBudget: 'auto'`), deterministic KV-cache tool schema canonicalization with prototype pollution immunity, and metadata citation extraction.
+   - `PIIGuardrails`: Zero-dependency in-process PII detection and redaction (email, phone, credit card with Luhn validation, SSN, IP, IBAN, passport, JWT, URL) with two-way Reversible Tokenization Vault in both non-streaming and streaming pipelines.
    - `McpToolBridge`: In-process Model Context Protocol (MCP) tool registry, bi-directional schema conversion (OpenAI / Unified `ToolDefinition`), resilient parallel tool execution, and MCP JSON-RPC 2.0 protocol dispatcher (`tools/list`, `tools/call`, `ping`).
    - `Telemetry & Metrics Exporters`: Zero-dependency formatting utilities emitting Prometheus / OpenMetrics text exposition format (`formatPrometheusMetrics`) and OpenTelemetry OTLP JSON `ResourceMetrics` (`formatOtelMetrics`).
-   - `Storage`: Key-value state storage interface (`StateStorage`) with:
-     - `InMemoryStorage` (pure in-memory with TTL)
-     - `CloudflareKVStorage` (Cloudflare Workers KV binding)
-     - `RedisStorage` (Redis / Upstash / Valkey via standard client contract or raw fetch)
-     - `D1Storage` (Cloudflare D1 SQL storage with auto-migration and TTL cleanup)
+   - `Storage`: Key-value state storage interface (`StateStorage`) with atomic counter increments (`increment(key, ttlSeconds)`) across:
+     - `InMemoryStorage` (pure in-memory with TTL and atomic increment)
+     - `CloudflareKVStorage` (Cloudflare Workers KV binding with atomic counter emulation)
+     - `RedisStorage` (Redis / Upstash / Valkey via native atomic INCR/EXPIRE)
+     - `D1Storage` (Cloudflare D1 SQL storage with atomic SQL increment transaction and auto-migration)
 
 3. **Adapters & Ecosystem Layer**:
    - `sinapsai/ai-sdk`: Official adapter for the Vercel AI SDK (`ai`), implementing `LanguageModelV1` and `EmbeddingModelV1` with full streaming, tool calls, and structured outputs.
 
 4. **Client Layer**:
-   - `SinapsClient`: OpenAI-compatible ergonomic client with `.chat.completions.create()`, `.embeddings.create()`, `.batch()`, `.runWithTools()`, `.mcp`, `.checkHealth()`, `.getMetrics()`, `.getCircuitBreakerStatus()`, `.resetCircuitBreaker()`, `.clearCache()`, `.setModelAlias()`, `.getModelAliases()`, `.removeModelAlias()`, `.resolveModel()`, `.exportPrometheusMetrics()`, `.toPrometheusMetrics()`, `.exportOtelMetrics()`, and `.toOtelMetrics()`.
+   - `SinapsClient`: OpenAI-compatible ergonomic client with `.chat.completions.create()`, `.embeddings.create()`, `.batch()`, `.runWithTools()`, `.runWithToolsStream()`, `.contextCache` (`create`, `get`, `list`, `delete`, `evaluateEligibility`), `.mcp`, `.checkHealth()`, `.getMetrics()`, `.getCircuitBreakerStatus()`, `.resetCircuitBreaker()`, `.clearCache()`, `.setModelAlias()`, `.getModelAliases()`, `.removeModelAlias()`, `.resolveModel()`, `.exportPrometheusMetrics()`, `.toPrometheusMetrics()`, `.exportOtelMetrics()`, and `.toOtelMetrics()`.
