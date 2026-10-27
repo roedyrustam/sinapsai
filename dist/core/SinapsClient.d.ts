@@ -6,7 +6,7 @@
  * @license MIT
  */
 import type { Provider } from '../providers/Provider.js';
-import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CircuitBreakerStatus, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
+import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CachedContentInfo, CircuitBreakerStatus, ContextCacheEligibility, CreateCachedContentOptions, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
@@ -148,6 +148,35 @@ export declare class SinapsClient {
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
     resetCircuitBreaker(providerId?: string): Promise<void>;
     clearCache(): Promise<void>;
+    /**
+     * Helper to locate the configured Gemini provider for context caching and frontier tools.
+     */
+    private getGeminiProvider;
+    /**
+     * First-class Google Context Caching management control plane (>32k static prefix token caching).
+     */
+    readonly contextCache: {
+        /**
+         * Evaluates whether a prompt or request meets the token threshold for context caching (default: 32,768 tokens).
+         */
+        evaluateEligibility: (request: Pick<UnifiedApiRequest, 'messages' | 'tools'>, minTokenThreshold?: number) => ContextCacheEligibility;
+        /**
+         * Creates a cached content resource on Google Gemini for large static prompts.
+         */
+        create: (options: CreateCachedContentOptions) => Promise<CachedContentInfo>;
+        /**
+         * Retrieves metadata for an existing cached content resource by name.
+         */
+        get: (name: string) => Promise<CachedContentInfo>;
+        /**
+         * Lists active cached content resources.
+         */
+        list: (pageSize?: number) => Promise<CachedContentInfo[]>;
+        /**
+         * Deletes a cached content resource by name.
+         */
+        delete: (name: string) => Promise<void>;
+    };
     /**
      * Resolves a model name against configured model aliases.
      */

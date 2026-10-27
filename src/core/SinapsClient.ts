@@ -6,6 +6,7 @@
  * @license MIT
  */
 
+import { GeminiProvider } from '../providers/GeminiProvider.js';
 import type { Provider } from '../providers/Provider.js';
 import type {
   AgentStreamEvent,
@@ -13,8 +14,11 @@ import type {
   BatchOptions,
   BatchResult,
   BudgetOptions,
+  CachedContentInfo,
   ChatMessage,
   CircuitBreakerStatus,
+  ContextCacheEligibility,
+  CreateCachedContentOptions,
   CreateChatCompletionRequest,
   CreateChatCompletionRequestNonStreaming,
   CreateChatCompletionRequestStreaming,
@@ -56,6 +60,7 @@ import {
   type ContextCompressionOptions,
   ContextCompressor,
 } from './ContextCompressor.js';
+import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
 import { McpToolBridge } from './McpBridge.js';
@@ -571,6 +576,94 @@ export class SinapsClient {
   }
 
   /**
+   * Helper to locate the configured Gemini provider for context caching and frontier tools.
+   */
+  private getGeminiProvider(): GeminiProvider | undefined {
+    return this.router
+      .getProviders()
+      .find(
+        (p) =>
+          p instanceof GeminiProvider ||
+          p.name === 'Gemini' ||
+          p.id.startsWith('gemini') ||
+          typeof (p as unknown as Record<string, unknown>)
+            .createCachedContent === 'function',
+      ) as GeminiProvider | undefined;
+  }
+
+  /**
+   * First-class Google Context Caching management control plane (>32k static prefix token caching).
+   */
+  public readonly contextCache = {
+    /**
+     * Evaluates whether a prompt or request meets the token threshold for context caching (default: 32,768 tokens).
+     */
+    evaluateEligibility: (
+      request: Pick<UnifiedApiRequest, 'messages' | 'tools'>,
+      minTokenThreshold?: number,
+    ): ContextCacheEligibility => {
+      return GeminiAgentBooster.evaluateContextCacheEligibility(
+        request,
+        minTokenThreshold,
+      );
+    },
+
+    /**
+     * Creates a cached content resource on Google Gemini for large static prompts.
+     */
+    create: async (
+      options: CreateCachedContentOptions,
+    ): Promise<CachedContentInfo> => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          'Context caching requires a configured Gemini provider.',
+        );
+      }
+      return provider.createCachedContent(options);
+    },
+
+    /**
+     * Retrieves metadata for an existing cached content resource by name.
+     */
+    get: async (name: string): Promise<CachedContentInfo> => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          'Context caching requires a configured Gemini provider.',
+        );
+      }
+      return provider.getCachedContent(name);
+    },
+
+    /**
+     * Lists active cached content resources.
+     */
+    list: async (pageSize?: number): Promise<CachedContentInfo[]> => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          'Context caching requires a configured Gemini provider.',
+        );
+      }
+      return provider.listCachedContents(pageSize);
+    },
+
+    /**
+     * Deletes a cached content resource by name.
+     */
+    delete: async (name: string): Promise<void> => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          'Context caching requires a configured Gemini provider.',
+        );
+      }
+      return provider.deleteCachedContent(name);
+    },
+  };
+
+  /**
    * Resolves a model name against configured model aliases.
    */
   public resolveModel(modelName?: string): string {
@@ -901,39 +994,50 @@ export class SinapsClient {
         toolCalls: assembledToolCalls,
       };
 
-      const toolResults: ChatMessage[] = [];
-      for (const tc of assembledToolCalls) {
-        const mcpRes = await bridge.executeToolCall(tc, {
-          signal: options.signal,
-          user: options.user,
-          timeoutMs: options.toolTimeoutMs,
-        });
-        const textOutput = mcpRes.content
-          .map((c) => {
-            if (c.type === 'text') return c.text;
-            if (c.type === 'resource') {
-              return c.resource.text ?? `[Resource: ${c.resource.uri}]`;
-            }
-            return `[Image: ${c.mimeType}]`;
-          })
-          .join('\n');
+      const toolExecutions = await Promise.all(
+        assembledToolCalls.map(async (tc) => {
+          const mcpRes = await bridge.executeToolCall(tc, {
+            signal: options.signal,
+            user: options.user,
+            timeoutMs: options.toolTimeoutMs,
+          });
+          const textOutput = mcpRes.content
+            .map((c) => {
+              if (c.type === 'text') return c.text;
+              if (c.type === 'resource') {
+                return c.resource.text ?? `[Resource: ${c.resource.uri}]`;
+              }
+              return `[Image: ${c.mimeType}]`;
+            })
+            .join('\n');
 
-        const toolMessage: ChatMessage = {
-          role: 'tool',
-          tool_call_id: tc.id,
-          name: tc.function.name,
-          content: textOutput,
-        };
-        toolResults.push(toolMessage);
-        currentMessages.push(toolMessage);
+          const toolMessage: ChatMessage = {
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: tc.function.name,
+            content: textOutput,
+          };
+
+          return {
+            tc,
+            mcpRes,
+            toolMessage,
+          };
+        }),
+      );
+
+      const toolResults: ChatMessage[] = [];
+      for (const item of toolExecutions) {
+        toolResults.push(item.toolMessage);
+        currentMessages.push(item.toolMessage);
 
         yield {
           type: 'tool-call-result',
           stepIndex,
-          toolCallId: tc.id,
-          toolName: tc.function.name,
-          result: mcpRes,
-          toolMessage,
+          toolCallId: item.tc.id,
+          toolName: item.tc.function.name,
+          result: item.mcpRes,
+          toolMessage: item.toolMessage,
         };
       }
 

@@ -560,6 +560,17 @@ export class Router {
       }
     }
 
+    // Automatic Frontier Availability Fallback Invariant (Gemini 4 -> Gemini 3.8 Flash)
+    if (
+      (request.model === 'gemini-4-pro' ||
+        request.model === 'gemini-4-argon' ||
+        request.model === 'gemini-4-flash') &&
+      provider.name === 'Gemini' &&
+      !list.includes('gemini-3.8-flash')
+    ) {
+      list.push('gemini-3.8-flash');
+    }
+
     return list.length > 0 ? list : ['default'];
   }
 

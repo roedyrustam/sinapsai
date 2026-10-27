@@ -132,17 +132,30 @@ export class D1Storage implements StateStorage {
       .run();
   }
 
-  async increment(key: string): Promise<number> {
+  async increment(key: string, ttlSeconds?: number): Promise<number> {
     await this.ensureTable();
     const current = await this.get<number>(key);
     const newValue = (current ?? 0) + 1;
+    const expiresAt =
+      current === null && ttlSeconds && ttlSeconds > 0
+        ? Math.floor(Date.now() / 1000) + ttlSeconds
+        : null;
 
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, (SELECT expires_at FROM ${this.tableName} WHERE key = ?))`,
-      )
-      .bind(key, JSON.stringify(newValue), key)
-      .run();
+    if (current === null && expiresAt !== null) {
+      await this.db
+        .prepare(
+          `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, ?)`,
+        )
+        .bind(key, JSON.stringify(newValue), expiresAt)
+        .run();
+    } else {
+      await this.db
+        .prepare(
+          `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, (SELECT expires_at FROM ${this.tableName} WHERE key = ?))`,
+        )
+        .bind(key, JSON.stringify(newValue), key)
+        .run();
+    }
 
     return newValue;
   }

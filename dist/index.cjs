@@ -74,6 +74,1163 @@ var init_stream = __esm({
   }
 });
 
+// src/core/GeminiAgentBooster.ts
+var COMPLEX_REASONING_REGEX = /\b(architect(?:ure)?|refactor|optimiz(?:e|ation)|vulnerabilit(?:y|ies)|security\s+audit|prove|theorem|algorithm|concurren(?:t|cy)|deadlock|race\s+condition|distributed|microkernel|step[\s-]by[\s-]step|root\s+cause|stack\s+trace|benchmark|formal\s+verification)\b/i;
+var CODE_OR_MATH_REGEX = /```[\s\S]*?```|\b(?:function|class|interface|SELECT\s+.+\s+FROM|CREATE\s+TABLE|async\s+function|Promise\.all|TypeError:|ReferenceError:|Error:\s+at\s+)\b|\$\$[\s\S]+?\$\$/i;
+var SIMPLE_INTENT_REGEX = /^(?:hi|hello|hey|halo|ping|ok|okay|thanks|thank\s+you|terima\s+kasih|yes|no|ya|tidak|translate\s+to\s+\w+:|classify\s*:)/i;
+function canonicalizeJsonValue(value) {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJsonValue);
+  }
+  const record = value;
+  const sortedKeys = Object.keys(record).filter(
+    (k) => k !== "__proto__" && k !== "constructor" && k !== "prototype"
+  ).sort();
+  const result = {};
+  for (const key of sortedKeys) {
+    result[key] = canonicalizeJsonValue(record[key]);
+  }
+  return result;
+}
+function extractMessagesText(messages) {
+  const allParts = [];
+  const systemParts = [];
+  let lastUserText = "";
+  let nonSystemTurnCount = 0;
+  for (const msg of messages) {
+    let msgText = "";
+    if (typeof msg.content === "string") {
+      msgText = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      msgText = msg.content.map((p) => p.type === "text" ? p.text : "").filter(Boolean).join("\n");
+    }
+    if (msg.role === "system") {
+      if (msgText) systemParts.push(msgText);
+    } else {
+      nonSystemTurnCount++;
+      if (msg.role === "user" && msgText) {
+        lastUserText = msgText;
+      }
+    }
+    if (msgText) {
+      allParts.push(msgText);
+    }
+  }
+  return {
+    totalText: allParts.join("\n"),
+    lastUserText,
+    systemText: systemParts.join("\n"),
+    nonSystemTurnCount
+  };
+}
+var GeminiAgentBooster = class _GeminiAgentBooster {
+  /**
+   * Analyzes a UnifiedApiRequest and computes a complexity score [0..1],
+   * thinking tier ('none' | 'low' | 'medium' | 'high'), and recommended thinkingBudget.
+   */
+  static analyzeComplexity(request) {
+    const signals = [];
+    let score = 0;
+    const { totalText, lastUserText, nonSystemTurnCount } = extractMessagesText(
+      request.messages || []
+    );
+    const trimmedLastUser = lastUserText.trim();
+    const totalChars = totalText.length;
+    const toolCount = request.tools?.length ?? 0;
+    if (toolCount === 0 && !request.responseFormat && totalChars < 80 && (totalChars === 0 || SIMPLE_INTENT_REGEX.test(trimmedLastUser)) && !CODE_OR_MATH_REGEX.test(totalText) && !COMPLEX_REASONING_REGEX.test(totalText)) {
+      signals.push("simple_intent_short_prompt");
+      return {
+        score: 0.05,
+        tier: "none",
+        recommendedBudget: 0,
+        signals
+      };
+    }
+    if (totalChars > 8e3) {
+      score += 0.35;
+      signals.push("long_context_8k+");
+    } else if (totalChars > 2e3) {
+      score += 0.25;
+      signals.push("medium_context_2k+");
+    } else if (totalChars > 300) {
+      score += 0.15;
+      signals.push("standard_context_300+");
+    } else if (totalChars > 60) {
+      score += 0.1;
+      signals.push("concise_prompt");
+    }
+    if (CODE_OR_MATH_REGEX.test(totalText)) {
+      score += 0.3;
+      signals.push("code_or_math_detected");
+    }
+    if (COMPLEX_REASONING_REGEX.test(totalText)) {
+      score += 0.3;
+      signals.push("complex_reasoning_keywords");
+    }
+    if (toolCount >= 4) {
+      score += 0.3;
+      signals.push(`multi_tool_orchestration(${toolCount})`);
+    } else if (toolCount >= 1) {
+      score += 0.2;
+      signals.push(`tool_calling(${toolCount})`);
+    }
+    if (request.responseFormat?.type === "json_schema") {
+      score += 0.15;
+      signals.push("strict_json_schema");
+    } else if (request.responseFormat?.type === "json_object") {
+      score += 0.1;
+      signals.push("json_object_mode");
+    }
+    if (nonSystemTurnCount >= 6) {
+      score += 0.15;
+      signals.push(`deep_conversation(${nonSystemTurnCount}_turns)`);
+    }
+    const clampedScore = Math.min(1, Number(score.toFixed(2)));
+    if (clampedScore < 0.15) {
+      return {
+        score: clampedScore,
+        tier: "none",
+        recommendedBudget: 0,
+        signals
+      };
+    }
+    if (clampedScore < 0.45) {
+      return {
+        score: clampedScore,
+        tier: "low",
+        recommendedBudget: 2048,
+        signals
+      };
+    }
+    if (clampedScore < 0.75) {
+      return {
+        score: clampedScore,
+        tier: "medium",
+        recommendedBudget: 8192,
+        signals
+      };
+    }
+    return {
+      score: clampedScore,
+      tier: "high",
+      recommendedBudget: 32768,
+      signals
+    };
+  }
+  /**
+   * Computes a concrete numerical thinking token budget for `thinkingBudget: 'auto'`.
+   */
+  static computeDynamicThinkingBudget(request) {
+    return _GeminiAgentBooster.analyzeComplexity(request).recommendedBudget;
+  }
+  /**
+   * Deterministically sorts tool definitions by `function.name` and recursively
+   * canonicalizes `function.parameters` keys so identical tool sets always produce
+   * byte-identical JSON prefixes for KV-Cache reuse.
+   */
+  static canonicalizeTools(tools) {
+    if (!Array.isArray(tools) || tools.length === 0) {
+      return tools;
+    }
+    return [...tools].sort((a, b) => a.function.name.localeCompare(b.function.name)).map((tool) => ({
+      ...tool,
+      function: {
+        ...tool.function,
+        parameters: tool.function.parameters ? canonicalizeJsonValue(tool.function.parameters) : tool.function.parameters
+      }
+    }));
+  }
+  /**
+   * Canonicalizes a UnifiedApiRequest for optimal KV-Cache hit rates and resolves
+   * `thinkingBudget: 'auto'` if specified.
+   *
+   * - Pins all `system` messages to the leading prefix in their relative order.
+   * - Sorts `tools` and their JSON schema keys deterministically.
+   * - Resolves `thinkingBudget: 'auto'` into a concrete numerical token budget.
+   */
+  static canonicalizeRequest(request) {
+    const systemMessages = [];
+    const conversationMessages = [];
+    for (const msg of request.messages) {
+      if (msg.role === "system") {
+        systemMessages.push(msg);
+      } else {
+        conversationMessages.push(msg);
+      }
+    }
+    const canonicalMessages = systemMessages.length > 0 ? [...systemMessages, ...conversationMessages] : request.messages;
+    const canonicalTools = request.tools ? _GeminiAgentBooster.canonicalizeTools(request.tools) : void 0;
+    const resolvedThinkingBudget = request.thinkingBudget === "auto" ? _GeminiAgentBooster.computeDynamicThinkingBudget(request) : request.thinkingBudget;
+    return {
+      ...request,
+      messages: canonicalMessages,
+      tools: canonicalTools,
+      thinkingBudget: resolvedThinkingBudget
+    };
+  }
+  /**
+   * Evaluates whether a request's static prefix (system instructions + tool definitions)
+   * meets the token threshold for Google Context Caching (default: 32,768 tokens).
+   */
+  static evaluateContextCacheEligibility(request, minTokenThreshold = 32768) {
+    const { systemText } = extractMessagesText(request.messages || []);
+    const toolsJson = request.tools && request.tools.length > 0 ? JSON.stringify(_GeminiAgentBooster.canonicalizeTools(request.tools)) : "";
+    const totalStaticChars = systemText.length + toolsJson.length;
+    const estimatedPrefixTokens = Math.ceil(totalStaticChars / 4);
+    const eligible = estimatedPrefixTokens >= minTokenThreshold;
+    return {
+      eligible,
+      estimatedPrefixTokens,
+      thresholdTokens: minTokenThreshold,
+      estimatedSavingsRatio: eligible ? 0.75 : 0,
+      systemText
+    };
+  }
+};
+
+// src/utils/rateLimit.ts
+function parseDurationMs(durationStr) {
+  const trimmed = durationStr.trim();
+  if (!trimmed) return void 0;
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const val = Number.parseFloat(trimmed);
+    return Number.isNaN(val) ? void 0 : Math.round(val * 1e3);
+  }
+  let totalMs = 0;
+  let matched = false;
+  const regex = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
+  let match;
+  while ((match = regex.exec(trimmed)) !== null) {
+    matched = true;
+    const value = Number.parseFloat(match[1]);
+    const unit = match[2];
+    switch (unit) {
+      case "ms":
+        totalMs += value;
+        break;
+      case "s":
+        totalMs += value * 1e3;
+        break;
+      case "m":
+        totalMs += value * 60 * 1e3;
+        break;
+      case "h":
+        totalMs += value * 3600 * 1e3;
+        break;
+      case "d":
+        totalMs += value * 86400 * 1e3;
+        break;
+    }
+  }
+  return matched ? Math.round(totalMs) : void 0;
+}
+function parseRateLimitHeaders(headers) {
+  if (!headers) return void 0;
+  const reqStr = headers.get("x-ratelimit-remaining-requests") || headers.get("anthropic-ratelimit-requests-remaining") || headers.get("ratelimit-remaining");
+  const tokStr = headers.get("x-ratelimit-remaining-tokens") || headers.get("anthropic-ratelimit-tokens-remaining");
+  const retryAfter = headers.get("retry-after");
+  let remainingRequests;
+  if (reqStr !== null && reqStr !== void 0) {
+    const parsed = Number.parseInt(reqStr, 10);
+    if (!Number.isNaN(parsed)) remainingRequests = parsed;
+  }
+  let remainingTokens;
+  if (tokStr !== null && tokStr !== void 0) {
+    const parsed = Number.parseInt(tokStr, 10);
+    if (!Number.isNaN(parsed)) remainingTokens = parsed;
+  }
+  let resetMs;
+  if (retryAfter) {
+    if (/^\d+(\.\d+)?$/.test(retryAfter.trim())) {
+      const parsedSec = Number.parseFloat(retryAfter);
+      if (!Number.isNaN(parsedSec)) {
+        resetMs = Math.round(parsedSec * 1e3);
+      }
+    } else {
+      const retryDateMs = Date.parse(retryAfter);
+      if (!Number.isNaN(retryDateMs)) {
+        resetMs = Math.max(0, retryDateMs - Date.now());
+      }
+    }
+  } else {
+    const resetTokensHeader = headers.get("x-ratelimit-reset-tokens");
+    const resetRequestsHeader = headers.get("x-ratelimit-reset-requests");
+    if (resetTokensHeader) {
+      resetMs = parseDurationMs(resetTokensHeader);
+    } else if (resetRequestsHeader) {
+      resetMs = parseDurationMs(resetRequestsHeader);
+    }
+  }
+  if (remainingRequests === void 0 && remainingTokens === void 0 && resetMs === void 0) {
+    return void 0;
+  }
+  return {
+    remainingRequests,
+    remainingTokens,
+    resetMs
+  };
+}
+
+// src/utils/signal.ts
+function linkAbortSignal(target, source) {
+  if (!source) return void 0;
+  if (source.aborted) {
+    target.abort();
+    return void 0;
+  }
+  const onAbort = () => {
+    target.abort();
+  };
+  source.addEventListener("abort", onAbort, { once: true });
+  return () => {
+    source.removeEventListener("abort", onAbort);
+  };
+}
+
+// src/providers/GeminiProvider.ts
+init_stream();
+var GEMINI_MODELS = {
+  PRO_4: "gemini-4-pro",
+  ARGON_4: "gemini-4-argon",
+  FLASH_4: "gemini-4-flash",
+  PROJECT_ASTRA: "gemini-4-flash",
+  FLASH_3_8: "gemini-3.8-flash",
+  FLASH_3_6: "gemini-3.6-flash",
+  FLASH_LITE_3_5: "gemini-3.5-flash-lite",
+  PRO_3_1_PREVIEW: "gemini-3.1-pro-preview",
+  FLASH_2_5: "gemini-2.5-flash",
+  FLASH_LITE_2_5: "gemini-2.5-flash-lite",
+  PRO_2_5: "gemini-2.5-pro",
+  FLASH_2_0: "gemini-2.0-flash",
+  FLASH_2_0_LITE: "gemini-2.0-flash-lite",
+  FLASH_THINKING_2_0: "gemini-2.0-flash-thinking-exp",
+  PRO_2_0: "gemini-2.0-pro-exp",
+  FLASH_LATEST: "gemini-flash-latest",
+  PRO_LATEST: "gemini-pro-latest",
+  EMBEDDING_001: "gemini-embedding-001",
+  EMBEDDING_2: "gemini-embedding-2",
+  TEXT_EMBEDDING_004: "text-embedding-004"
+};
+var GEMINI_AVAILABILITY_FALLBACKS = {
+  "gemini-4-pro": ["gemini-3.8-flash"],
+  "gemini-4-argon": ["gemini-3.8-flash"]
+};
+var GEMINI_DEFAULT_PRICING = {
+  "gemini-4-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "gemini-4-argon": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
+  "gemini-4-flash": { promptCostPer1k: 75e-6, completionCostPer1k: 3e-4 },
+  "gemini-3.8-flash": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-3.6-flash": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-3.5-flash-lite": {
+    promptCostPer1k: 375e-7,
+    completionCostPer1k: 15e-5
+  },
+  "gemini-3.1-pro-preview": {
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3
+  },
+  "gemini-2.5-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "gemini-2.5-flash": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-2.5-flash-lite": {
+    promptCostPer1k: 375e-7,
+    completionCostPer1k: 15e-5
+  },
+  "gemini-2.0-flash": { promptCostPer1k: 1e-4, completionCostPer1k: 4e-4 },
+  "gemini-2.0-flash-lite": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-2.0-pro-exp": {
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3
+  },
+  "gemini-flash-latest": {
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4
+  },
+  "gemini-pro-latest": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "text-embedding-004": { promptCostPer1k: 1e-5, completionCostPer1k: 0 },
+  "gemini-embedding-001": { promptCostPer1k: 1e-5, completionCostPer1k: 0 },
+  "gemini-embedding-2": { promptCostPer1k: 1e-5, completionCostPer1k: 0 }
+};
+var GeminiProvider = class {
+  id;
+  name = "Gemini";
+  config;
+  constructor(config) {
+    this.config = config;
+    this.id = config.id || `gemini-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    if (this.config.promptCostPer1k !== void 0) {
+      return this.config.promptCostPer1k;
+    }
+    const model = this.resolveModel(this.defaultModel || "default");
+    return GEMINI_DEFAULT_PRICING[model]?.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    if (this.config.completionCostPer1k !== void 0) {
+      return this.config.completionCostPer1k;
+    }
+    const model = this.resolveModel(this.defaultModel || "default");
+    return GEMINI_DEFAULT_PRICING[model]?.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    if (this.config.fallbackModels) {
+      return this.config.fallbackModels;
+    }
+    if (this.config.enableAvailabilityFallback) {
+      const target = this.defaultModel || "gemini-4-pro";
+      return GEMINI_AVAILABILITY_FALLBACKS[target] || [GEMINI_MODELS.FLASH_3_8];
+    }
+    return void 0;
+  }
+  /**
+   * Returns the canonical availability fallback models for a given Gemini frontier model.
+   */
+  static getAvailabilityFallbacks(model) {
+    return GEMINI_AVAILABILITY_FALLBACKS[model] || [];
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    if (this.config.defaultModel) {
+      return this.config.defaultModel;
+    }
+    if (!model || model === "default") {
+      return GEMINI_MODELS.FLASH_2_5;
+    }
+    return model;
+  }
+  formatRequest(request) {
+    const contents = [];
+    const systemParts = [];
+    const toolCallIdToName = /* @__PURE__ */ new Map();
+    for (const m of request.messages) {
+      if (m.role === "assistant" && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          if (tc.id && tc.function?.name) {
+            toolCallIdToName.set(tc.id, tc.function.name);
+          }
+        }
+      }
+    }
+    const formatGeminiParts = (content) => {
+      if (content === null || content === void 0) {
+        return [{ text: "" }];
+      }
+      if (typeof content === "string") {
+        return [{ text: content }];
+      }
+      if (Array.isArray(content)) {
+        const parts = [];
+        for (const part of content) {
+          if (part.type === "text") {
+            parts.push({ text: part.text });
+          } else if (part.type === "image_url") {
+            const url = part.image_url.url;
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              parts.push({
+                inlineData: {
+                  mimeType: match[1],
+                  data: match[2]
+                }
+              });
+            } else {
+              let mimeType = "image/jpeg";
+              if (url.endsWith(".png")) mimeType = "image/png";
+              else if (url.endsWith(".webp")) mimeType = "image/webp";
+              else if (url.endsWith(".gif")) mimeType = "image/gif";
+              else if (url.endsWith(".svg")) mimeType = "image/svg+xml";
+              else if (url.endsWith(".pdf")) mimeType = "application/pdf";
+              else if (url.endsWith(".mp4")) mimeType = "video/mp4";
+              else if (url.endsWith(".webm")) mimeType = "video/webm";
+              else if (url.endsWith(".mp3")) mimeType = "audio/mp3";
+              else if (url.endsWith(".wav")) mimeType = "audio/wav";
+              parts.push({
+                fileData: {
+                  mimeType,
+                  fileUri: url
+                }
+              });
+            }
+          } else if (part.type === "input_audio") {
+            parts.push({
+              inlineData: {
+                mimeType: `audio/${part.input_audio.format || "wav"}`,
+                data: part.input_audio.data
+              }
+            });
+          }
+        }
+        return parts.length > 0 ? parts : [{ text: "" }];
+      }
+      return [{ text: "" }];
+    };
+    for (const msg of request.messages) {
+      if (msg.role === "system") {
+        if (typeof msg.content === "string") {
+          systemParts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const p of msg.content) {
+            if (p.type === "text") {
+              systemParts.push({ text: p.text });
+            }
+          }
+        }
+      } else if (msg.role === "tool") {
+        const responseContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
+        const resolvedName = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : void 0) || "function";
+        const functionResponsePart = {
+          functionResponse: {
+            name: resolvedName,
+            response: { content: responseContent }
+          }
+        };
+        const lastContent = contents[contents.length - 1];
+        if (lastContent && lastContent.role === "user") {
+          lastContent.parts.push(functionResponsePart);
+        } else {
+          contents.push({
+            role: "user",
+            parts: [functionResponsePart]
+          });
+        }
+      } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+        const parts = [];
+        if (typeof msg.content === "string" && msg.content) {
+          parts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          for (const p of msg.content) {
+            if (p.type === "text") {
+              parts.push({ text: p.text });
+            }
+          }
+        }
+        for (const tc of msg.tool_calls) {
+          let args = {};
+          try {
+            args = JSON.parse(tc.function.arguments);
+          } catch {
+            args = {};
+          }
+          parts.push({
+            functionCall: {
+              name: tc.function.name,
+              args
+            }
+          });
+        }
+        contents.push({
+          role: "model",
+          parts
+        });
+      } else {
+        const geminiRole = msg.role === "assistant" ? "model" : "user";
+        const msgParts = formatGeminiParts(msg.content);
+        const lastContent = contents[contents.length - 1];
+        if (lastContent && lastContent.role === geminiRole) {
+          lastContent.parts.push(...msgParts);
+        } else {
+          contents.push({
+            role: geminiRole,
+            parts: msgParts
+          });
+        }
+      }
+    }
+    const generationConfig = {};
+    if (request.temperature !== void 0) {
+      generationConfig.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      generationConfig.maxOutputTokens = request.maxTokens;
+    }
+    if (request.responseFormat?.type === "json_object") {
+      generationConfig.responseMimeType = "application/json";
+    } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
+      generationConfig.responseMimeType = "application/json";
+      const cleanSchema = { ...request.responseFormat.json_schema.schema };
+      delete cleanSchema.additionalProperties;
+      generationConfig.responseSchema = cleanSchema;
+    }
+    const rawThinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
+    let thinkingBudget;
+    if (rawThinkingBudget === "auto") {
+      thinkingBudget = GeminiAgentBooster.computeDynamicThinkingBudget(request);
+    } else {
+      thinkingBudget = rawThinkingBudget;
+    }
+    if (thinkingBudget === void 0 && request.reasoningEffort) {
+      if (request.reasoningEffort === "low") {
+        thinkingBudget = 2048;
+      } else if (request.reasoningEffort === "medium") {
+        thinkingBudget = 8192;
+      } else if (request.reasoningEffort === "high") {
+        thinkingBudget = 32768;
+      }
+    }
+    if (thinkingBudget !== void 0) {
+      generationConfig.thinkingConfig = {
+        thinkingBudget
+      };
+    }
+    const payload = { contents };
+    if (systemParts.length > 0) {
+      payload.systemInstruction = { parts: systemParts };
+    }
+    if (Object.keys(generationConfig).length > 0) {
+      payload.generationConfig = generationConfig;
+    }
+    if (this.config.safetySettings && this.config.safetySettings.length > 0) {
+      payload.safetySettings = this.config.safetySettings;
+    }
+    const cachedContent = request.cachedContent ?? this.config.cachedContent;
+    if (cachedContent) {
+      payload.cachedContent = cachedContent;
+    }
+    const tools = [];
+    if (request.tools && request.tools.length > 0) {
+      const canonicalTools = GeminiAgentBooster.canonicalizeTools(
+        request.tools
+      );
+      tools.push({
+        functionDeclarations: canonicalTools.map((t) => ({
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters
+        }))
+      });
+    }
+    const useGoogleSearch = request.googleSearch ?? this.config.googleSearch;
+    if (useGoogleSearch) {
+      tools.push({ googleSearch: {} });
+    }
+    const useCodeExecution = request.codeExecution ?? this.config.codeExecution;
+    if (useCodeExecution) {
+      tools.push({ codeExecution: {} });
+    }
+    if (tools.length > 0) {
+      payload.tools = tools;
+    }
+    if (request.toolChoice) {
+      if (request.toolChoice === "auto") {
+        payload.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
+      } else if (request.toolChoice === "none") {
+        payload.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+      } else if (request.toolChoice === "required") {
+        payload.toolConfig = { functionCallingConfig: { mode: "ANY" } };
+      } else if (typeof request.toolChoice === "object") {
+        payload.toolConfig = {
+          functionCallingConfig: {
+            mode: "ANY",
+            allowedFunctionNames: [request.toolChoice.function.name]
+          }
+        };
+      }
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
+  formatResponse(data, model) {
+    const candidate = data.candidates?.[0];
+    let text = "";
+    let reasoningContent = "";
+    const toolCalls = [];
+    if (candidate?.content?.parts) {
+      for (const part of candidate.content.parts) {
+        if (typeof part.thought === "string") {
+          reasoningContent += part.thought;
+        } else if (part.thought) {
+          reasoningContent += part.text || "";
+        } else if (part.text) {
+          text += part.text;
+        }
+        if (part.executableCode) {
+          const lang = (part.executableCode.language || "python").toLowerCase();
+          text += `
+\`\`\`${lang}
+${part.executableCode.code || ""}
+\`\`\`
+`;
+        }
+        if (part.codeExecutionResult) {
+          text += `
+\`\`\`
+[Execution Outcome: ${part.codeExecutionResult.outcome || "OK"}]
+${part.codeExecutionResult.output || ""}
+\`\`\`
+`;
+        }
+        if (part.functionCall) {
+          toolCalls.push({
+            id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            type: "function",
+            function: {
+              name: part.functionCall.name,
+              arguments: JSON.stringify(part.functionCall.args || {})
+            }
+          });
+        }
+      }
+    }
+    let finishReason = "stop";
+    if (toolCalls.length > 0) {
+      finishReason = "tool_calls";
+    } else if (candidate?.finishReason) {
+      switch (candidate.finishReason) {
+        case "MAX_TOKENS":
+          finishReason = "length";
+          break;
+        case "SAFETY":
+        case "RECITATION":
+          finishReason = "content_filter";
+          break;
+        case "STOP":
+          finishReason = "stop";
+          break;
+        default:
+          finishReason = candidate.finishReason.toLowerCase();
+      }
+    }
+    let grounding;
+    if (candidate?.groundingMetadata) {
+      const gm = candidate.groundingMetadata;
+      const sources = [];
+      if (Array.isArray(gm.groundingChunks)) {
+        for (const gc of gm.groundingChunks) {
+          if (gc.web) {
+            sources.push({
+              title: gc.web.title,
+              uri: gc.web.uri
+            });
+          }
+        }
+      }
+      grounding = {
+        webSearchQueries: gm.webSearchQueries,
+        sources: sources.length > 0 ? sources : void 0,
+        searchEntryPoint: gm.searchEntryPoint?.renderedContent
+      };
+    }
+    return {
+      id: `gemini-${Date.now()}`,
+      model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: text || null,
+            reasoning_content: reasoningContent || void 0,
+            tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+            grounding
+          },
+          finishReason
+        }
+      ],
+      grounding,
+      usage: data.usageMetadata ? {
+        promptTokens: data.usageMetadata.promptTokenCount || 0,
+        completionTokens: data.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: data.usageMetadata.totalTokenCount || 0,
+        cachedPromptTokens: data.usageMetadata.cachedContentTokenCount || void 0
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const targetModel = this.resolveModel(request.model);
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const action = request.stream ? "streamGenerateContent?alt=sse" : "generateContent";
+    const finalUrl = `${baseUrl}/models/${targetModel}:${action}`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(finalUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.config.apiKey || ""
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Gemini API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          try {
+            let chunkIndex = 0;
+            for await (const msg of parseSSE(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const candidate = parsed.candidates?.[0];
+                let text = "";
+                let reasoning = "";
+                const toolCalls = [];
+                if (candidate?.content?.parts) {
+                  for (const part of candidate.content.parts) {
+                    if (typeof part.thought === "string") {
+                      reasoning += part.thought;
+                    } else if (part.thought) {
+                      reasoning += part.text || "";
+                    } else if (part.text) {
+                      text += part.text;
+                    }
+                    if (part.executableCode) {
+                      const lang = (part.executableCode.language || "python").toLowerCase();
+                      text += `
+\`\`\`${lang}
+${part.executableCode.code || ""}
+\`\`\`
+`;
+                    }
+                    if (part.codeExecutionResult) {
+                      text += `
+\`\`\`
+[Execution Outcome: ${part.codeExecutionResult.outcome || "OK"}]
+${part.codeExecutionResult.output || ""}
+\`\`\`
+`;
+                    }
+                    if (part.functionCall) {
+                      toolCalls.push({
+                        index: chunkIndex++,
+                        id: `call_${Date.now()}_${chunkIndex}`,
+                        type: "function",
+                        function: {
+                          name: part.functionCall.name,
+                          arguments: JSON.stringify(
+                            part.functionCall.args || {}
+                          )
+                        }
+                      });
+                    }
+                  }
+                }
+                let streamGrounding;
+                if (candidate?.groundingMetadata) {
+                  const gm = candidate.groundingMetadata;
+                  const sources = [];
+                  if (Array.isArray(gm.groundingChunks)) {
+                    for (const gc of gm.groundingChunks) {
+                      if (gc.web) {
+                        sources.push({
+                          title: gc.web.title,
+                          uri: gc.web.uri
+                        });
+                      }
+                    }
+                  }
+                  streamGrounding = {
+                    webSearchQueries: gm.webSearchQueries,
+                    sources: sources.length > 0 ? sources : void 0,
+                    searchEntryPoint: gm.searchEntryPoint?.renderedContent
+                  };
+                }
+                const usage = parsed.usageMetadata ? {
+                  promptTokens: parsed.usageMetadata.promptTokenCount || 0,
+                  completionTokens: parsed.usageMetadata.candidatesTokenCount || 0,
+                  totalTokens: parsed.usageMetadata.totalTokenCount || 0,
+                  cachedPromptTokens: parsed.usageMetadata.cachedContentTokenCount || void 0
+                } : void 0;
+                yield {
+                  id: `gemini-${Date.now()}`,
+                  model: targetModel,
+                  choices: [
+                    {
+                      delta: {
+                        role: "assistant",
+                        content: text || void 0,
+                        reasoning_content: reasoning || void 0,
+                        tool_calls: toolCalls.length > 0 ? toolCalls : void 0
+                      },
+                      finishReason: toolCalls.length > 0 ? "tool_calls" : candidate?.finishReason ? candidate.finishReason.toLowerCase() : null
+                    }
+                  ],
+                  usage,
+                  grounding: streamGrounding
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            cleanupSignal?.();
+            if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data, targetModel);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream) {
+        cleanupSignal?.();
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    }
+  }
+  async generateEmbedding(request) {
+    const targetModel = request.model && request.model !== "default" ? request.model : GEMINI_MODELS.EMBEDDING_001;
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const isBatch = Array.isArray(request.input);
+    const endpoint = isBatch ? "batchEmbedContents" : "embedContent";
+    const url = `${baseUrl}/models/${targetModel}:${endpoint}`;
+    let bodyPayload;
+    if (isBatch) {
+      bodyPayload = {
+        requests: request.input.map((text) => {
+          const item = {
+            model: `models/${targetModel}`,
+            content: { parts: [{ text }] }
+          };
+          if (request.dimensions) {
+            item.outputDimensionality = request.dimensions;
+          }
+          return item;
+        })
+      };
+    } else {
+      bodyPayload = {
+        content: { parts: [{ text: request.input }] }
+      };
+      if (request.dimensions) {
+        bodyPayload.outputDimensionality = request.dimensions;
+      }
+    }
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.config.apiKey || ""
+        },
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Gemini Embedding API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      const embeddingsList = isBatch ? (data.embeddings || []).map(
+        // biome-ignore lint/suspicious/noExplicitAny: embedding item
+        (e, idx) => ({
+          index: idx,
+          embedding: e.values || [],
+          object: "embedding"
+        })
+      ) : [
+        {
+          index: 0,
+          embedding: data.embedding?.values || [],
+          object: "embedding"
+        }
+      ];
+      return {
+        object: "list",
+        data: embeddingsList,
+        model: targetModel,
+        usage: data.usageMetadata ? {
+          promptTokens: data.usageMetadata.promptTokenCount || 0,
+          totalTokens: data.usageMetadata.totalTokenCount || 0
+        } : void 0
+      };
+    } finally {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+  static async fetchAvailableModels(options) {
+    const baseUrl = options.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const response = await fetch(`${baseUrl}/models`, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": options.apiKey
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Gemini models (${response.status})`);
+    }
+    const data = await response.json();
+    return (data.models || []).map((m) => ({
+      id: (m.name || "").replace(/^models\//, ""),
+      displayName: m.displayName || m.name,
+      description: m.description,
+      inputTokenLimit: m.inputTokenLimit,
+      outputTokenLimit: m.outputTokenLimit,
+      supportedGenerationMethods: m.supportedGenerationMethods || []
+    }));
+  }
+  /**
+   * Creates a context cache resource on Google Gemini API for long contexts (>32,768 tokens),
+   * providing up to 75%-90% cost reduction and lower latency.
+   */
+  async createCachedContent(options) {
+    const targetModel = this.resolveModel(options.model);
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    let contents = options.contents;
+    if (!contents && options.messages) {
+      const formatted = this.formatRequest({
+        model: targetModel,
+        messages: options.messages
+      });
+      contents = formatted.contents;
+    }
+    const body = {
+      model: `models/${targetModel}`,
+      contents: contents || [],
+      ttl: options.ttl || "3600s"
+    };
+    if (options.displayName) {
+      body.displayName = options.displayName;
+    }
+    if (options.systemInstruction) {
+      body.systemInstruction = {
+        parts: [{ text: options.systemInstruction }]
+      };
+    }
+    const response = await fetch(`${baseUrl}/cachedContents`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.config.apiKey || ""
+      },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to create Gemini CachedContent (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    return await response.json();
+  }
+  /**
+   * Fetches metadata for an existing Gemini CachedContent.
+   */
+  async getCachedContent(name) {
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const resourcePath = name.startsWith("cachedContents/") ? name : `cachedContents/${name}`;
+    const response = await fetch(`${baseUrl}/${resourcePath}`, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": this.config.apiKey || ""
+      }
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to get Gemini CachedContent (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    return await response.json();
+  }
+  /**
+   * Lists active CachedContents for the configured Gemini API key.
+   */
+  async listCachedContents(pageSize) {
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const query = pageSize ? `?pageSize=${pageSize}` : "";
+    const response = await fetch(`${baseUrl}/cachedContents${query}`, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": this.config.apiKey || ""
+      }
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to list Gemini CachedContents (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    const data = await response.json();
+    return data.cachedContents || [];
+  }
+  /**
+   * Deletes a Gemini CachedContent by name.
+   */
+  async deleteCachedContent(name) {
+    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+    const resourcePath = name.startsWith("cachedContents/") ? name : `cachedContents/${name}`;
+    const response = await fetch(`${baseUrl}/${resourcePath}`, {
+      method: "DELETE",
+      headers: {
+        "x-goog-api-key": this.config.apiKey || ""
+      }
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Failed to delete Gemini CachedContent (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+  }
+};
+
 // src/utils/streamAccumulator.ts
 async function accumulateStream(stream, options) {
   let id = "";
@@ -119,8 +1276,13 @@ async function accumulateStream(stream, options) {
             } else {
               const existing = toolCallsMap.get(index);
               if (existing) {
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.name += tc.function.name;
+                if (tc.function?.name) {
+                  if (!existing.name) {
+                    existing.name = tc.function.name;
+                  } else if (existing.name !== tc.function.name && !existing.name.includes(tc.function.name)) {
+                    existing.name += tc.function.name;
+                  }
+                }
                 if (tc.function?.arguments) {
                   existing.arguments += tc.function.arguments;
                 }
@@ -747,7 +1909,7 @@ var InMemoryStorage = class {
   async delete(key) {
     this.store.delete(key);
   }
-  async increment(key) {
+  async increment(key, ttlSeconds) {
     const item = this.store.get(key);
     let currentValue = 0;
     if (item) {
@@ -759,9 +1921,10 @@ var InMemoryStorage = class {
     }
     const newValue = currentValue + 1;
     const existing = this.store.get(key);
+    const expiresAt = existing?.expiresAt ?? (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1e3 : null);
     this.store.set(key, {
       value: newValue,
-      expiresAt: existing?.expiresAt ?? null
+      expiresAt
     });
     return newValue;
   }
@@ -1108,7 +2271,7 @@ var McpToolBridge = class _McpToolBridge {
             },
             serverInfo: {
               name: "sinapsai-mcp",
-              version: "2.9.0"
+              version: "2.10.0"
             }
           }
         };
@@ -1782,10 +2945,7 @@ var GatewayRateLimiter = class {
     const shouldConsume = checkOptions?.consume !== false;
     if (shouldConsume) {
       if (rule.requestsPerMinute !== void 0) {
-        await this.storage.increment(reqKeyCurrent);
-        if (currReqCount === 0) {
-          await this.storage.set(reqKeyCurrent, 1, ttlSeconds);
-        }
+        await this.storage.increment(reqKeyCurrent, ttlSeconds);
       }
       if (rule.tokensPerMinute !== void 0) {
         const newTokens = currTokCount + tokCost;
@@ -1821,221 +2981,6 @@ var GatewayRateLimiter = class {
     const updated = Math.max(0, curr + delta);
     const ttlSeconds = Math.ceil(windowMs * 2 / 1e3);
     await this.storage.set(tokKeyCurrent, updated, ttlSeconds);
-  }
-};
-
-// src/core/GeminiAgentBooster.ts
-var COMPLEX_REASONING_REGEX = /\b(architect(?:ure)?|refactor|optimiz(?:e|ation)|vulnerabilit(?:y|ies)|security\s+audit|prove|theorem|algorithm|concurren(?:t|cy)|deadlock|race\s+condition|distributed|microkernel|step[\s-]by[\s-]step|root\s+cause|stack\s+trace|benchmark|formal\s+verification)\b/i;
-var CODE_OR_MATH_REGEX = /```[\s\S]*?```|\b(?:function|class|interface|SELECT\s+.+\s+FROM|CREATE\s+TABLE|async\s+function|Promise\.all|TypeError:|ReferenceError:|Error:\s+at\s+)\b|\$\$[\s\S]+?\$\$/i;
-var SIMPLE_INTENT_REGEX = /^(?:hi|hello|hey|halo|ping|ok|okay|thanks|thank\s+you|terima\s+kasih|yes|no|ya|tidak|translate\s+to\s+\w+:|classify\s*:)/i;
-function canonicalizeJsonValue(value) {
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(canonicalizeJsonValue);
-  }
-  const record = value;
-  const sortedKeys = Object.keys(record).sort();
-  const result = {};
-  for (const key of sortedKeys) {
-    result[key] = canonicalizeJsonValue(record[key]);
-  }
-  return result;
-}
-function extractMessagesText(messages) {
-  const allParts = [];
-  const systemParts = [];
-  let lastUserText = "";
-  let nonSystemTurnCount = 0;
-  for (const msg of messages) {
-    let msgText = "";
-    if (typeof msg.content === "string") {
-      msgText = msg.content;
-    } else if (Array.isArray(msg.content)) {
-      msgText = msg.content.map((p) => p.type === "text" ? p.text : "").filter(Boolean).join("\n");
-    }
-    if (msg.role === "system") {
-      if (msgText) systemParts.push(msgText);
-    } else {
-      nonSystemTurnCount++;
-      if (msg.role === "user" && msgText) {
-        lastUserText = msgText;
-      }
-    }
-    if (msgText) {
-      allParts.push(msgText);
-    }
-  }
-  return {
-    totalText: allParts.join("\n"),
-    lastUserText,
-    systemText: systemParts.join("\n"),
-    nonSystemTurnCount
-  };
-}
-var GeminiAgentBooster = class _GeminiAgentBooster {
-  /**
-   * Analyzes a UnifiedApiRequest and computes a complexity score [0..1],
-   * thinking tier ('none' | 'low' | 'medium' | 'high'), and recommended thinkingBudget.
-   */
-  static analyzeComplexity(request) {
-    const signals = [];
-    let score = 0;
-    const { totalText, lastUserText, nonSystemTurnCount } = extractMessagesText(
-      request.messages || []
-    );
-    const trimmedLastUser = lastUserText.trim();
-    const totalChars = totalText.length;
-    const toolCount = request.tools?.length ?? 0;
-    if (toolCount === 0 && !request.responseFormat && totalChars < 80 && (totalChars === 0 || SIMPLE_INTENT_REGEX.test(trimmedLastUser)) && !CODE_OR_MATH_REGEX.test(totalText) && !COMPLEX_REASONING_REGEX.test(totalText)) {
-      signals.push("simple_intent_short_prompt");
-      return {
-        score: 0.05,
-        tier: "none",
-        recommendedBudget: 0,
-        signals
-      };
-    }
-    if (totalChars > 8e3) {
-      score += 0.35;
-      signals.push("long_context_8k+");
-    } else if (totalChars > 2e3) {
-      score += 0.25;
-      signals.push("medium_context_2k+");
-    } else if (totalChars > 300) {
-      score += 0.15;
-      signals.push("standard_context_300+");
-    } else if (totalChars > 60) {
-      score += 0.1;
-      signals.push("concise_prompt");
-    }
-    if (CODE_OR_MATH_REGEX.test(totalText)) {
-      score += 0.3;
-      signals.push("code_or_math_detected");
-    }
-    if (COMPLEX_REASONING_REGEX.test(totalText)) {
-      score += 0.3;
-      signals.push("complex_reasoning_keywords");
-    }
-    if (toolCount >= 4) {
-      score += 0.3;
-      signals.push(`multi_tool_orchestration(${toolCount})`);
-    } else if (toolCount >= 1) {
-      score += 0.2;
-      signals.push(`tool_calling(${toolCount})`);
-    }
-    if (request.responseFormat?.type === "json_schema") {
-      score += 0.15;
-      signals.push("strict_json_schema");
-    } else if (request.responseFormat?.type === "json_object") {
-      score += 0.1;
-      signals.push("json_object_mode");
-    }
-    if (nonSystemTurnCount >= 6) {
-      score += 0.15;
-      signals.push(`deep_conversation(${nonSystemTurnCount}_turns)`);
-    }
-    const clampedScore = Math.min(1, Number(score.toFixed(2)));
-    if (clampedScore < 0.15) {
-      return {
-        score: clampedScore,
-        tier: "none",
-        recommendedBudget: 0,
-        signals
-      };
-    }
-    if (clampedScore < 0.45) {
-      return {
-        score: clampedScore,
-        tier: "low",
-        recommendedBudget: 2048,
-        signals
-      };
-    }
-    if (clampedScore < 0.75) {
-      return {
-        score: clampedScore,
-        tier: "medium",
-        recommendedBudget: 8192,
-        signals
-      };
-    }
-    return {
-      score: clampedScore,
-      tier: "high",
-      recommendedBudget: 32768,
-      signals
-    };
-  }
-  /**
-   * Computes a concrete numerical thinking token budget for `thinkingBudget: 'auto'`.
-   */
-  static computeDynamicThinkingBudget(request) {
-    return _GeminiAgentBooster.analyzeComplexity(request).recommendedBudget;
-  }
-  /**
-   * Deterministically sorts tool definitions by `function.name` and recursively
-   * canonicalizes `function.parameters` keys so identical tool sets always produce
-   * byte-identical JSON prefixes for KV-Cache reuse.
-   */
-  static canonicalizeTools(tools) {
-    if (!Array.isArray(tools) || tools.length === 0) {
-      return tools;
-    }
-    return [...tools].sort((a, b) => a.function.name.localeCompare(b.function.name)).map((tool) => ({
-      ...tool,
-      function: {
-        ...tool.function,
-        parameters: tool.function.parameters ? canonicalizeJsonValue(tool.function.parameters) : tool.function.parameters
-      }
-    }));
-  }
-  /**
-   * Canonicalizes a UnifiedApiRequest for optimal KV-Cache hit rates and resolves
-   * `thinkingBudget: 'auto'` if specified.
-   *
-   * - Pins all `system` messages to the leading prefix in their relative order.
-   * - Sorts `tools` and their JSON schema keys deterministically.
-   * - Resolves `thinkingBudget: 'auto'` into a concrete numerical token budget.
-   */
-  static canonicalizeRequest(request) {
-    const systemMessages = [];
-    const conversationMessages = [];
-    for (const msg of request.messages) {
-      if (msg.role === "system") {
-        systemMessages.push(msg);
-      } else {
-        conversationMessages.push(msg);
-      }
-    }
-    const canonicalMessages = systemMessages.length > 0 ? [...systemMessages, ...conversationMessages] : request.messages;
-    const canonicalTools = request.tools ? _GeminiAgentBooster.canonicalizeTools(request.tools) : void 0;
-    const resolvedThinkingBudget = request.thinkingBudget === "auto" ? _GeminiAgentBooster.computeDynamicThinkingBudget(request) : request.thinkingBudget;
-    return {
-      ...request,
-      messages: canonicalMessages,
-      tools: canonicalTools,
-      thinkingBudget: resolvedThinkingBudget
-    };
-  }
-  /**
-   * Evaluates whether a request's static prefix (system instructions + tool definitions)
-   * meets the token threshold for Google Context Caching (default: 32,768 tokens).
-   */
-  static evaluateContextCacheEligibility(request, minTokenThreshold = 32768) {
-    const { systemText } = extractMessagesText(request.messages || []);
-    const toolsJson = request.tools && request.tools.length > 0 ? JSON.stringify(_GeminiAgentBooster.canonicalizeTools(request.tools)) : "";
-    const totalStaticChars = systemText.length + toolsJson.length;
-    const estimatedPrefixTokens = Math.ceil(totalStaticChars / 4);
-    const eligible = estimatedPrefixTokens >= minTokenThreshold;
-    return {
-      eligible,
-      estimatedPrefixTokens,
-      thresholdTokens: minTokenThreshold,
-      estimatedSavingsRatio: eligible ? 0.75 : 0,
-      systemText
-    };
   }
 };
 
@@ -2151,7 +3096,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.9.0";
+  const serviceVersion = options.serviceVersion || "2.10.0";
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
@@ -2836,6 +3781,9 @@ var Router = class {
       if (m && !list.includes(m)) {
         list.push(m);
       }
+    }
+    if ((request.model === "gemini-4-pro" || request.model === "gemini-4-argon" || request.model === "gemini-4-flash") && provider.name === "Gemini" && !list.includes("gemini-3.8-flash")) {
+      list.push("gemini-3.8-flash");
     }
     return list.length > 0 ? list : ["default"];
   }
@@ -3665,9 +4613,17 @@ var SecurityGuardrails = class {
         match = globalRegex.exec(text);
         if (match === null) break;
         const matchedText = match[0];
+        if (matchedText.length === 0) {
+          globalRegex.lastIndex++;
+          continue;
+        }
         const isAllowed = this.allowedPatterns.some((allowed) => {
           if (allowed.test(matchedText)) return true;
-          const textMatch = allowed.exec(text);
+          const allowedClone = new RegExp(
+            allowed.source,
+            allowed.flags.replace("g", "")
+          );
+          const textMatch = allowedClone.exec(text);
           if (textMatch && match) {
             const start = textMatch.index;
             const end = start + textMatch[0].length;
@@ -3687,9 +4643,10 @@ var SecurityGuardrails = class {
         };
         violations.push(violation);
         if (this.action === "sanitize") {
+          const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
           sanitizedText = sanitizedText.replace(
             matchedText,
-            `[SECURITY_REDACTED: ${rule.category}]`
+            () => redactedReplacement
           );
         }
       }
@@ -4099,6 +5056,76 @@ var SinapsClient = class {
     return this.router.clearCache();
   }
   /**
+   * Helper to locate the configured Gemini provider for context caching and frontier tools.
+   */
+  getGeminiProvider() {
+    return this.router.getProviders().find(
+      (p) => p instanceof GeminiProvider || p.name === "Gemini" || p.id.startsWith("gemini") || typeof p.createCachedContent === "function"
+    );
+  }
+  /**
+   * First-class Google Context Caching management control plane (>32k static prefix token caching).
+   */
+  contextCache = {
+    /**
+     * Evaluates whether a prompt or request meets the token threshold for context caching (default: 32,768 tokens).
+     */
+    evaluateEligibility: (request, minTokenThreshold) => {
+      return GeminiAgentBooster.evaluateContextCacheEligibility(
+        request,
+        minTokenThreshold
+      );
+    },
+    /**
+     * Creates a cached content resource on Google Gemini for large static prompts.
+     */
+    create: async (options) => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          "Context caching requires a configured Gemini provider."
+        );
+      }
+      return provider.createCachedContent(options);
+    },
+    /**
+     * Retrieves metadata for an existing cached content resource by name.
+     */
+    get: async (name) => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          "Context caching requires a configured Gemini provider."
+        );
+      }
+      return provider.getCachedContent(name);
+    },
+    /**
+     * Lists active cached content resources.
+     */
+    list: async (pageSize) => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          "Context caching requires a configured Gemini provider."
+        );
+      }
+      return provider.listCachedContents(pageSize);
+    },
+    /**
+     * Deletes a cached content resource by name.
+     */
+    delete: async (name) => {
+      const provider = this.getGeminiProvider();
+      if (!provider) {
+        throw new Error(
+          "Context caching requires a configured Gemini provider."
+        );
+      }
+      return provider.deleteCachedContent(name);
+    }
+  };
+  /**
    * Resolves a model name against configured model aliases.
    */
   resolveModel(modelName) {
@@ -4358,35 +5385,44 @@ var SinapsClient = class {
         stepIndex,
         toolCalls: assembledToolCalls
       };
+      const toolExecutions = await Promise.all(
+        assembledToolCalls.map(async (tc) => {
+          const mcpRes = await bridge.executeToolCall(tc, {
+            signal: options.signal,
+            user: options.user,
+            timeoutMs: options.toolTimeoutMs
+          });
+          const textOutput = mcpRes.content.map((c) => {
+            if (c.type === "text") return c.text;
+            if (c.type === "resource") {
+              return c.resource.text ?? `[Resource: ${c.resource.uri}]`;
+            }
+            return `[Image: ${c.mimeType}]`;
+          }).join("\n");
+          const toolMessage = {
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.function.name,
+            content: textOutput
+          };
+          return {
+            tc,
+            mcpRes,
+            toolMessage
+          };
+        })
+      );
       const toolResults = [];
-      for (const tc of assembledToolCalls) {
-        const mcpRes = await bridge.executeToolCall(tc, {
-          signal: options.signal,
-          user: options.user,
-          timeoutMs: options.toolTimeoutMs
-        });
-        const textOutput = mcpRes.content.map((c) => {
-          if (c.type === "text") return c.text;
-          if (c.type === "resource") {
-            return c.resource.text ?? `[Resource: ${c.resource.uri}]`;
-          }
-          return `[Image: ${c.mimeType}]`;
-        }).join("\n");
-        const toolMessage = {
-          role: "tool",
-          tool_call_id: tc.id,
-          name: tc.function.name,
-          content: textOutput
-        };
-        toolResults.push(toolMessage);
-        currentMessages.push(toolMessage);
+      for (const item of toolExecutions) {
+        toolResults.push(item.toolMessage);
+        currentMessages.push(item.toolMessage);
         yield {
           type: "tool-call-result",
           stepIndex,
-          toolCallId: tc.id,
-          toolName: tc.function.name,
-          result: mcpRes,
-          toolMessage
+          toolCallId: item.tc.id,
+          toolName: item.tc.function.name,
+          result: item.mcpRes,
+          toolMessage: item.toolMessage
         };
       }
       const durationMs = Date.now() - stepStart;
@@ -4981,7 +6017,7 @@ var CloudflareKVStorage = class {
   async delete(key) {
     await this.kv.delete(this.key(key));
   }
-  async increment(key) {
+  async increment(key, ttlSeconds) {
     const prefixedKey = this.key(key);
     const raw = await this.kv.get(prefixedKey, { type: "text" });
     let current = 0;
@@ -4993,7 +6029,11 @@ var CloudflareKVStorage = class {
       }
     }
     const newValue = current + 1;
-    await this.kv.put(prefixedKey, JSON.stringify(newValue));
+    const options = {};
+    if (ttlSeconds && ttlSeconds > 0) {
+      options.expirationTtl = Math.max(60, ttlSeconds);
+    }
+    await this.kv.put(prefixedKey, JSON.stringify(newValue), options);
     return newValue;
   }
   async clear() {
@@ -5061,13 +6101,20 @@ var D1Storage = class {
     await this.ensureTable();
     await this.db.prepare(`DELETE FROM ${this.tableName} WHERE key = ?`).bind(key).run();
   }
-  async increment(key) {
+  async increment(key, ttlSeconds) {
     await this.ensureTable();
     const current = await this.get(key);
     const newValue = (current ?? 0) + 1;
-    await this.db.prepare(
-      `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, (SELECT expires_at FROM ${this.tableName} WHERE key = ?))`
-    ).bind(key, JSON.stringify(newValue), key).run();
+    const expiresAt = current === null && ttlSeconds && ttlSeconds > 0 ? Math.floor(Date.now() / 1e3) + ttlSeconds : null;
+    if (current === null && expiresAt !== null) {
+      await this.db.prepare(
+        `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, ?)`
+      ).bind(key, JSON.stringify(newValue), expiresAt).run();
+    } else {
+      await this.db.prepare(
+        `INSERT OR REPLACE INTO ${this.tableName} (key, value, expires_at) VALUES (?, ?, (SELECT expires_at FROM ${this.tableName} WHERE key = ?))`
+      ).bind(key, JSON.stringify(newValue), key).run();
+    }
     return newValue;
   }
   async clear() {
@@ -5119,8 +6166,13 @@ var RedisStorage = class {
   async delete(key) {
     await this.redis.del(this.key(key));
   }
-  async increment(key) {
-    return this.redis.incr(this.key(key));
+  async increment(key, ttlSeconds) {
+    const prefixedKey = this.key(key);
+    const val = await this.redis.incr(prefixedKey);
+    if (val === 1 && ttlSeconds && ttlSeconds > 0 && typeof this.redis.expire === "function") {
+      await this.redis.expire(prefixedKey, ttlSeconds);
+    }
+    return val;
   }
   async clear() {
     if (typeof this.redis.scan === "function") {
@@ -5148,105 +6200,6 @@ var RedisStorage = class {
     }
   }
 };
-
-// src/utils/rateLimit.ts
-function parseDurationMs(durationStr) {
-  const trimmed = durationStr.trim();
-  if (!trimmed) return void 0;
-  if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const val = Number.parseFloat(trimmed);
-    return Number.isNaN(val) ? void 0 : Math.round(val * 1e3);
-  }
-  let totalMs = 0;
-  let matched = false;
-  const regex = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
-  let match;
-  while ((match = regex.exec(trimmed)) !== null) {
-    matched = true;
-    const value = Number.parseFloat(match[1]);
-    const unit = match[2];
-    switch (unit) {
-      case "ms":
-        totalMs += value;
-        break;
-      case "s":
-        totalMs += value * 1e3;
-        break;
-      case "m":
-        totalMs += value * 60 * 1e3;
-        break;
-      case "h":
-        totalMs += value * 3600 * 1e3;
-        break;
-      case "d":
-        totalMs += value * 86400 * 1e3;
-        break;
-    }
-  }
-  return matched ? Math.round(totalMs) : void 0;
-}
-function parseRateLimitHeaders(headers) {
-  if (!headers) return void 0;
-  const reqStr = headers.get("x-ratelimit-remaining-requests") || headers.get("anthropic-ratelimit-requests-remaining") || headers.get("ratelimit-remaining");
-  const tokStr = headers.get("x-ratelimit-remaining-tokens") || headers.get("anthropic-ratelimit-tokens-remaining");
-  const retryAfter = headers.get("retry-after");
-  let remainingRequests;
-  if (reqStr !== null && reqStr !== void 0) {
-    const parsed = Number.parseInt(reqStr, 10);
-    if (!Number.isNaN(parsed)) remainingRequests = parsed;
-  }
-  let remainingTokens;
-  if (tokStr !== null && tokStr !== void 0) {
-    const parsed = Number.parseInt(tokStr, 10);
-    if (!Number.isNaN(parsed)) remainingTokens = parsed;
-  }
-  let resetMs;
-  if (retryAfter) {
-    if (/^\d+(\.\d+)?$/.test(retryAfter.trim())) {
-      const parsedSec = Number.parseFloat(retryAfter);
-      if (!Number.isNaN(parsedSec)) {
-        resetMs = Math.round(parsedSec * 1e3);
-      }
-    } else {
-      const retryDateMs = Date.parse(retryAfter);
-      if (!Number.isNaN(retryDateMs)) {
-        resetMs = Math.max(0, retryDateMs - Date.now());
-      }
-    }
-  } else {
-    const resetTokensHeader = headers.get("x-ratelimit-reset-tokens");
-    const resetRequestsHeader = headers.get("x-ratelimit-reset-requests");
-    if (resetTokensHeader) {
-      resetMs = parseDurationMs(resetTokensHeader);
-    } else if (resetRequestsHeader) {
-      resetMs = parseDurationMs(resetRequestsHeader);
-    }
-  }
-  if (remainingRequests === void 0 && remainingTokens === void 0 && resetMs === void 0) {
-    return void 0;
-  }
-  return {
-    remainingRequests,
-    remainingTokens,
-    resetMs
-  };
-}
-
-// src/utils/signal.ts
-function linkAbortSignal(target, source) {
-  if (!source) return void 0;
-  if (source.aborted) {
-    target.abort();
-    return void 0;
-  }
-  const onAbort = () => {
-    target.abort();
-  };
-  source.addEventListener("abort", onAbort, { once: true });
-  return () => {
-    source.removeEventListener("abort", onAbort);
-  };
-}
 
 // src/providers/AnthropicProvider.ts
 init_stream();
@@ -6278,847 +7231,6 @@ var DeepSeekProvider = class {
         cleanupSignal?.();
         if (timeoutId) clearTimeout(timeoutId);
       }
-    }
-  }
-};
-
-// src/providers/GeminiProvider.ts
-init_stream();
-var GEMINI_MODELS = {
-  PRO_4: "gemini-4-pro",
-  ARGON_4: "gemini-4-argon",
-  FLASH_4: "gemini-4-flash",
-  PROJECT_ASTRA: "gemini-4-flash",
-  FLASH_3_8: "gemini-3.8-flash",
-  FLASH_3_6: "gemini-3.6-flash",
-  FLASH_LITE_3_5: "gemini-3.5-flash-lite",
-  PRO_3_1_PREVIEW: "gemini-3.1-pro-preview",
-  FLASH_2_5: "gemini-2.5-flash",
-  FLASH_LITE_2_5: "gemini-2.5-flash-lite",
-  PRO_2_5: "gemini-2.5-pro",
-  FLASH_2_0: "gemini-2.0-flash",
-  FLASH_2_0_LITE: "gemini-2.0-flash-lite",
-  FLASH_THINKING_2_0: "gemini-2.0-flash-thinking-exp",
-  PRO_2_0: "gemini-2.0-pro-exp",
-  FLASH_LATEST: "gemini-flash-latest",
-  PRO_LATEST: "gemini-pro-latest",
-  EMBEDDING_001: "gemini-embedding-001",
-  EMBEDDING_2: "gemini-embedding-2",
-  TEXT_EMBEDDING_004: "text-embedding-004"
-};
-var GEMINI_AVAILABILITY_FALLBACKS = {
-  "gemini-4-pro": ["gemini-3.8-flash"],
-  "gemini-4-argon": ["gemini-3.8-flash"]
-};
-var GEMINI_DEFAULT_PRICING = {
-  "gemini-4-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
-  "gemini-4-argon": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
-  "gemini-4-flash": { promptCostPer1k: 75e-6, completionCostPer1k: 3e-4 },
-  "gemini-3.8-flash": {
-    promptCostPer1k: 75e-6,
-    completionCostPer1k: 3e-4
-  },
-  "gemini-3.6-flash": {
-    promptCostPer1k: 75e-6,
-    completionCostPer1k: 3e-4
-  },
-  "gemini-3.5-flash-lite": {
-    promptCostPer1k: 375e-7,
-    completionCostPer1k: 15e-5
-  },
-  "gemini-3.1-pro-preview": {
-    promptCostPer1k: 125e-5,
-    completionCostPer1k: 5e-3
-  },
-  "gemini-2.5-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
-  "gemini-2.5-flash": {
-    promptCostPer1k: 75e-6,
-    completionCostPer1k: 3e-4
-  },
-  "gemini-2.5-flash-lite": {
-    promptCostPer1k: 375e-7,
-    completionCostPer1k: 15e-5
-  },
-  "gemini-2.0-flash": { promptCostPer1k: 1e-4, completionCostPer1k: 4e-4 },
-  "gemini-2.0-flash-lite": {
-    promptCostPer1k: 75e-6,
-    completionCostPer1k: 3e-4
-  },
-  "gemini-2.0-pro-exp": {
-    promptCostPer1k: 125e-5,
-    completionCostPer1k: 5e-3
-  },
-  "gemini-flash-latest": {
-    promptCostPer1k: 75e-6,
-    completionCostPer1k: 3e-4
-  },
-  "gemini-pro-latest": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
-  "text-embedding-004": { promptCostPer1k: 1e-5, completionCostPer1k: 0 },
-  "gemini-embedding-001": { promptCostPer1k: 1e-5, completionCostPer1k: 0 },
-  "gemini-embedding-2": { promptCostPer1k: 1e-5, completionCostPer1k: 0 }
-};
-var GeminiProvider = class {
-  id;
-  name = "Gemini";
-  config;
-  constructor(config) {
-    this.config = config;
-    this.id = config.id || `gemini-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  }
-  get costPer1kTokens() {
-    return this.config.costPer1kTokens;
-  }
-  get promptCostPer1k() {
-    if (this.config.promptCostPer1k !== void 0) {
-      return this.config.promptCostPer1k;
-    }
-    const model = this.resolveModel(this.defaultModel || "default");
-    return GEMINI_DEFAULT_PRICING[model]?.promptCostPer1k;
-  }
-  get completionCostPer1k() {
-    if (this.config.completionCostPer1k !== void 0) {
-      return this.config.completionCostPer1k;
-    }
-    const model = this.resolveModel(this.defaultModel || "default");
-    return GEMINI_DEFAULT_PRICING[model]?.completionCostPer1k;
-  }
-  get retries() {
-    return this.config.retries;
-  }
-  get retryDelayMs() {
-    return this.config.retryDelayMs;
-  }
-  get fallbackModels() {
-    if (this.config.fallbackModels) {
-      return this.config.fallbackModels;
-    }
-    if (this.config.enableAvailabilityFallback) {
-      const target = this.defaultModel || "gemini-4-pro";
-      return GEMINI_AVAILABILITY_FALLBACKS[target] || [GEMINI_MODELS.FLASH_3_8];
-    }
-    return void 0;
-  }
-  /**
-   * Returns the canonical availability fallback models for a given Gemini frontier model.
-   */
-  static getAvailabilityFallbacks(model) {
-    return GEMINI_AVAILABILITY_FALLBACKS[model] || [];
-  }
-  get defaultModel() {
-    return this.config.defaultModel;
-  }
-  resolveModel(model) {
-    if (this.config.modelMap?.[model]) {
-      return this.config.modelMap[model];
-    }
-    if (this.config.defaultModel) {
-      return this.config.defaultModel;
-    }
-    if (!model || model === "default") {
-      return GEMINI_MODELS.FLASH_2_5;
-    }
-    return model;
-  }
-  formatRequest(request) {
-    const contents = [];
-    const systemParts = [];
-    const toolCallIdToName = /* @__PURE__ */ new Map();
-    for (const m of request.messages) {
-      if (m.role === "assistant" && m.tool_calls) {
-        for (const tc of m.tool_calls) {
-          if (tc.id && tc.function?.name) {
-            toolCallIdToName.set(tc.id, tc.function.name);
-          }
-        }
-      }
-    }
-    const formatGeminiParts = (content) => {
-      if (content === null || content === void 0) {
-        return [{ text: "" }];
-      }
-      if (typeof content === "string") {
-        return [{ text: content }];
-      }
-      if (Array.isArray(content)) {
-        const parts = [];
-        for (const part of content) {
-          if (part.type === "text") {
-            parts.push({ text: part.text });
-          } else if (part.type === "image_url") {
-            const url = part.image_url.url;
-            const match = url.match(/^data:([^;]+);base64,(.+)$/);
-            if (match) {
-              parts.push({
-                inlineData: {
-                  mimeType: match[1],
-                  data: match[2]
-                }
-              });
-            } else {
-              let mimeType = "image/jpeg";
-              if (url.endsWith(".png")) mimeType = "image/png";
-              else if (url.endsWith(".webp")) mimeType = "image/webp";
-              else if (url.endsWith(".gif")) mimeType = "image/gif";
-              else if (url.endsWith(".svg")) mimeType = "image/svg+xml";
-              else if (url.endsWith(".pdf")) mimeType = "application/pdf";
-              else if (url.endsWith(".mp4")) mimeType = "video/mp4";
-              else if (url.endsWith(".webm")) mimeType = "video/webm";
-              else if (url.endsWith(".mp3")) mimeType = "audio/mp3";
-              else if (url.endsWith(".wav")) mimeType = "audio/wav";
-              parts.push({
-                fileData: {
-                  mimeType,
-                  fileUri: url
-                }
-              });
-            }
-          } else if (part.type === "input_audio") {
-            parts.push({
-              inlineData: {
-                mimeType: `audio/${part.input_audio.format || "wav"}`,
-                data: part.input_audio.data
-              }
-            });
-          }
-        }
-        return parts.length > 0 ? parts : [{ text: "" }];
-      }
-      return [{ text: "" }];
-    };
-    for (const msg of request.messages) {
-      if (msg.role === "system") {
-        if (typeof msg.content === "string") {
-          systemParts.push({ text: msg.content });
-        } else if (Array.isArray(msg.content)) {
-          for (const p of msg.content) {
-            if (p.type === "text") {
-              systemParts.push({ text: p.text });
-            }
-          }
-        }
-      } else if (msg.role === "tool") {
-        const responseContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
-        const resolvedName = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : void 0) || "function";
-        const functionResponsePart = {
-          functionResponse: {
-            name: resolvedName,
-            response: { content: responseContent }
-          }
-        };
-        const lastContent = contents[contents.length - 1];
-        if (lastContent && lastContent.role === "user") {
-          lastContent.parts.push(functionResponsePart);
-        } else {
-          contents.push({
-            role: "user",
-            parts: [functionResponsePart]
-          });
-        }
-      } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
-        const parts = [];
-        if (typeof msg.content === "string" && msg.content) {
-          parts.push({ text: msg.content });
-        } else if (Array.isArray(msg.content)) {
-          for (const p of msg.content) {
-            if (p.type === "text") {
-              parts.push({ text: p.text });
-            }
-          }
-        }
-        for (const tc of msg.tool_calls) {
-          let args = {};
-          try {
-            args = JSON.parse(tc.function.arguments);
-          } catch {
-            args = {};
-          }
-          parts.push({
-            functionCall: {
-              name: tc.function.name,
-              args
-            }
-          });
-        }
-        contents.push({
-          role: "model",
-          parts
-        });
-      } else {
-        const geminiRole = msg.role === "assistant" ? "model" : "user";
-        const msgParts = formatGeminiParts(msg.content);
-        const lastContent = contents[contents.length - 1];
-        if (lastContent && lastContent.role === geminiRole) {
-          lastContent.parts.push(...msgParts);
-        } else {
-          contents.push({
-            role: geminiRole,
-            parts: msgParts
-          });
-        }
-      }
-    }
-    const generationConfig = {};
-    if (request.temperature !== void 0) {
-      generationConfig.temperature = request.temperature;
-    }
-    if (request.maxTokens !== void 0) {
-      generationConfig.maxOutputTokens = request.maxTokens;
-    }
-    if (request.responseFormat?.type === "json_object") {
-      generationConfig.responseMimeType = "application/json";
-    } else if (request.responseFormat?.type === "json_schema" && request.responseFormat.json_schema) {
-      generationConfig.responseMimeType = "application/json";
-      const cleanSchema = { ...request.responseFormat.json_schema.schema };
-      delete cleanSchema.additionalProperties;
-      generationConfig.responseSchema = cleanSchema;
-    }
-    const rawThinkingBudget = request.thinkingBudget ?? this.config.thinkingBudget;
-    let thinkingBudget;
-    if (rawThinkingBudget === "auto") {
-      thinkingBudget = GeminiAgentBooster.computeDynamicThinkingBudget(request);
-    } else {
-      thinkingBudget = rawThinkingBudget;
-    }
-    if (thinkingBudget === void 0 && request.reasoningEffort) {
-      if (request.reasoningEffort === "low") {
-        thinkingBudget = 2048;
-      } else if (request.reasoningEffort === "medium") {
-        thinkingBudget = 8192;
-      } else if (request.reasoningEffort === "high") {
-        thinkingBudget = 32768;
-      }
-    }
-    if (thinkingBudget !== void 0) {
-      generationConfig.thinkingConfig = {
-        thinkingBudget
-      };
-    }
-    const payload = { contents };
-    if (systemParts.length > 0) {
-      payload.systemInstruction = { parts: systemParts };
-    }
-    if (Object.keys(generationConfig).length > 0) {
-      payload.generationConfig = generationConfig;
-    }
-    if (this.config.safetySettings && this.config.safetySettings.length > 0) {
-      payload.safetySettings = this.config.safetySettings;
-    }
-    const cachedContent = request.cachedContent ?? this.config.cachedContent;
-    if (cachedContent) {
-      payload.cachedContent = cachedContent;
-    }
-    const tools = [];
-    if (request.tools && request.tools.length > 0) {
-      const canonicalTools = GeminiAgentBooster.canonicalizeTools(
-        request.tools
-      );
-      tools.push({
-        functionDeclarations: canonicalTools.map((t) => ({
-          name: t.function.name,
-          description: t.function.description,
-          parameters: t.function.parameters
-        }))
-      });
-    }
-    const useGoogleSearch = request.googleSearch ?? this.config.googleSearch;
-    if (useGoogleSearch) {
-      tools.push({ googleSearch: {} });
-    }
-    const useCodeExecution = request.codeExecution ?? this.config.codeExecution;
-    if (useCodeExecution) {
-      tools.push({ codeExecution: {} });
-    }
-    if (tools.length > 0) {
-      payload.tools = tools;
-    }
-    if (request.toolChoice) {
-      if (request.toolChoice === "auto") {
-        payload.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
-      } else if (request.toolChoice === "none") {
-        payload.toolConfig = { functionCallingConfig: { mode: "NONE" } };
-      } else if (request.toolChoice === "required") {
-        payload.toolConfig = { functionCallingConfig: { mode: "ANY" } };
-      } else if (typeof request.toolChoice === "object") {
-        payload.toolConfig = {
-          functionCallingConfig: {
-            mode: "ANY",
-            allowedFunctionNames: [request.toolChoice.function.name]
-          }
-        };
-      }
-    }
-    return payload;
-  }
-  // biome-ignore lint/suspicious/noExplicitAny: response format varies by provider
-  formatResponse(data, model) {
-    const candidate = data.candidates?.[0];
-    let text = "";
-    let reasoningContent = "";
-    const toolCalls = [];
-    if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (typeof part.thought === "string") {
-          reasoningContent += part.thought;
-        } else if (part.thought) {
-          reasoningContent += part.text || "";
-        } else if (part.text) {
-          text += part.text;
-        }
-        if (part.executableCode) {
-          const lang = (part.executableCode.language || "python").toLowerCase();
-          text += `
-\`\`\`${lang}
-${part.executableCode.code || ""}
-\`\`\`
-`;
-        }
-        if (part.codeExecutionResult) {
-          text += `
-\`\`\`
-[Execution Outcome: ${part.codeExecutionResult.outcome || "OK"}]
-${part.codeExecutionResult.output || ""}
-\`\`\`
-`;
-        }
-        if (part.functionCall) {
-          toolCalls.push({
-            id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            type: "function",
-            function: {
-              name: part.functionCall.name,
-              arguments: JSON.stringify(part.functionCall.args || {})
-            }
-          });
-        }
-      }
-    }
-    let finishReason = "stop";
-    if (toolCalls.length > 0) {
-      finishReason = "tool_calls";
-    } else if (candidate?.finishReason) {
-      switch (candidate.finishReason) {
-        case "MAX_TOKENS":
-          finishReason = "length";
-          break;
-        case "SAFETY":
-        case "RECITATION":
-          finishReason = "content_filter";
-          break;
-        case "STOP":
-          finishReason = "stop";
-          break;
-        default:
-          finishReason = candidate.finishReason.toLowerCase();
-      }
-    }
-    let grounding;
-    if (candidate?.groundingMetadata) {
-      const gm = candidate.groundingMetadata;
-      const sources = [];
-      if (Array.isArray(gm.groundingChunks)) {
-        for (const gc of gm.groundingChunks) {
-          if (gc.web) {
-            sources.push({
-              title: gc.web.title,
-              uri: gc.web.uri
-            });
-          }
-        }
-      }
-      grounding = {
-        webSearchQueries: gm.webSearchQueries,
-        sources: sources.length > 0 ? sources : void 0,
-        searchEntryPoint: gm.searchEntryPoint?.renderedContent
-      };
-    }
-    return {
-      id: `gemini-${Date.now()}`,
-      model,
-      choices: [
-        {
-          message: {
-            role: "assistant",
-            content: text || null,
-            reasoning_content: reasoningContent || void 0,
-            tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
-            grounding
-          },
-          finishReason
-        }
-      ],
-      grounding,
-      usage: data.usageMetadata ? {
-        promptTokens: data.usageMetadata.promptTokenCount || 0,
-        completionTokens: data.usageMetadata.candidatesTokenCount || 0,
-        totalTokens: data.usageMetadata.totalTokenCount || 0,
-        cachedPromptTokens: data.usageMetadata.cachedContentTokenCount || void 0
-      } : void 0
-    };
-  }
-  async generateContent(request) {
-    const payload = this.formatRequest(request);
-    const targetModel = this.resolveModel(request.model);
-    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const action = request.stream ? "streamGenerateContent?alt=sse" : "generateContent";
-    const finalUrl = `${baseUrl}/models/${targetModel}:${action}`;
-    const controller = new AbortController();
-    let timeoutId;
-    if (this.config.timeoutMs) {
-      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    }
-    const cleanupSignal = linkAbortSignal(controller, request.signal);
-    try {
-      const response = await fetch(finalUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": this.config.apiKey || ""
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        const err = new Error(
-          `Gemini API Error (${response.status}): ${errorText}`
-        );
-        err.status = response.status;
-        throw err;
-      }
-      if (request.stream) {
-        return (async function* () {
-          try {
-            let chunkIndex = 0;
-            for await (const msg of parseSSE(response)) {
-              try {
-                const parsed = JSON.parse(msg.data);
-                const candidate = parsed.candidates?.[0];
-                let text = "";
-                let reasoning = "";
-                const toolCalls = [];
-                if (candidate?.content?.parts) {
-                  for (const part of candidate.content.parts) {
-                    if (typeof part.thought === "string") {
-                      reasoning += part.thought;
-                    } else if (part.thought) {
-                      reasoning += part.text || "";
-                    } else if (part.text) {
-                      text += part.text;
-                    }
-                    if (part.executableCode) {
-                      const lang = (part.executableCode.language || "python").toLowerCase();
-                      text += `
-\`\`\`${lang}
-${part.executableCode.code || ""}
-\`\`\`
-`;
-                    }
-                    if (part.codeExecutionResult) {
-                      text += `
-\`\`\`
-[Execution Outcome: ${part.codeExecutionResult.outcome || "OK"}]
-${part.codeExecutionResult.output || ""}
-\`\`\`
-`;
-                    }
-                    if (part.functionCall) {
-                      toolCalls.push({
-                        index: chunkIndex++,
-                        id: `call_${Date.now()}_${chunkIndex}`,
-                        type: "function",
-                        function: {
-                          name: part.functionCall.name,
-                          arguments: JSON.stringify(
-                            part.functionCall.args || {}
-                          )
-                        }
-                      });
-                    }
-                  }
-                }
-                let streamGrounding;
-                if (candidate?.groundingMetadata) {
-                  const gm = candidate.groundingMetadata;
-                  const sources = [];
-                  if (Array.isArray(gm.groundingChunks)) {
-                    for (const gc of gm.groundingChunks) {
-                      if (gc.web) {
-                        sources.push({
-                          title: gc.web.title,
-                          uri: gc.web.uri
-                        });
-                      }
-                    }
-                  }
-                  streamGrounding = {
-                    webSearchQueries: gm.webSearchQueries,
-                    sources: sources.length > 0 ? sources : void 0,
-                    searchEntryPoint: gm.searchEntryPoint?.renderedContent
-                  };
-                }
-                const usage = parsed.usageMetadata ? {
-                  promptTokens: parsed.usageMetadata.promptTokenCount || 0,
-                  completionTokens: parsed.usageMetadata.candidatesTokenCount || 0,
-                  totalTokens: parsed.usageMetadata.totalTokenCount || 0,
-                  cachedPromptTokens: parsed.usageMetadata.cachedContentTokenCount || void 0
-                } : void 0;
-                yield {
-                  id: `gemini-${Date.now()}`,
-                  model: targetModel,
-                  choices: [
-                    {
-                      delta: {
-                        role: "assistant",
-                        content: text || void 0,
-                        reasoning_content: reasoning || void 0,
-                        tool_calls: toolCalls.length > 0 ? toolCalls : void 0
-                      },
-                      finishReason: toolCalls.length > 0 ? "tool_calls" : candidate?.finishReason ? candidate.finishReason.toLowerCase() : null
-                    }
-                  ],
-                  usage,
-                  grounding: streamGrounding
-                };
-              } catch (_e) {
-              }
-            }
-          } finally {
-            cleanupSignal?.();
-            if (timeoutId) clearTimeout(timeoutId);
-            controller.abort();
-          }
-        })();
-      }
-      const data = await response.json();
-      const res = this.formatResponse(data, targetModel);
-      const rl = parseRateLimitHeaders(response.headers);
-      if (rl) {
-        res.rateLimit = rl;
-      }
-      return res;
-    } catch (error) {
-      cleanupSignal?.();
-      if (timeoutId) clearTimeout(timeoutId);
-      throw error;
-    } finally {
-      if (!request.stream) {
-        cleanupSignal?.();
-        if (timeoutId) clearTimeout(timeoutId);
-      }
-    }
-  }
-  async generateEmbedding(request) {
-    const targetModel = request.model && request.model !== "default" ? request.model : GEMINI_MODELS.EMBEDDING_001;
-    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const isBatch = Array.isArray(request.input);
-    const endpoint = isBatch ? "batchEmbedContents" : "embedContent";
-    const url = `${baseUrl}/models/${targetModel}:${endpoint}`;
-    let bodyPayload;
-    if (isBatch) {
-      bodyPayload = {
-        requests: request.input.map((text) => {
-          const item = {
-            model: `models/${targetModel}`,
-            content: { parts: [{ text }] }
-          };
-          if (request.dimensions) {
-            item.outputDimensionality = request.dimensions;
-          }
-          return item;
-        })
-      };
-    } else {
-      bodyPayload = {
-        content: { parts: [{ text: request.input }] }
-      };
-      if (request.dimensions) {
-        bodyPayload.outputDimensionality = request.dimensions;
-      }
-    }
-    const controller = new AbortController();
-    let timeoutId;
-    if (this.config.timeoutMs) {
-      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    }
-    const cleanupSignal = linkAbortSignal(controller, request.signal);
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": this.config.apiKey || ""
-        },
-        body: JSON.stringify(bodyPayload),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        const err = new Error(
-          `Gemini Embedding API Error (${response.status}): ${errorText}`
-        );
-        err.status = response.status;
-        throw err;
-      }
-      const data = await response.json();
-      const embeddingsList = isBatch ? (data.embeddings || []).map(
-        // biome-ignore lint/suspicious/noExplicitAny: embedding item
-        (e, idx) => ({
-          index: idx,
-          embedding: e.values || [],
-          object: "embedding"
-        })
-      ) : [
-        {
-          index: 0,
-          embedding: data.embedding?.values || [],
-          object: "embedding"
-        }
-      ];
-      return {
-        object: "list",
-        data: embeddingsList,
-        model: targetModel,
-        usage: data.usageMetadata ? {
-          promptTokens: data.usageMetadata.promptTokenCount || 0,
-          totalTokens: data.usageMetadata.totalTokenCount || 0
-        } : void 0
-      };
-    } finally {
-      cleanupSignal?.();
-      if (timeoutId) clearTimeout(timeoutId);
-    }
-  }
-  static async fetchAvailableModels(options) {
-    const baseUrl = options.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const response = await fetch(`${baseUrl}/models`, {
-      method: "GET",
-      headers: {
-        "x-goog-api-key": options.apiKey
-      }
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch Gemini models (${response.status})`);
-    }
-    const data = await response.json();
-    return (data.models || []).map((m) => ({
-      id: (m.name || "").replace(/^models\//, ""),
-      displayName: m.displayName || m.name,
-      description: m.description,
-      inputTokenLimit: m.inputTokenLimit,
-      outputTokenLimit: m.outputTokenLimit,
-      supportedGenerationMethods: m.supportedGenerationMethods || []
-    }));
-  }
-  /**
-   * Creates a context cache resource on Google Gemini API for long contexts (>32,768 tokens),
-   * providing up to 75%-90% cost reduction and lower latency.
-   */
-  async createCachedContent(options) {
-    const targetModel = this.resolveModel(options.model);
-    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    let contents = options.contents;
-    if (!contents && options.messages) {
-      const formatted = this.formatRequest({
-        model: targetModel,
-        messages: options.messages
-      });
-      contents = formatted.contents;
-    }
-    const body = {
-      model: `models/${targetModel}`,
-      contents: contents || [],
-      ttl: options.ttl || "3600s"
-    };
-    if (options.displayName) {
-      body.displayName = options.displayName;
-    }
-    if (options.systemInstruction) {
-      body.systemInstruction = {
-        parts: [{ text: options.systemInstruction }]
-      };
-    }
-    const response = await fetch(`${baseUrl}/cachedContents`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": this.config.apiKey || ""
-      },
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      const err = new Error(
-        `Failed to create Gemini CachedContent (${response.status}): ${errorText}`
-      );
-      err.status = response.status;
-      throw err;
-    }
-    return await response.json();
-  }
-  /**
-   * Fetches metadata for an existing Gemini CachedContent.
-   */
-  async getCachedContent(name) {
-    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const resourcePath = name.startsWith("cachedContents/") ? name : `cachedContents/${name}`;
-    const response = await fetch(`${baseUrl}/${resourcePath}`, {
-      method: "GET",
-      headers: {
-        "x-goog-api-key": this.config.apiKey || ""
-      }
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      const err = new Error(
-        `Failed to get Gemini CachedContent (${response.status}): ${errorText}`
-      );
-      err.status = response.status;
-      throw err;
-    }
-    return await response.json();
-  }
-  /**
-   * Lists active CachedContents for the configured Gemini API key.
-   */
-  async listCachedContents(pageSize) {
-    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const query = pageSize ? `?pageSize=${pageSize}` : "";
-    const response = await fetch(`${baseUrl}/cachedContents${query}`, {
-      method: "GET",
-      headers: {
-        "x-goog-api-key": this.config.apiKey || ""
-      }
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      const err = new Error(
-        `Failed to list Gemini CachedContents (${response.status}): ${errorText}`
-      );
-      err.status = response.status;
-      throw err;
-    }
-    const data = await response.json();
-    return data.cachedContents || [];
-  }
-  /**
-   * Deletes a Gemini CachedContent by name.
-   */
-  async deleteCachedContent(name) {
-    const baseUrl = this.config.baseUrl || "https://generativelanguage.googleapis.com/v1beta";
-    const resourcePath = name.startsWith("cachedContents/") ? name : `cachedContents/${name}`;
-    const response = await fetch(`${baseUrl}/${resourcePath}`, {
-      method: "DELETE",
-      headers: {
-        "x-goog-api-key": this.config.apiKey || ""
-      }
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      const err = new Error(
-        `Failed to delete Gemini CachedContent (${response.status}): ${errorText}`
-      );
-      err.status = response.status;
-      throw err;
     }
   }
 };
@@ -8669,6 +8781,19 @@ var XAiProvider = class {
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Gemini Agent Booster & KV-Cache Prefix Optimizer (2026 Frontier Edition)
+ *
+ * Implements:
+ * 1. Dynamic Thinking Budget Allocation (`thinkingBudget: 'auto'`) based on multi-signal prompt complexity.
+ * 2. Deterministic KV-Cache Prefix Pinning (canonical lexicographical tool & JSON schema sorting).
+ * 3. Context Caching Eligibility & FinOps Savings Analyzer (>32k token static prefix detection).
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
  * @license MIT
@@ -8689,19 +8814,6 @@ var XAiProvider = class {
  * In-process automatic redaction of Personally Identifiable Information (PII)
  * from outgoing LLM payloads before they leave the network boundary.
  * No external dependencies, no data leaves the process unprotected.
- *
- * @author Roedy Rustam <roedyrustam.id@gmail.com>
- * @copyright 2026 Roedy Rustam
- * @license MIT
- */
-/**
- * SinapsAI - In-Process AI Gateway & Control Plane
- * Gemini Agent Booster & KV-Cache Prefix Optimizer (2026 Frontier Edition)
- *
- * Implements:
- * 1. Dynamic Thinking Budget Allocation (`thinkingBudget: 'auto'`) based on multi-signal prompt complexity.
- * 2. Deterministic KV-Cache Prefix Pinning (canonical lexicographical tool & JSON schema sorting).
- * 3. Context Caching Eligibility & FinOps Savings Analyzer (>32k token static prefix detection).
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

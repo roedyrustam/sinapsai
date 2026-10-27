@@ -225,4 +225,36 @@ describe('SecurityGuardrails', () => {
       expect(err.violations[0].category).toBe('jailbreak');
     });
   });
+
+  describe('ReDoS & Special Character Safety', () => {
+    it('should not hang or loop infinitely when a pattern matches empty strings', () => {
+      const guardrails = new SecurityGuardrails({
+        customPatterns: [
+          {
+            category: 'prompt_injection',
+            regex: /(?:hack)?/, // matches zero-length empty string
+          },
+        ],
+      });
+      const result = guardrails.scan('Some test prompt text');
+      expect(result).toBeDefined();
+    });
+
+    it('should safely sanitize matched text containing dollar characters without replacement corruption', () => {
+      const guardrails = new SecurityGuardrails({
+        action: 'sanitize',
+        customPatterns: [
+          {
+            category: 'secret_exfiltration',
+            regex: /\$100\s+bounty/i,
+          },
+        ],
+      });
+      const result = guardrails.scan('Get $100 bounty now');
+      expect(result.safe).toBe(false);
+      expect(result.sanitizedText).toContain(
+        '[SECURITY_REDACTED: secret_exfiltration]',
+      );
+    });
+  });
 });

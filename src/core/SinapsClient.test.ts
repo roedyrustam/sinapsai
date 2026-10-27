@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Provider } from '../providers/Provider.js';
 import type { UnifiedApiResponse } from '../types/index.js';
+import { McpToolBridge } from './McpBridge.js';
 import { SecurityGuardrailError } from './SecurityGuardrails.js';
 import { SinapsClient } from './SinapsClient.js';
 
@@ -1060,6 +1061,168 @@ describe('SinapsClient', () => {
 
       expect(capturedInput).toBe('Email me at {{PII_EMAIL_1}}');
       expect(fullOutput).toBe('Replying to founder@sinaps.ai now.');
+    });
+
+    it('should expose contextCache API on SinapsClient and evaluate eligibility', async () => {
+      const mockCreate = vi.fn().mockResolvedValue({
+        name: 'cachedContents/test-123',
+        model: 'gemini-4-pro',
+        createTime: '2026-10-27T12:00:00Z',
+      });
+      const mockGet = vi.fn().mockResolvedValue({
+        name: 'cachedContents/test-123',
+        model: 'gemini-4-pro',
+      });
+      const mockList = vi
+        .fn()
+        .mockResolvedValue([
+          { name: 'cachedContents/test-123', model: 'gemini-4-pro' },
+        ]);
+      const mockDelete = vi.fn().mockResolvedValue(undefined);
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'gemini-provider',
+            name: 'Gemini',
+            generateContent: vi.fn(),
+            createCachedContent: mockCreate,
+            getCachedContent: mockGet,
+            listCachedContents: mockList,
+            deleteCachedContent: mockDelete,
+          } as unknown as Provider,
+        ],
+      });
+
+      // 1. Evaluate eligibility
+      const eligibility = client.contextCache.evaluateEligibility({
+        messages: [{ role: 'system', content: 'Short test' }],
+      });
+      expect(eligibility.eligible).toBe(false);
+
+      // 2. Create cached content
+      const created = await client.contextCache.create({
+        model: 'gemini-4-pro',
+        messages: [{ role: 'system', content: 'Huge prompt' }],
+      });
+      expect(created.name).toBe('cachedContents/test-123');
+      expect(mockCreate).toHaveBeenCalled();
+
+      // 3. Get cached content
+      const fetched = await client.contextCache.get('test-123');
+      expect(fetched.name).toBe('cachedContents/test-123');
+      expect(mockGet).toHaveBeenCalledWith('test-123');
+
+      // 4. List cached contents
+      const list = await client.contextCache.list();
+      expect(list).toHaveLength(1);
+      expect(mockList).toHaveBeenCalled();
+
+      // 5. Delete cached content
+      await client.contextCache.delete('test-123');
+      expect(mockDelete).toHaveBeenCalledWith('test-123');
+    });
+
+    it('should execute multiple tools concurrently in runWithToolsStream', async () => {
+      const bridge = new McpToolBridge();
+      const executionOrder: string[] = [];
+
+      bridge.registerTool({
+        name: 'slow_tool_1',
+        description: 'First tool',
+        inputSchema: { type: 'object' },
+        handler: async () => {
+          executionOrder.push('start_1');
+          await new Promise((r) => setTimeout(r, 50));
+          executionOrder.push('end_1');
+          return 'result_1';
+        },
+      });
+
+      bridge.registerTool({
+        name: 'slow_tool_2',
+        description: 'Second tool',
+        inputSchema: { type: 'object' },
+        handler: async () => {
+          executionOrder.push('start_2');
+          await new Promise((r) => setTimeout(r, 50));
+          executionOrder.push('end_2');
+          return 'result_2';
+        },
+      });
+
+      async function* mockStreamToolCall() {
+        yield {
+          id: 'chunk-tools',
+          model: 'gemini-4-pro',
+          choices: [
+            {
+              delta: {
+                role: 'assistant',
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'c1',
+                    type: 'function',
+                    function: { name: 'slow_tool_1', arguments: '{}' },
+                  },
+                  {
+                    index: 1,
+                    id: 'c2',
+                    type: 'function',
+                    function: { name: 'slow_tool_2', arguments: '{}' },
+                  },
+                ],
+              },
+              finishReason: 'tool_calls',
+            },
+          ],
+        };
+      }
+
+      async function* mockFinalStream() {
+        yield {
+          id: 'chunk-final',
+          model: 'gemini-4-pro',
+          choices: [
+            {
+              delta: { role: 'assistant', content: 'Both tools completed' },
+              finishReason: 'stop',
+            },
+          ],
+        };
+      }
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'mock-p',
+            name: 'Mock',
+            generateContent: vi
+              .fn()
+              .mockReturnValueOnce(mockStreamToolCall())
+              .mockReturnValueOnce(mockFinalStream()),
+          },
+        ],
+        mcpBridge: bridge,
+      });
+
+      const gen = client.runWithToolsStream({
+        messages: [{ role: 'user', content: 'Run tools' }],
+        maxSteps: 2,
+      });
+
+      const events = [];
+      for await (const event of gen) {
+        events.push(event);
+      }
+
+      // Both tools should have started before either finished (concurrent execution!)
+      expect(executionOrder.slice(0, 2)).toEqual(['start_1', 'start_2']);
+      expect(events.some((e) => e.type === 'tool-call-start')).toBe(true);
+      expect(events.filter((e) => e.type === 'tool-call-result')).toHaveLength(
+        2,
+      );
     });
   });
 });

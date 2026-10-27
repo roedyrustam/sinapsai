@@ -134,7 +134,16 @@
 - [x] **Multimodal Security Guardrails & Gemini 4 Argon Fallbacks**: Inspeksi prompt injection pada array `ContentPart[]` multimodal serta dukungan `GEMINI_MODELS.ARGON_4` (`gemini-4-argon`) dengan fallback otomatis ke `gemini-3.8-flash`.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 28 (`examples/28-gemini-agent-booster-and-streaming-agent.ts`); total 404/404 tes lulus di 34 test suites, 100% Biome Clean.
 
-## Phase 17: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
+## Phase 17: Security Hardening, Context Caching Control Plane & Massively Parallel Agent Loops (v2.10.0) - *Completed*
+- [x] **ReDoS & Security Vulnerability Hardening**: Pencegahan infinite loop pada zero-length regex matches di `SecurityGuardrails` serta sanitasi aman terhadap string replacement berbasis fungsi `() => ...` untuk mencegah korupsi karakter `$`.
+- [x] **Prototype Pollution Defense**: Sanitasi kunci `__proto__`, `constructor`, dan `prototype` pada algoritma kanonikalisasi leksikografis `GeminiAgentBooster.canonicalizeJsonValue`.
+- [x] **First-Class Google Context Caching API (`client.contextCache`)**: Endpoint kontrol terpadu untuk evaluasi kelayakan (`evaluateEligibility`), pembuatan (`create`), pengambilan metadata (`get`), daftar (`list`), dan penghapusan (`delete`) cache konteks Google Gemini (>32k token) guna memangkas biaya hingga 90%.
+- [x] **Automatic Gemini 4 Frontier Availability Fallback Invariant**: Penyisipan otomatis `gemini-3.8-flash` ke dalam rantai kandidat model saat memanggil `gemini-4-argon`, `gemini-4-pro`, atau `gemini-4-flash` pada provider Gemini.
+- [x] **Massively Parallel Tool Execution di `client.runWithToolsStream`**: Eksekusi paralel multi-tool calls konkuren berbasis `Promise.all` guna memangkas latensi putaran agen hingga 80% sambil tetap menyiarkan event streaming secara reaktif.
+- [x] **Streaming Tool Deduplication & Atomic Rate Limit Increment**: Perbaikan duplikasi nama tool calling pada stream accumulator dan dukungan atomic increment dengan TTL pada `StateStorage`.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 29 (`examples/29-gemini-context-caching-and-parallel-agents.ts`); total 411/411 tes lulus di 34 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.10.0.
+
+## Phase 18: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
 
 

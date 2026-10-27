@@ -540,7 +540,7 @@ export interface OtelExportOptions {
      */
     serviceName?: string;
     /**
-     * Service version reported in resource attributes (default: '2.9.0').
+     * Service version reported in resource attributes (default: '2.10.0').
      */
     serviceVersion?: string;
     /**

@@ -74,7 +74,7 @@ export class InMemoryStorage implements StateStorage {
     this.store.delete(key);
   }
 
-  async increment(key: string): Promise<number> {
+  async increment(key: string, ttlSeconds?: number): Promise<number> {
     const item = this.store.get(key);
     let currentValue = 0;
 
@@ -88,9 +88,12 @@ export class InMemoryStorage implements StateStorage {
 
     const newValue = currentValue + 1;
     const existing = this.store.get(key);
+    const expiresAt =
+      existing?.expiresAt ??
+      (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : null);
     this.store.set(key, {
       value: newValue,
-      expiresAt: existing?.expiresAt ?? null,
+      expiresAt,
     });
     return newValue;
   }

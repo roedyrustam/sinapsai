@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-404%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-411%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -85,6 +85,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [31. Prometheus & OpenTelemetry Metrics Exporters](#31-prometheus--opentelemetry-metrics-exporters)
   - [32. In-Process Model Context Protocol (MCP) Tool Bridge & Agent Loop](#32-in-process-model-context-protocol-mcp-tool-bridge--agent-loop)
   - [33. Gemini Agent Booster, Streaming Agent Loop & Streaming Reversible PII Vault](#33-gemini-agent-booster-streaming-agent-loop--streaming-reversible-pii-vault)
+  - [34. Gemini Explicit Context Caching & Massively Parallel Tool Execution](#34-gemini-explicit-context-caching--massively-parallel-tool-execution)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -1263,6 +1264,65 @@ for await (const event of client.runWithToolsStream({
     process.stdout.write(event.textDelta); // PII tokens ({{PII_EMAIL_1}}) are automatically restored!
   } else if (event.type === 'done') {
     console.log(`\nCompleted in ${event.result.totalSteps} steps ($${event.result.totalCostUsd})`);
+  }
+}
+```
+
+---
+
+### 34. Gemini Explicit Context Caching & Massively Parallel Tool Execution
+
+Slash token usage and inference costs by 75%–90% using explicit Google Gemini Context Caching for large system instructions, codebases, and tool schemas. Evaluate eligibility, create caches with flexible TTLs, and execute multiple concurrent tool calls with `Promise.all` in `runWithToolsStream()`:
+
+```typescript
+import { GEMINI_MODELS, GeminiProvider, SinapsClient } from 'sinapsai';
+
+const gemini = new GeminiProvider({
+  apiKey: process.env.GEMINI_API_KEY!,
+  defaultModel: GEMINI_MODELS.PRO_4,
+  enableAvailabilityFallback: true, // Degrades smoothly to gemini-3.8-flash if Gemini 4 Pro is saturated
+});
+
+const client = new SinapsClient({
+  providers: [gemini],
+});
+
+// 1. Evaluate context caching eligibility (>32,768 tokens minimum threshold)
+const eligibility = client.contextCache.evaluateEligibility(GEMINI_MODELS.PRO_4, 45_000);
+if (eligibility.eligible) {
+  // 2. Explicitly provision cached content
+  const cache = await client.contextCache.create({
+    model: GEMINI_MODELS.PRO_4,
+    displayName: 'enterprise-knowledge-base',
+    ttl: '3600s', // 1 hour TTL
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: 'Here is the comprehensive enterprise code and architecture spec...' }],
+      },
+    ],
+  });
+
+  console.log(`Created Context Cache: ${cache.name} (Expires: ${cache.expireTime})`);
+
+  // 3. Query using the cached content pointer
+  const response = await client.chat.completions.create({
+    model: GEMINI_MODELS.PRO_4,
+    cachedContent: cache.name,
+    messages: [{ role: 'user', content: 'What is the circuit breaker reset timeout in the spec?' }],
+  });
+
+  console.log(response.choices[0]?.message.content);
+}
+
+// 4. Concurrently execute multiple agent tool calls in parallel with zero lag
+for await (const event of client.runWithToolsStream({
+  model: GEMINI_MODELS.PRO_4,
+  messages: [{ role: 'user', content: 'Fetch stock quotes for AAPL, GOOGL, and NVDA at the same time.' }],
+})) {
+  if (event.type === 'tool-call-start') {
+    // All 3 tools run concurrently via Promise.all
+    console.log(`Dispatched ${event.toolCalls.length} tool calls in parallel!`);
   }
 }
 ```

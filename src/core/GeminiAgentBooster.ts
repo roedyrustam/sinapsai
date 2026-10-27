@@ -83,7 +83,11 @@ export function canonicalizeJsonValue(value: unknown): unknown {
     return value.map(canonicalizeJsonValue);
   }
   const record = value as Record<string, unknown>;
-  const sortedKeys = Object.keys(record).sort();
+  const sortedKeys = Object.keys(record)
+    .filter(
+      (k) => k !== '__proto__' && k !== 'constructor' && k !== 'prototype',
+    )
+    .sort();
   const result: Record<string, unknown> = {};
   for (const key of sortedKeys) {
     result[key] = canonicalizeJsonValue(record[key]);

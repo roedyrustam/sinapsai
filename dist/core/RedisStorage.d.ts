@@ -19,6 +19,7 @@ export interface RedisClientLike {
     del(key: string | string[]): Promise<number>;
     incr(key: string): Promise<number>;
     keys?(pattern: string): Promise<string[]>;
+    expire?(key: string, seconds: number): Promise<unknown>;
     scan?(cursor: number | string, ...args: Array<string | number>): Promise<[string, string[]]>;
 }
 export interface RedisStorageOptions {
@@ -68,7 +69,7 @@ export declare class RedisStorage implements StateStorage {
     get<T>(key: string): Promise<T | null>;
     set<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;
     delete(key: string): Promise<void>;
-    increment(key: string): Promise<number>;
+    increment(key: string, ttlSeconds?: number): Promise<number>;
     clear(): Promise<void>;
 }
 //# sourceMappingURL=RedisStorage.d.ts.map

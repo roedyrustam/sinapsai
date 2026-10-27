@@ -220,4 +220,59 @@ describe('accumulateStream', () => {
 
     expect(seen).toEqual(['a', 'b']);
   });
+
+  it('does not duplicate full function names when sent across multiple chunks', async () => {
+    async function* createChunks(): AsyncIterable<UnifiedApiStreamChunk> {
+      yield {
+        id: 'gemini-c1',
+        model: 'gemini-4-pro',
+        choices: [
+          {
+            delta: {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'search_database', arguments: '' },
+                },
+              ],
+            },
+            finishReason: null,
+          },
+        ],
+      };
+      yield {
+        id: 'gemini-c2',
+        model: 'gemini-4-pro',
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  type: 'function',
+                  function: {
+                    name: 'search_database',
+                    arguments: '{"query":"test"}',
+                  },
+                },
+              ],
+            },
+            finishReason: 'tool_calls',
+          },
+        ],
+      };
+    }
+
+    const res = await accumulateStream(createChunks());
+    expect(res.choices[0].message.tool_calls?.[0].function.name).toBe(
+      'search_database',
+    );
+    expect(res.choices[0].message.tool_calls?.[0].function.arguments).toBe(
+      '{"query":"test"}',
+    );
+  });
 });

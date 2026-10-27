@@ -503,7 +503,7 @@ export class McpToolBridge {
             },
             serverInfo: {
               name: 'sinapsai-mcp',
-              version: '2.9.0',
+              version: '2.10.0',
             },
           },
         };

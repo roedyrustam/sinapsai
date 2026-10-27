@@ -87,6 +87,12 @@ npx tsx examples/26-gateway-rate-limiting-and-metrics-export.ts
 
 # 27. Model Context Protocol (MCP) Tool Bridge & Autonomous Agent Loop
 npx tsx examples/27-mcp-tool-bridge-and-agent-loop.ts
+
+# 28. Gemini Agent Booster, Streaming Reversible PII Vault & Streaming Agent Loop
+npx tsx examples/28-gemini-agent-booster-and-streaming-agent.ts
+
+# 29. Gemini Context Caching Control Plane & Massively Parallel Agent Loops
+npx tsx examples/29-gemini-context-caching-and-parallel-agents.ts
 ```
 
 

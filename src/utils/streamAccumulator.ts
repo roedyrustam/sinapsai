@@ -106,8 +106,16 @@ export async function accumulateStream(
             } else {
               const existing = toolCallsMap.get(index);
               if (existing) {
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.name += tc.function.name;
+                if (tc.function?.name) {
+                  if (!existing.name) {
+                    existing.name = tc.function.name;
+                  } else if (
+                    existing.name !== tc.function.name &&
+                    !existing.name.includes(tc.function.name)
+                  ) {
+                    existing.name += tc.function.name;
+                  }
+                }
                 if (tc.function?.arguments) {
                   existing.arguments += tc.function.arguments;
                 }

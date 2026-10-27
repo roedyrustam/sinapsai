@@ -161,10 +161,20 @@ export class SecurityGuardrails {
 
         const matchedText = match[0];
 
+        // Prevent infinite loop on zero-length regex matches
+        if (matchedText.length === 0) {
+          globalRegex.lastIndex++;
+          continue;
+        }
+
         // Check if allowed
         const isAllowed = this.allowedPatterns.some((allowed) => {
           if (allowed.test(matchedText)) return true;
-          const textMatch = allowed.exec(text);
+          const allowedClone = new RegExp(
+            allowed.source,
+            allowed.flags.replace('g', ''),
+          );
+          const textMatch = allowedClone.exec(text);
           if (textMatch && match) {
             const start = textMatch.index;
             const end = start + textMatch[0].length;
@@ -188,9 +198,10 @@ export class SecurityGuardrails {
         violations.push(violation);
 
         if (this.action === 'sanitize') {
+          const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
           sanitizedText = sanitizedText.replace(
             matchedText,
-            `[SECURITY_REDACTED: ${rule.category}]`,
+            () => redactedReplacement,
           );
         }
       }

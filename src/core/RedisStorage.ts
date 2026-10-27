@@ -25,6 +25,7 @@ export interface RedisClientLike {
   del(key: string | string[]): Promise<number>;
   incr(key: string): Promise<number>;
   keys?(pattern: string): Promise<string[]>;
+  expire?(key: string, seconds: number): Promise<unknown>;
   scan?(
     cursor: number | string,
     ...args: Array<string | number>
@@ -111,8 +112,18 @@ export class RedisStorage implements StateStorage {
     await this.redis.del(this.key(key));
   }
 
-  async increment(key: string): Promise<number> {
-    return this.redis.incr(this.key(key));
+  async increment(key: string, ttlSeconds?: number): Promise<number> {
+    const prefixedKey = this.key(key);
+    const val = await this.redis.incr(prefixedKey);
+    if (
+      val === 1 &&
+      ttlSeconds &&
+      ttlSeconds > 0 &&
+      typeof this.redis.expire === 'function'
+    ) {
+      await this.redis.expire(prefixedKey, ttlSeconds);
+    }
+    return val;
   }
 
   async clear(): Promise<void> {

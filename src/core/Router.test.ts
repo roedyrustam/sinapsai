@@ -1003,5 +1003,46 @@ describe('Router', () => {
       });
       expect(p1.generateContent).toHaveBeenCalledTimes(2);
     });
+
+    it('should automatically append gemini-3.8-flash availability fallback when requesting Gemini 4 frontier models', async () => {
+      const geminiProvider = createMockProvider('gemini-p');
+      geminiProvider.name = 'Gemini';
+
+      geminiProvider.generateContent = vi
+        .fn()
+        .mockImplementation(async (req) => {
+          if (req.model === 'gemini-4-argon') {
+            const err = new Error(
+              'Model gemini-4-argon not provisioned in region',
+            );
+            (err as Error & { status?: number }).status = 404;
+            throw err;
+          }
+          return {
+            id: 'fallback-success',
+            model: req.model,
+            choices: [
+              {
+                message: { role: 'assistant', content: 'Flash response' },
+                finishReason: 'stop',
+              },
+            ],
+          };
+        });
+
+      const router = new Router([geminiProvider], circuitBreaker);
+
+      const res = await router.execute({
+        model: 'gemini-4-argon',
+        messages: [{ role: 'user', content: 'Analyze architecture' }],
+      });
+
+      expect(res.choices[0].message.content).toBe('Flash response');
+      expect(geminiProvider.generateContent).toHaveBeenCalledTimes(2);
+      expect(geminiProvider.generateContent).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ model: 'gemini-3.8-flash' }),
+      );
+    });
   });
 });

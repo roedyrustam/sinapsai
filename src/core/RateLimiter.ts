@@ -250,10 +250,7 @@ export class GatewayRateLimiter {
     const shouldConsume = checkOptions?.consume !== false;
     if (shouldConsume) {
       if (rule.requestsPerMinute !== undefined) {
-        await this.storage.increment(reqKeyCurrent);
-        if (currReqCount === 0) {
-          await this.storage.set(reqKeyCurrent, 1, ttlSeconds);
-        }
+        await this.storage.increment(reqKeyCurrent, ttlSeconds);
       }
       if (rule.tokensPerMinute !== undefined) {
         const newTokens = currTokCount + tokCost;

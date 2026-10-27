@@ -264,5 +264,24 @@ describe('GeminiAgentBooster & KV-Cache Prefix Optimizer', () => {
         Object.keys(payload.tools[0].functionDeclarations[0].parameters),
       ).toEqual(['c', 'd']);
     });
+
+    it('strips dangerous prototype pollution keys in canonicalizeJsonValue', () => {
+      const maliciousObj = JSON.parse(
+        '{"__proto__":{"polluted":true},"constructor":{"bad":true},"safe":"ok"}',
+      );
+      const cleaned = GeminiAgentBooster.canonicalizeTools([
+        {
+          type: 'function',
+          function: {
+            name: 'safe_tool',
+            parameters: maliciousObj,
+          },
+        },
+      ]);
+      const params = cleaned[0].function.parameters as Record<string, unknown>;
+      expect(params).toHaveProperty('safe', 'ok');
+      expect(Object.keys(params)).toEqual(['safe']);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
   });
 });

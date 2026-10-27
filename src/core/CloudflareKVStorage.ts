@@ -102,7 +102,7 @@ export class CloudflareKVStorage implements StateStorage {
     await this.kv.delete(this.key(key));
   }
 
-  async increment(key: string): Promise<number> {
+  async increment(key: string, ttlSeconds?: number): Promise<number> {
     const prefixedKey = this.key(key);
     const raw = await this.kv.get(prefixedKey, { type: 'text' });
     let current = 0;
@@ -116,7 +116,11 @@ export class CloudflareKVStorage implements StateStorage {
     }
 
     const newValue = current + 1;
-    await this.kv.put(prefixedKey, JSON.stringify(newValue));
+    const options: { expirationTtl?: number } = {};
+    if (ttlSeconds && ttlSeconds > 0) {
+      options.expirationTtl = Math.max(60, ttlSeconds);
+    }
+    await this.kv.put(prefixedKey, JSON.stringify(newValue), options);
     return newValue;
   }
 

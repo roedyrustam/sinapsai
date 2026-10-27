@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-404%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-411%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -87,6 +87,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [31. Eksportir Metrik Prometheus & OpenTelemetry](#31-eksportir-metrik-prometheus--opentelemetry)
   - [32. Model Context Protocol (MCP) Tool Bridge & Loop Agen Otonom](#32-model-context-protocol-mcp-tool-bridge--loop-agen-otonom)
   - [33. Gemini Agent Booster, Loop Agen Streaming & Vault PII Reversibel Streaming](#33-gemini-agent-booster-loop-agen-streaming--vault-pii-reversibel-streaming)
+  - [34. Gemini Explicit Context Caching & Eksekusi Tool Paralel Massal](#34-gemini-explicit-context-caching--eksekusi-tool-paralel-massal)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -1267,6 +1268,65 @@ for await (const event of client.runWithToolsStream({
     process.stdout.write(event.textDelta); // Token PII ({{PII_EMAIL_1}}) otomatis dipulihkan!
   } else if (event.type === 'done') {
     console.log(`\nSelesai dalam ${event.result.totalSteps} langkah ($${event.result.totalCostUsd})`);
+  }
+}
+```
+
+---
+
+### 34. Gemini Explicit Context Caching & Eksekusi Tool Paralel Massal
+
+Pangkas penggunaan token dan biaya inferensi sebesar 75%–90% menggunakan Google Gemini Context Caching eksplisit untuk instruksi sistem skala besar, basis kode, atau skema tools. Evaluasi kelayakan, buat cache dengan TTL fleksibel, dan jalankan beberapa tool call sekaligus secara paralel menggunakan `Promise.all` di `runWithToolsStream()`:
+
+```typescript
+import { GEMINI_MODELS, GeminiProvider, SinapsClient } from 'sinapsai';
+
+const gemini = new GeminiProvider({
+  apiKey: process.env.GEMINI_API_KEY!,
+  defaultModel: GEMINI_MODELS.PRO_4,
+  enableAvailabilityFallback: true, // Otomatis fallback mulus ke gemini-3.8-flash bila Gemini 4 Pro jenuh
+});
+
+const client = new SinapsClient({
+  providers: [gemini],
+});
+
+// 1. Evaluasi kelayakan context caching (ambang batas minimum >32.768 token)
+const eligibility = client.contextCache.evaluateEligibility(GEMINI_MODELS.PRO_4, 45_000);
+if (eligibility.eligible) {
+  // 2. Buat cached content secara eksplisit
+  const cache = await client.contextCache.create({
+    model: GEMINI_MODELS.PRO_4,
+    displayName: 'enterprise-knowledge-base',
+    ttl: '3600s', // 1 jam TTL
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: 'Berikut adalah dokumentasi dan spesifikasi arsitektur enterprise lengkap...' }],
+      },
+    ],
+  });
+
+  console.log(`Berhasil membuat Context Cache: ${cache.name} (Kedaluwarsa: ${cache.expireTime})`);
+
+  // 3. Eksekusi prompt dengan referensi cached content
+  const response = await client.chat.completions.create({
+    model: GEMINI_MODELS.PRO_4,
+    cachedContent: cache.name,
+    messages: [{ role: 'user', content: 'Berapa durasi reset timeout circuit breaker di spesifikasi?' }],
+  });
+
+  console.log(response.choices[0]?.message.content);
+}
+
+// 4. Eksekusi beberapa tool calls secara serentak (paralel) tanpa latensi bertingkat
+for await (const event of client.runWithToolsStream({
+  model: GEMINI_MODELS.PRO_4,
+  messages: [{ role: 'user', content: 'Ambil harga saham AAPL, GOOGL, dan NVDA secara bersamaan.' }],
+})) {
+  if (event.type === 'tool-call-start') {
+    // Ketiga tool dijalankan serentak via Promise.all
+    console.log(`Mengeksekusi ${event.toolCalls.length} tool calls secara paralel!`);
   }
 }
 ```

@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.10.0] - 2026-10-27
+### Security & Bug Fixes
+- **ReDoS & Infinite Loop Prevention in `SecurityGuardrails` (`src/core/SecurityGuardrails.ts`)**:
+  - Patched an infinite loop vulnerability where custom regex patterns matching empty strings caused `globalRegex.exec` to stall at the same offset forever, freezing the Node.js/Edge worker thread. Added explicit `globalRegex.lastIndex++` advance on zero-length matches.
+  - Replaced string-based `sanitizedText.replace` with a replacer function `() => redactedReplacement` to prevent unintended substitution pattern evaluation when matched prompt text contains `$` characters (e.g. `$$`, `$1`, `$&`).
+- **Prototype Pollution Defense in `GeminiAgentBooster` (`src/core/GeminiAgentBooster.ts`)**:
+  - Filtered out `__proto__`, `constructor`, and `prototype` keys during recursive lexicographical tool and schema canonicalization (`canonicalizeJsonValue`) to prevent prototype pollution from untrusted schema inputs.
+- **Streaming Tool-Name Deduplication in `streamAccumulator` (`src/utils/streamAccumulator.ts`)**:
+  - Fixed an accumulator bug where providers streaming the complete tool name in multiple consecutive SSE chunks (e.g. Google Gemini, Ollama) resulted in duplicated concatenated names (e.g. `getWeathergetWeather`).
+- **Atomic Rate Limiter Increment with Expiry (`StateStorage`, `RateLimiter`)**:
+  - Extended `StateStorage.increment(key, ttlSeconds)` across `InMemoryStorage`, `RedisStorage`, `D1Storage`, and `CloudflareKVStorage` to accept an optional TTL, eliminating a race condition in `GatewayRateLimiter` where concurrent initial requests could overwrite counters.
+
+### Added
+- **First-Class Google Context Caching API on `SinapsClient` (`client.contextCache`)**:
+  - Exposed direct lifecycle management for Google Gemini Context Caching:
+    - `client.contextCache.create(options)`: Creates a cached content resource on Google Gemini.
+    - `client.contextCache.get(name)`: Retrieves cached content metadata.
+    - `client.contextCache.list(pageSize?)`: Lists active cached contents.
+    - `client.contextCache.delete(name)`: Deletes cached content by name.
+    - `client.contextCache.evaluateEligibility(request, minTokenThreshold?)`: Evaluates static prefix token counts against the 32,768-token threshold for 75%–90% prompt cost savings.
+- **Automatic Gemini 4 Frontier Availability Fallback Invariant (`Router.getCandidateModels`)**:
+  - Automatically appends `gemini-3.8-flash` to candidate models whenever `gemini-4-pro`, `gemini-4-argon`, or `gemini-4-flash` is requested and the provider is Gemini, ensuring seamless degradation if frontier models are regionally unprovisioned or rate-limited.
+- **Massively Parallel Tool Execution in `client.runWithToolsStream()`**:
+  - Upgraded multi-step streaming agent loops to execute batch tool calls concurrently with `Promise.all` rather than serial blocking, drastically cutting turnaround latency for multi-tool LLM responses while maintaining real-time event emission.
+- **Runnable Example 29 (`examples/29-gemini-context-caching-and-parallel-agents.ts`)**:
+  - Demonstrates Google Context Caching lifecycle, eligibility evaluation, and massively parallel tool execution in streaming agent loops.
+
 ## [2.9.0] - 2026-10-23
 ### Added
 - **Gemini Agent Booster & KV-Cache Prefix Optimizer (`GeminiAgentBooster`, `canonicalizeJsonValue`)**:

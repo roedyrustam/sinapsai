@@ -68,7 +68,7 @@ export declare class D1Storage implements StateStorage {
     get<T>(key: string): Promise<T | null>;
     set<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;
     delete(key: string): Promise<void>;
-    increment(key: string): Promise<number>;
+    increment(key: string, ttlSeconds?: number): Promise<number>;
     clear(): Promise<void>;
     /**
      * Removes expired entries. Call periodically via scheduled handler
