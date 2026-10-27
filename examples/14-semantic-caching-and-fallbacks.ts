@@ -7,10 +7,10 @@
  */
 
 import {
-  OpenAiProvider,
-  SinapsClient,
   cosineSimilarity,
   extractPromptText,
+  OpenAiProvider,
+  SinapsClient,
 } from '../src/index.js';
 
 /**
@@ -69,7 +69,9 @@ async function run() {
         console.log(
           `[Semantic Cache HIT!] Similarity score: ${(similarity * 100).toFixed(1)}%`,
         );
-        console.log(`[Semantic Cache HIT!] Cached Answer: "${cachedRes.choices[0].message.content}"`);
+        console.log(
+          `[Semantic Cache HIT!] Cached Answer: "${cachedRes.choices[0].message.content}"`,
+        );
       },
     },
   });
@@ -84,15 +86,15 @@ async function run() {
     messages: [
       {
         role: 'user',
-        content: [
-          { type: 'text', text: 'What is the capital of France?' },
-        ],
+        content: [{ type: 'text', text: 'What is the capital of France?' }],
       },
     ],
   });
 
   console.log('\n2. Second Query: "Can you tell me the capital of France?"');
-  console.log('(Different wording, but semantically equivalent -> triggers Semantic Cache Hit!)\n');
+  console.log(
+    '(Different wording, but semantically equivalent -> triggers Semantic Cache Hit!)\n',
+  );
 
   const cachedRes = await client.chat.completions.create({
     model: 'gpt-4o',

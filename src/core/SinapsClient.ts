@@ -58,11 +58,21 @@ import {
   type CircuitBreakerOptions,
 } from './CircuitBreaker.js';
 import {
+  ConsensusEngine,
+  type ConsensusOptions,
+  type ConsensusResult,
+} from './ConsensusEngine.js';
+import {
   type ContextCompressionOptions,
   ContextCompressor,
 } from './ContextCompressor.js';
+import {
+  EpisodicMemory,
+  type EpisodicMemoryOptions,
+} from './EpisodicMemory.js';
 import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
+import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
 import {
   type LlmOptimizationOptions,
@@ -73,6 +83,7 @@ import {
 import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { GatewayRateLimitError, GatewayRateLimiter } from './RateLimiter.js';
+import { RealtimeClient } from './RealtimeClient.js';
 import { type CacheOptions, Router, type RouterStrategy } from './Router.js';
 import {
   SecurityGuardrailError,
@@ -148,6 +159,14 @@ export interface SinapsClientOptions {
    * automated complexity-based model cascading, and dynamic thinking allocation.
    */
   llmo?: LlmOptimizationOptions | boolean;
+  /**
+   * Optional episodic long-term vector memory configuration.
+   */
+  memory?: EpisodicMemoryOptions;
+  /**
+   * Optional in-process hybrid RAG configuration.
+   */
+  rag?: HybridRagOptions;
 }
 
 export class SinapsClient {
@@ -160,6 +179,12 @@ export class SinapsClient {
   public readonly rateLimiter?: GatewayRateLimiter;
   public readonly llmo?: LlmOptimizer;
   public readonly mcp: McpToolBridge;
+  public readonly memory: EpisodicMemory;
+  public readonly rag: HybridRagEngine;
+  public readonly realtime = new RealtimeClient();
+  public readonly consensus: {
+    create: (options: ConsensusOptions) => Promise<ConsensusResult>;
+  };
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
   private hooks?: SinapsEventHooks;
@@ -225,6 +250,25 @@ export class SinapsClient {
         this.llmo = new LlmOptimizer(options.llmo);
       }
     }
+
+    // Initialize In-Process Episodic Vector Memory
+    this.memory = new EpisodicMemory({
+      storage: this.storage,
+      ...options.memory,
+    });
+
+    // Initialize In-Process Hybrid RAG Engine
+    this.rag = new HybridRagEngine(options.rag);
+
+    // Initialize Speculative Multi-Draft Consensus
+    this.consensus = {
+      create: async (
+        consensusOptions: ConsensusOptions,
+      ): Promise<ConsensusResult> => {
+        const engine = new ConsensusEngine();
+        return engine.execute(this, consensusOptions);
+      },
+    };
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId: string) => {

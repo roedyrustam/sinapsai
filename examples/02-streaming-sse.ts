@@ -16,7 +16,9 @@ import { OpenAiProvider, SinapsClient } from '../src/index.js';
 async function run() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    console.warn('Set OPENAI_API_KEY environment variable to run this demo live.');
+    console.warn(
+      'Set OPENAI_API_KEY environment variable to run this demo live.',
+    );
     return;
   }
 
@@ -29,7 +31,10 @@ async function run() {
   const stream = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
-      { role: 'user', content: 'Explain quantum computing in 3 bullet points.' },
+      {
+        role: 'user',
+        content: 'Explain quantum computing in 3 bullet points.',
+      },
     ],
     stream: true,
   });

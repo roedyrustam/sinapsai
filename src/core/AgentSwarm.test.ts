@@ -5,7 +5,11 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
-import { AgentSwarm, SwarmContext } from './AgentSwarm.js';
+import {
+  AgentSwarm,
+  AgentWalletExceededError,
+  SwarmContext,
+} from './AgentSwarm.js';
 import { McpToolBridge } from './McpBridge.js';
 import { SinapsClient } from './SinapsClient.js';
 
@@ -485,5 +489,49 @@ describe('AgentSwarm', () => {
     expect(result.content).toBe('The 20% discount on $100 is $20.');
     expect(result.totalSteps).toBe(2);
     expect(result.finalAgentId).toBe('billing_specialist');
+  });
+
+  it('enforces agent wallet micro-economy spend limits and throws AgentWalletExceededError', async () => {
+    const res: UnifiedApiResponse = {
+      id: 'res-costly',
+      model: 'default',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: 'Expensive output.',
+          },
+          finishReason: 'stop',
+        },
+      ],
+      usage: {
+        prompt_tokens: 10000,
+        completion_tokens: 10000,
+        total_tokens: 20000,
+      },
+    };
+
+    const provider = createMockProvider([res]);
+    const client = new SinapsClient({
+      providers: [provider],
+    });
+
+    const swarm = client.swarm({
+      agents: [
+        {
+          id: 'budget_agent',
+          name: 'Budget Agent',
+          role: 'Researcher',
+          instructions: 'Do work.',
+          wallet: {
+            maxTokens: 500, // Very low token budget limit
+          },
+        },
+      ],
+    });
+
+    await expect(swarm.run({ task: 'Exceed token budget' })).rejects.toThrow(
+      AgentWalletExceededError,
+    );
   });
 });

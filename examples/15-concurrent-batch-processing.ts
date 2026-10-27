@@ -7,9 +7,9 @@
  */
 
 import {
+  type CreateChatCompletionRequestNonStreaming,
   OpenAiProvider,
   SinapsClient,
-  type CreateChatCompletionRequestNonStreaming,
 } from '../src/index.js';
 
 /**

@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-429%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-461%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -23,7 +23,7 @@ Engineered with a **100% in-process / in-memory** architecture, SinapsAI elimina
 > 🤖 **LLM / AI Agent Quick Ingest**:
 > If you are an AI assistant (ChatGPT, Claude, Gemini, Perplexity), autonomous agent, or coding assistant (Cursor, Copilot, Windsurf):
 > - **Compact Roadmap**: Read [`llms.txt`](./llms.txt) for a high-density, concise summary of all features and standard imports.
-> - **Complete Context Specification**: Read [`llms-full.txt`](./llms-full.txt) for the exhaustive single-file reference document containing all TypeScript interfaces, provider configs, error codes, and 31 zero-slop examples.
+> - **Complete Context Specification**: Read [`llms-full.txt`](./llms-full.txt) for the exhaustive single-file reference document containing all TypeScript interfaces, provider configs, error codes, and 35 zero-slop examples.
 > - **In-Process Guarantee**: `sinapsai` is 100% in-process with **0 runtime dependencies**. It is NOT an external proxy server (no Docker/Python/Redis required).
 
 ---
@@ -1543,6 +1543,99 @@ export class OllamaProvider implements Provider {
 
 ---
 
+## 37. Speculative Consensus, Episodic Memory, Hybrid RAG & Realtime Voice
+
+SinapsAI v2.12 extends in-process capabilities with enterprise multi-agent consensus, memory persistence, and multimodal streaming:
+
+### 37.1 Speculative Multi-Draft Consensus & AI Arbitration
+Runs candidate models in parallel (e.g. `gemini-2.5-flash` + `llama-3.3-70b`), calculates in-process pairwise semantic cosine similarity, and automatically escalates to a Supreme AI Judge Model if answers diverge below threshold:
+
+```typescript
+const consensus = await client.consensus.create({
+  draftModels: ['gemini-2.5-flash-lite', 'llama-3.3-70b-versatile'],
+  judgeModel: 'gemini-2.5-pro',
+  consensusThreshold: 0.85,
+  messages: [{ role: 'user', content: 'Explain zero-knowledge rollups' }],
+});
+
+if (consensus.consensusReached) {
+  console.log('Unanimous consensus:', consensus.synthesizedText);
+} else {
+  console.log('Arbitrated by Supreme Judge:', consensus.synthesizedText);
+}
+```
+
+### 37.2 Long-Term Episodic Vector Memory & Prompt Injection
+Maintains tenant/user-isolated persistent memory facts with character n-gram cosine similarity and dynamic system instruction enrichment:
+
+```typescript
+// Store user fact
+await client.memory.store({
+  userId: 'user_123',
+  content: 'User prefers functional TypeScript with strict type definitions.',
+});
+
+// Automatically inject relevant facts into ChatMessage[]
+const enrichedMessages = await client.memory.injectIntoMessages(
+  messages,
+  'Show me an API router boilerplate',
+  'user_123'
+);
+```
+
+### 37.3 In-Process Hybrid RAG (BM25 + Dense Vector + RRF)
+Combines Okapi BM25 inverted keyword index with dense semantic vector cosine similarity using Reciprocal Rank Fusion (RRF):
+
+```typescript
+// Add and automatically chunk knowledge documents
+await client.rag.addDocument('kb_arch', 'SinapsAI architecture details...');
+
+// Execute hybrid sparse + dense search
+const matches = await client.rag.search('What are the internal components?', {
+  topK: 3,
+  hybridWeight: 0.5, // 0.0 = BM25 only, 1.0 = Vector only
+});
+
+const contextBlock = client.rag.formatForPrompt(matches);
+```
+
+### 37.4 Realtime Multimodal Voice & WebSocket Client
+Connects with full duplex bi-directional WebSocket streaming to OpenAI Realtime (`gpt-4o-realtime-preview`) and Gemini Live (`gemini-2.0-flash-exp`) with zero external dependencies:
+
+```typescript
+const session = await client.realtime.connect({
+  provider: 'openai',
+  apiKey: process.env.OPENAI_API_KEY,
+  instructions: 'You are an ultra-fast voice copilot.',
+  onTextDelta: (delta) => process.stdout.write(delta),
+  onAudioDelta: (base64Pcm) => playSpeakerChunk(base64Pcm),
+});
+
+session.sendText('Summarize today\'s deployment stats');
+```
+
+### 37.5 Agent Swarm Micro-Economy Budget Wallets
+Strictly caps spend and token limits per specialist agent in `client.swarm()`:
+
+```typescript
+const swarm = client.swarm({
+  agents: [
+    {
+      id: 'coder',
+      name: 'Code Specialist',
+      role: 'TypeScript Refactoring',
+      instructions: 'Write production code.',
+      wallet: {
+        maxCostUsd: 0.50, // Capped at $0.50 maximum spend
+        maxTokens: 50000,
+      },
+    },
+  ],
+});
+```
+
+---
+
 ## ⚙️ Configuration Reference
 
 ### `SinapsClientOptions`
@@ -1566,6 +1659,8 @@ export class OllamaProvider implements Provider {
 | `modelAliases` | `Record<string, string>` | `undefined` | Virtual model alias mapping (e.g. `{ 'fast': 'gpt-4o-mini' }`) |
 | `hedging` | `HedgingOptions` | `undefined` | Speculative hedged requests for P99 tail latency reduction (`delayMs`, `maxHedges`) |
 | `llmo` | `LlmOptimizationOptions \| boolean` | `undefined` | Universal LLM Optimization engine (`minifyPrompts`, `deduplicateSystem`, `alignKvCachePrefix`, `autoCascadeModel`, `cascadeTiers`, `dynamicThinking`) |
+| `memory` | `EpisodicMemoryOptions` | `undefined` | In-process long-term episodic vector memory with tenant/user isolation and dynamic prompt injection |
+| `rag` | `HybridRagOptions` | `undefined` | In-process Okapi BM25 + dense vector hybrid retrieval engine with Reciprocal Rank Fusion |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |
 
 ### `CircuitBreakerOptions`

@@ -21,7 +21,9 @@ import {
 } from '../src/index.js';
 
 async function main() {
-  console.log('=== SinapsAI: Streaming Tool Accumulator & JSON Extraction ===\n');
+  console.log(
+    '=== SinapsAI: Streaming Tool Accumulator & JSON Extraction ===\n',
+  );
 
   // --- PART A: Stream Accumulator Simulation ---
   console.log('--- PART A: Streaming Tool Call Accumulation ---');
@@ -34,7 +36,8 @@ async function main() {
         {
           delta: {
             role: 'assistant',
-            reasoning_content: 'User asked for Tokyo weather. I should call get_weather tool.',
+            reasoning_content:
+              'User asked for Tokyo weather. I should call get_weather tool.',
           },
           finishReason: null,
         },
@@ -110,7 +113,9 @@ async function main() {
   const accumulatedResponse = await accumulateStream(mockStreamGenerator(), {
     onChunk: (chunk) => {
       if (chunk.choices[0]?.delta?.reasoning_content) {
-        process.stdout.write(`[Reasoning Chunk]: ${chunk.choices[0].delta.reasoning_content}\n`);
+        process.stdout.write(
+          `[Reasoning Chunk]: ${chunk.choices[0].delta.reasoning_content}\n`,
+        );
       }
     },
   });
@@ -118,8 +123,14 @@ async function main() {
   console.log('\nAccumulated Result:');
   console.log('  Model:', accumulatedResponse.model);
   console.log('  Finish Reason:', accumulatedResponse.choices[0].finishReason);
-  console.log('  Reasoning:', accumulatedResponse.choices[0].message.reasoning_content);
-  console.log('  Tool Calls:', JSON.stringify(accumulatedResponse.choices[0].message.tool_calls, null, 2));
+  console.log(
+    '  Reasoning:',
+    accumulatedResponse.choices[0].message.reasoning_content,
+  );
+  console.log(
+    '  Tool Calls:',
+    JSON.stringify(accumulatedResponse.choices[0].message.tool_calls, null, 2),
+  );
   console.log('  Usage:', accumulatedResponse.usage);
 
   // --- PART B: Structured JSON Extraction ---
@@ -147,7 +158,7 @@ Hope this helps your investment strategy!`;
   console.log('  Ticker:', analysis.ticker);
   console.log('  Recommendation:', analysis.recommendation);
   console.log('  Target Price: $' + analysis.targetPrice.toFixed(2));
-  console.log('  Confidence:', (analysis.confidence * 100) + '%');
+  console.log('  Confidence:', analysis.confidence * 100 + '%');
 }
 
 main();

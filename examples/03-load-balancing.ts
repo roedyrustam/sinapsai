@@ -33,7 +33,9 @@ async function run() {
     },
   });
 
-  console.log('Dispatching multiple requests with Round-Robin load balancing...');
+  console.log(
+    'Dispatching multiple requests with Round-Robin load balancing...',
+  );
   // Every call alternates smoothly between groq-us-east and groq-us-west
 }
 

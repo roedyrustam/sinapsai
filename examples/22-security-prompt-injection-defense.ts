@@ -22,7 +22,9 @@ import {
 } from '../src/index.js';
 
 async function main() {
-  console.log('=== SinapsAI: Security Guardrails & Prompt Injection Defense ===\n');
+  console.log(
+    '=== SinapsAI: Security Guardrails & Prompt Injection Defense ===\n',
+  );
 
   // --- PART A: Standalone Security Scanner ---
   console.log('--- PART A: Standalone Security Scanner ---');
@@ -42,13 +44,17 @@ async function main() {
     console.log(`Safe: ${scan.safe ? 'YES' : 'NO'}`);
     if (!scan.safe) {
       for (const v of scan.violations) {
-        console.log(`  -> Detected [${v.category}]: matched "${v.matchedText}"`);
+        console.log(
+          `  -> Detected [${v.category}]: matched "${v.matchedText}"`,
+        );
       }
     }
   }
 
   // --- PART B: Client Gateway Auto-Defense ---
-  console.log('\n--- PART B: Gateway Integration with onSecurityViolation Hook ---');
+  console.log(
+    '\n--- PART B: Gateway Integration with onSecurityViolation Hook ---',
+  );
 
   const client = new SinapsClient({
     providers: [

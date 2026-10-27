@@ -38,7 +38,9 @@ async function run() {
     allowlist: ['support@company.com'],
     onPIIDetected: (matches) => {
       for (const match of matches) {
-        console.log(`  [PII Detected] Category: ${match.category} -> "${match.original}"`);
+        console.log(
+          `  [PII Detected] Category: ${match.category} -> "${match.original}"`,
+        );
       }
     },
   });
@@ -62,7 +64,9 @@ Also, our public support is support@company.com (allowlisted).
   // =========================================================================
   // PART 2: SinapsClient with Built-In PII Guardrails Middleware
   // =========================================================================
-  console.log('--- Part 2: Automatic PII Guardrails Middleware in SinapsClient ---');
+  console.log(
+    '--- Part 2: Automatic PII Guardrails Middleware in SinapsClient ---',
+  );
 
   // Mock Provider to inspect incoming request payload received by provider
   let receivedPayloadMessages: any[] = [];
@@ -128,11 +132,7 @@ Also, our public support is support@company.com (allowlisted).
       }
       return entry.val;
     },
-    async set(
-      key: string,
-      val: string,
-      ...args: any[]
-    ): Promise<'OK' | null> {
+    async set(key: string, val: string, ...args: any[]): Promise<'OK' | null> {
       let exp: number | undefined;
       if (args[0] === 'EX' && typeof args[1] === 'number') {
         exp = Date.now() + args[1] * 1000;
@@ -156,7 +156,11 @@ Also, our public support is support@company.com (allowlisted).
   });
 
   // Test set with 60s TTL
-  await redisStorage.set('rate_limit:user_123', { count: 1, tier: 'enterprise' }, 60);
+  await redisStorage.set(
+    'rate_limit:user_123',
+    { count: 1, tier: 'enterprise' },
+    60,
+  );
   const cachedVal = await redisStorage.get('rate_limit:user_123');
   console.log('Retrieved from RedisStorage:', cachedVal);
 
@@ -178,12 +182,20 @@ Also, our public support is support@company.com (allowlisted).
     },
   };
 
-  const cfStorage = new CloudflareKVStorage(mockKVNamespace as any, { prefix: 'edge:' });
-  await cfStorage.set('circuit_status', { provider: 'openai', status: 'closed' }, 120);
+  const cfStorage = new CloudflareKVStorage(mockKVNamespace as any, {
+    prefix: 'edge:',
+  });
+  await cfStorage.set(
+    'circuit_status',
+    { provider: 'openai', status: 'closed' },
+    120,
+  );
   const cfVal = await cfStorage.get('circuit_status');
   console.log('Retrieved from CloudflareKVStorage:', cfVal);
 
-  console.log('\n=== All Distributed Storage & PII Guardrails Demos Passed Successfully ===');
+  console.log(
+    '\n=== All Distributed Storage & PII Guardrails Demos Passed Successfully ===',
+  );
 }
 
 run().catch(console.error);

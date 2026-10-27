@@ -1385,6 +1385,20 @@ function tryExtractJson(text) {
 }
 
 // src/core/AgentSwarm.ts
+var AgentWalletExceededError = class extends Error {
+  agentId;
+  limitUsd;
+  currentCostUsd;
+  constructor(agentId, currentCostUsd, limitUsd) {
+    super(
+      `Agent "${agentId}" exceeded allocated budget wallet: $${currentCostUsd.toFixed(4)} (limit: $${limitUsd})`
+    );
+    this.name = "AgentWalletExceededError";
+    this.agentId = agentId;
+    this.currentCostUsd = currentCostUsd;
+    this.limitUsd = limitUsd;
+  }
+};
 var SwarmContext = class {
   store = /* @__PURE__ */ new Map();
   constructor(initialData) {
@@ -1537,6 +1551,7 @@ var AgentSwarm = class {
     let handoffCount = 0;
     let totalSteps = 0;
     const agentSteps = {};
+    const agentSpendBreakdown = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history = options.messages ? [...options.messages] : [];
     if (options.task && history.length === 0) {
@@ -1569,6 +1584,34 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       const choice = response.choices[0];
       if (!choice) {
         break;
+      }
+      const usage = response.usage;
+      const promptTokens = usage?.promptTokens ?? usage?.prompt_tokens ?? 0;
+      const completionTokens = usage?.completionTokens ?? usage?.completion_tokens ?? 0;
+      const stepTokens = usage?.totalTokens ?? usage?.total_tokens ?? promptTokens + completionTokens;
+      const stepCost = response.costUsd ?? promptTokens * 15e-7 + completionTokens * 2e-6;
+      if (!agentSpendBreakdown[activeAgentId]) {
+        agentSpendBreakdown[activeAgentId] = { costUsd: 0, tokens: 0 };
+      }
+      agentSpendBreakdown[activeAgentId].costUsd = Number(
+        (agentSpendBreakdown[activeAgentId].costUsd + stepCost).toFixed(6)
+      );
+      agentSpendBreakdown[activeAgentId].tokens += stepTokens;
+      if (agent.wallet) {
+        if (agent.wallet.maxCostUsd !== void 0 && agentSpendBreakdown[activeAgentId].costUsd > agent.wallet.maxCostUsd) {
+          throw new AgentWalletExceededError(
+            activeAgentId,
+            agentSpendBreakdown[activeAgentId].costUsd,
+            agent.wallet.maxCostUsd
+          );
+        }
+        if (agent.wallet.maxTokens !== void 0 && agentSpendBreakdown[activeAgentId].tokens > agent.wallet.maxTokens) {
+          throw new AgentWalletExceededError(
+            activeAgentId,
+            agentSpendBreakdown[activeAgentId].tokens,
+            agent.wallet.maxTokens
+          );
+        }
       }
       const msg = choice.message;
       history.push(msg);
@@ -1631,7 +1674,8 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         totalSteps,
         totalHandoffs: handoffCount,
         agentSteps,
-        totalCostUsd: totalCostUsd2
+        totalCostUsd: totalCostUsd2,
+        agentSpendBreakdown
       };
     }
     const lastMsg = history[history.length - 1];
@@ -1645,7 +1689,8 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       totalSteps,
       totalHandoffs: handoffCount,
       agentSteps,
-      totalCostUsd
+      totalCostUsd,
+      agentSpendBreakdown
     };
   }
   /**
@@ -1657,6 +1702,7 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
     let handoffCount = 0;
     let totalSteps = 0;
     const agentSteps = {};
+    const agentSpendBreakdown = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history = options.messages ? [...options.messages] : [];
     if (options.task && history.length === 0) {
@@ -1824,7 +1870,8 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         totalSteps,
         totalHandoffs: handoffCount,
         agentSteps,
-        totalCostUsd: totalCostUsd2
+        totalCostUsd: totalCostUsd2,
+        agentSpendBreakdown
       };
       yield {
         type: "done",
@@ -2166,6 +2213,217 @@ var CircuitBreaker = class {
   }
 };
 
+// src/utils/similarity.ts
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
+    return 0;
+  }
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) {
+    return 0;
+  }
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) {
+    return 0;
+  }
+  return Math.min(1, Math.max(-1, dotProduct / denominator));
+}
+function extractPromptText(messages) {
+  if (!messages || messages.length === 0) {
+    return "";
+  }
+  return messages.map((m) => {
+    let contentStr = "";
+    if (typeof m.content === "string") {
+      contentStr = m.content;
+    } else if (Array.isArray(m.content)) {
+      contentStr = m.content.filter((p) => p.type === "text").map((p) => p.text).join(" ");
+    }
+    return `${m.role}: ${contentStr.trim()}`;
+  }).join("\n");
+}
+
+// src/core/ConsensusEngine.ts
+function computeTermFrequencyVector(text, vocabulary) {
+  const vec = new Array(vocabulary.size).fill(0);
+  const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+  for (const word of words) {
+    const idx = vocabulary.get(word);
+    if (idx !== void 0) {
+      vec[idx] += 1;
+    }
+  }
+  const norm = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
+  if (norm > 0) {
+    for (let i = 0; i < vec.length; i++) {
+      vec[i] /= norm;
+    }
+  }
+  return vec;
+}
+function calculatePairwiseSimilarity(vectors) {
+  if (vectors.length < 2) return 1;
+  let totalSim = 0;
+  let pairs = 0;
+  for (let i = 0; i < vectors.length; i++) {
+    for (let j = i + 1; j < vectors.length; j++) {
+      const sim = Math.max(0, cosineSimilarity(vectors[i], vectors[j]));
+      totalSim += sim;
+      pairs++;
+    }
+  }
+  return pairs > 0 ? Number((totalSim / pairs).toFixed(4)) : 1;
+}
+var ConsensusEngine = class {
+  /**
+   * Executes multi-model speculative drafting and consensus arbitration.
+   */
+  async execute(client, options) {
+    const start = Date.now();
+    const threshold = options.consensusThreshold ?? 0.85;
+    const extractText = (res) => {
+      const c = res.choices?.[0]?.message?.content;
+      return typeof c === "string" ? c : JSON.stringify(c ?? "");
+    };
+    if (!options.draftModels || options.draftModels.length === 0) {
+      throw new Error(
+        "ConsensusEngine requires at least one draftModel in draftModels array."
+      );
+    }
+    const draftPromises = options.draftModels.map(async (model) => {
+      const draftStart = Date.now();
+      const res = await client.chat.completions.create({
+        model,
+        messages: options.messages,
+        temperature: options.temperature ?? 0.2,
+        maxTokens: options.maxTokens,
+        signal: options.signal
+      });
+      const latencyMs = Date.now() - draftStart;
+      const text = res.choices?.[0]?.message?.content || "";
+      return {
+        model,
+        provider: res.provider,
+        response: res,
+        latencyMs,
+        text
+      };
+    });
+    const settled = await Promise.allSettled(draftPromises);
+    const successfulDrafts = [];
+    for (const s of settled) {
+      if (s.status === "fulfilled" && s.value.text.trim().length > 0) {
+        successfulDrafts.push(s.value);
+      }
+    }
+    if (successfulDrafts.length === 0) {
+      const firstRejected = settled.find((s) => s.status === "rejected");
+      throw firstRejected?.reason ?? new Error("All candidate draft models failed to produce a response.");
+    }
+    if (successfulDrafts.length === 1) {
+      return {
+        finalResponse: successfulDrafts[0].response,
+        synthesizedText: extractText(successfulDrafts[0].response),
+        consensusReached: true,
+        averageSimilarity: 1,
+        consensusScore: 1,
+        drafts: successfulDrafts,
+        escalatedToJudge: false,
+        judgeEscalated: false,
+        totalDurationMs: Date.now() - start
+      };
+    }
+    let vectors = [];
+    const embedFn = options.customEmbed;
+    if (embedFn) {
+      vectors = await Promise.all(successfulDrafts.map((d) => embedFn(d.text)));
+    } else {
+      const vocab = /* @__PURE__ */ new Map();
+      let vocabIdx = 0;
+      for (const d of successfulDrafts) {
+        const words = d.text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+        for (const w of words) {
+          if (!vocab.has(w)) {
+            vocab.set(w, vocabIdx++);
+          }
+        }
+      }
+      vectors = successfulDrafts.map(
+        (d) => computeTermFrequencyVector(d.text, vocab)
+      );
+    }
+    const averageSimilarity = calculatePairwiseSimilarity(vectors);
+    const consensusReached = averageSimilarity >= threshold;
+    if (consensusReached || !options.judgeModel) {
+      const best = [...successfulDrafts].sort(
+        (a, b) => a.latencyMs - b.latencyMs
+      )[0];
+      return {
+        finalResponse: best.response,
+        synthesizedText: extractText(best.response),
+        consensusReached,
+        averageSimilarity,
+        consensusScore: averageSimilarity,
+        drafts: successfulDrafts,
+        escalatedToJudge: false,
+        judgeEscalated: false,
+        totalDurationMs: Date.now() - start
+      };
+    }
+    const userPromptText = options.messages.filter((m) => m.role === "user").map(
+      (m) => typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+    ).join("\n");
+    const draftEvidence = successfulDrafts.map(
+      (d, i) => `### Candidate Draft ${i + 1} (${d.model} | ${d.latencyMs}ms):
+${d.text}`
+    ).join("\n\n");
+    const judgePrompt = [
+      {
+        role: "system",
+        content: "You are an expert Supreme AI Arbitrator. Multiple independent AI models produced divergent answers for the user request. Analyze the candidate drafts, cross-verify claims, eliminate hallucinations, and synthesize the single authoritative, complete, and accurate final response."
+      },
+      {
+        role: "user",
+        content: `User Request:
+"""
+${userPromptText}
+"""
+
+Candidate Drafts:
+${draftEvidence}
+
+Please deliver the definitive answer:`
+      }
+    ];
+    const judgeResponse = await client.chat.completions.create({
+      model: options.judgeModel,
+      messages: judgePrompt,
+      temperature: 0.1,
+      signal: options.signal
+    });
+    return {
+      finalResponse: judgeResponse,
+      synthesizedText: extractText(judgeResponse),
+      consensusReached: false,
+      averageSimilarity,
+      consensusScore: averageSimilarity,
+      drafts: successfulDrafts,
+      escalatedToJudge: true,
+      judgeEscalated: true,
+      judgeModel: options.judgeModel,
+      judgeResponse,
+      totalDurationMs: Date.now() - start
+    };
+  }
+};
+
 // src/core/ContextCompressor.ts
 function estimateMessageTokens(msg) {
   let chars = 16;
@@ -2295,6 +2553,490 @@ var ContextCompressor = class {
       compressedTokens: estimateTotalTokens(finalMessages),
       droppedCount: messages.length - finalMessages.length
     };
+  }
+};
+
+// src/core/EpisodicMemory.ts
+function createFastTfEmbedding(text, dimensions = 64) {
+  const vec = new Array(dimensions).fill(0);
+  const clean = text.toLowerCase().replace(/[^\w\s]/g, " ");
+  const words = clean.split(/\s+/).filter((w) => w.length > 0);
+  for (const word of words) {
+    let hash = 0;
+    for (let i = 0; i < word.length; i++) {
+      hash = (hash << 5) - hash + word.charCodeAt(i);
+      hash |= 0;
+    }
+    const bucket = Math.abs(hash) % dimensions;
+    vec[bucket] += 2;
+    if (word.length >= 3) {
+      for (let j = 0; j <= word.length - 3; j++) {
+        const trigram = word.substring(j, j + 3);
+        let triHash = 0;
+        for (let k = 0; k < trigram.length; k++) {
+          triHash = (triHash << 5) - triHash + trigram.charCodeAt(k);
+          triHash |= 0;
+        }
+        vec[Math.abs(triHash) % dimensions] += 1;
+      }
+    }
+  }
+  const norm = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
+  if (norm > 0) {
+    for (let i = 0; i < dimensions; i++) {
+      vec[i] /= norm;
+    }
+  }
+  return vec;
+}
+var EpisodicMemory = class {
+  records = /* @__PURE__ */ new Map();
+  options;
+  constructor(options = {}) {
+    this.options = {
+      defaultMinSimilarity: options.defaultMinSimilarity ?? 0.05,
+      ...options
+    };
+  }
+  /**
+   * Retrieves a memory record by ID.
+   */
+  get(id) {
+    return this.records.get(id);
+  }
+  /**
+   * Generates a numeric vector embedding for text using customEmbed or fast local TF vectorizer.
+   */
+  async getEmbedding(text) {
+    if (this.options.customEmbed) {
+      return this.options.customEmbed(text);
+    }
+    return createFastTfEmbedding(text, 64);
+  }
+  /**
+   * Stores a new memory fact or interaction.
+   */
+  async store(options) {
+    const raw = options.text ?? options.content ?? "";
+    const text = typeof raw === "string" ? raw.trim() : String(raw).trim();
+    if (!text) {
+      throw new Error("Memory text must not be empty.");
+    }
+    const id = `mem_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const embedding = options.embedding ?? await this.getEmbedding(text);
+    const now = Date.now();
+    const record = {
+      id,
+      userId: options.userId,
+      text,
+      content: text,
+      metadata: options.metadata,
+      embedding,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.records.set(id, record);
+    if (this.options.storage) {
+      await this.options.storage.set(`sinaps_mem_${id}`, record);
+    }
+    return record;
+  }
+  /**
+   * Recalls semantically relevant memory facts for a query.
+   */
+  async recall(options) {
+    const query = options.query.trim();
+    if (!query) return [];
+    const topK = options.topK ?? 3;
+    const minSim = options.minScore ?? options.minSimilarity ?? this.options.defaultMinSimilarity ?? 0.5;
+    const queryVec = options.queryEmbedding ?? await this.getEmbedding(query);
+    const scored = [];
+    for (const record of this.records.values()) {
+      if (options.userId && record.userId && record.userId !== options.userId) {
+        continue;
+      }
+      if (options.filter && !options.filter(record)) {
+        continue;
+      }
+      const similarity = cosineSimilarity(queryVec, record.embedding);
+      if (similarity >= minSim) {
+        scored.push({ record, similarity: Number(similarity.toFixed(4)) });
+      }
+    }
+    scored.sort((a, b) => b.similarity - a.similarity);
+    return scored.slice(0, topK);
+  }
+  /**
+   * Injects recalled memories directly into messages as a system instruction context block.
+   */
+  async injectContext(messages, query, options = {}) {
+    const memories = await this.recall({ ...options, query });
+    if (memories.length === 0) {
+      return messages;
+    }
+    const contextText = [
+      "[LONG-TERM EPISODIC MEMORY / USER FACTS]",
+      ...memories.map(
+        (m) => `- ${m.record.text} (Relevance: ${(m.similarity * 100).toFixed(0)}%)`
+      )
+    ].join("\n");
+    const result = [...messages];
+    const systemIdx = result.findIndex((m) => m.role === "system");
+    if (systemIdx >= 0) {
+      const existing = result[systemIdx];
+      const existingContent = typeof existing.content === "string" ? existing.content : Array.isArray(existing.content) ? existing.content.filter((p) => p.type === "text").map((p) => p.text).join("\n") : "";
+      result[systemIdx] = {
+        role: "system",
+        content: `${existingContent}
+
+${contextText}`
+      };
+    } else {
+      result.unshift({
+        role: "system",
+        content: contextText
+      });
+    }
+    return result;
+  }
+  /**
+   * Alias for injectContext with explicit userId parameter.
+   */
+  async injectIntoMessages(messages, query, userId, options = {}) {
+    return this.injectContext(messages, query, { ...options, userId });
+  }
+  /**
+   * Deletes a memory record by ID.
+   */
+  async delete(id) {
+    const existed = this.records.delete(id);
+    if (this.options.storage) {
+      await this.options.storage.delete(`sinaps_mem_${id}`);
+    }
+    return existed;
+  }
+  /**
+   * Clears memory records, optionally filtered by userId.
+   */
+  async clear(userId) {
+    if (userId) {
+      for (const [id, record] of this.records.entries()) {
+        if (record.userId === userId) {
+          this.records.delete(id);
+          if (this.options.storage) {
+            await this.options.storage.delete(`sinaps_mem_${id}`);
+          }
+        }
+      }
+    } else {
+      this.records.clear();
+      if (this.options.storage && typeof this.options.storage.clear === "function") {
+        await this.options.storage.clear();
+      }
+    }
+  }
+  /**
+   * Returns total count of stored records.
+   */
+  count(userId) {
+    if (!userId) return this.records.size;
+    let c = 0;
+    for (const r of this.records.values()) {
+      if (r.userId === userId) c++;
+    }
+    return c;
+  }
+};
+
+// src/core/HybridRag.ts
+function chunkDocument(documentIdOrText, textOrOptions, metadata, options = {}) {
+  let documentId;
+  let text;
+  let opts;
+  let meta;
+  if (typeof textOrOptions === "string") {
+    documentId = documentIdOrText;
+    text = textOrOptions;
+    meta = metadata;
+    opts = options;
+  } else {
+    documentId = "doc";
+    text = documentIdOrText;
+    opts = textOrOptions || {};
+    meta = metadata;
+  }
+  const maxSize = opts.maxChunkSize ?? 800;
+  const overlap = opts.overlap ?? 100;
+  if (!text || typeof text !== "string" || text.trim().length === 0) {
+    return [];
+  }
+  const paragraphs = text.split(/\n\s*\n/);
+  const chunks = [];
+  let currentBuffer = "";
+  let chunkIdx = 0;
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    if (currentBuffer.length + trimmed.length + 2 <= maxSize) {
+      currentBuffer = currentBuffer.length > 0 ? `${currentBuffer}
+
+${trimmed}` : trimmed;
+    } else {
+      if (currentBuffer.length > 0) {
+        chunks.push({
+          id: `${documentId}_chunk_${chunkIdx}`,
+          documentId,
+          chunkIndex: chunkIdx++,
+          text: currentBuffer,
+          metadata: meta,
+          tokenCount: Math.ceil(currentBuffer.length / 4)
+        });
+        const overlapStart = Math.max(0, currentBuffer.length - overlap);
+        currentBuffer = currentBuffer.substring(overlapStart).trim();
+      }
+      if (trimmed.length > maxSize) {
+        let segments = trimmed.split(/(?<=[.!?])\s+/);
+        if (segments.length <= 1) {
+          segments = trimmed.split(/\s+/);
+        }
+        for (const s of segments) {
+          if (currentBuffer.length + s.length + 1 <= maxSize) {
+            currentBuffer = currentBuffer.length > 0 ? `${currentBuffer} ${s}` : s;
+          } else {
+            if (currentBuffer.length > 0) {
+              chunks.push({
+                id: `${documentId}_chunk_${chunkIdx}`,
+                documentId,
+                chunkIndex: chunkIdx++,
+                text: currentBuffer,
+                metadata: meta,
+                tokenCount: Math.ceil(currentBuffer.length / 4)
+              });
+              const overlapStart = Math.max(0, currentBuffer.length - overlap);
+              currentBuffer = currentBuffer.substring(overlapStart).trim();
+            }
+            currentBuffer = currentBuffer.length > 0 ? `${currentBuffer} ${s}` : s;
+          }
+        }
+      } else {
+        currentBuffer = currentBuffer.length > 0 ? `${currentBuffer}
+
+${trimmed}` : trimmed;
+      }
+    }
+  }
+  if (currentBuffer.length > 0) {
+    chunks.push({
+      id: `${documentId}_chunk_${chunkIdx}`,
+      documentId,
+      chunkIndex: chunkIdx,
+      text: currentBuffer,
+      metadata: meta,
+      tokenCount: Math.ceil(currentBuffer.length / 4)
+    });
+  }
+  return chunks;
+}
+var Bm25Index = class {
+  k1 = 1.5;
+  b = 0.75;
+  docFrequencies = /* @__PURE__ */ new Map();
+  docLengths = /* @__PURE__ */ new Map();
+  termFrequencies = /* @__PURE__ */ new Map();
+  // docId -> (term -> count)
+  totalDocs = 0;
+  totalLength = 0;
+  tokenize(text) {
+    if (!text || typeof text !== "string") return [];
+    return text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 1);
+  }
+  add(docId, text) {
+    const terms = this.tokenize(text);
+    const length = terms.length;
+    this.docLengths.set(docId, length);
+    this.totalLength += length;
+    this.totalDocs++;
+    const tf = /* @__PURE__ */ new Map();
+    const seenTerms = /* @__PURE__ */ new Set();
+    for (const term of terms) {
+      tf.set(term, (tf.get(term) || 0) + 1);
+      if (!seenTerms.has(term)) {
+        seenTerms.add(term);
+        this.docFrequencies.set(term, (this.docFrequencies.get(term) || 0) + 1);
+      }
+    }
+    this.termFrequencies.set(docId, tf);
+  }
+  addDocument(docId, text) {
+    this.add(docId, text);
+  }
+  scoreMap(query) {
+    const queryTerms = this.tokenize(query);
+    const scores = /* @__PURE__ */ new Map();
+    if (this.totalDocs === 0 || queryTerms.length === 0) return scores;
+    const avgdl = this.totalLength / this.totalDocs;
+    for (const term of queryTerms) {
+      const df = this.docFrequencies.get(term) || 0;
+      if (df === 0) continue;
+      const idf = Math.log(1 + (this.totalDocs - df + 0.5) / (df + 0.5));
+      for (const [docId, tfMap] of this.termFrequencies.entries()) {
+        const tf = tfMap.get(term) || 0;
+        if (tf === 0) continue;
+        const docLen = this.docLengths.get(docId) || avgdl;
+        const numerator = tf * (this.k1 + 1);
+        const denominator = tf + this.k1 * (1 - this.b + this.b * (docLen / avgdl));
+        const termScore = idf * (numerator / denominator);
+        scores.set(docId, (scores.get(docId) || 0) + termScore);
+      }
+    }
+    return scores;
+  }
+  score(query) {
+    const scores = this.scoreMap(query);
+    return Array.from(scores.entries()).map(([id, score]) => ({ id, score: Number(score.toFixed(4)) })).sort((a, b) => b.score - a.score);
+  }
+};
+function reciprocalRankFusion(bm25Input, vectorInput, k = 60, bm25Weight = 0.5, vectorWeight = 0.5) {
+  const toRankedIds = (input) => {
+    if (Array.isArray(input)) return input;
+    return Array.from(input.entries()).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  };
+  const bm25RankedIds = toRankedIds(bm25Input);
+  const vectorRankedIds = toRankedIds(vectorInput);
+  const combined = /* @__PURE__ */ new Map();
+  bm25RankedIds.forEach((id, rank) => {
+    const rrf = 1 / (k + rank + 1) * bm25Weight;
+    const entry = combined.get(id) || { id, score: 0 };
+    entry.score += rrf;
+    entry.bm25Rank = rank + 1;
+    combined.set(id, entry);
+  });
+  vectorRankedIds.forEach((id, rank) => {
+    const rrf = 1 / (k + rank + 1) * vectorWeight;
+    const entry = combined.get(id) || { id, score: 0 };
+    entry.score += rrf;
+    entry.vectorRank = rank + 1;
+    combined.set(id, entry);
+  });
+  return Array.from(combined.values()).sort((a, b) => b.score - a.score);
+}
+var HybridRagEngine = class {
+  chunks = /* @__PURE__ */ new Map();
+  bm25 = new Bm25Index();
+  options;
+  constructor(options = {}) {
+    this.options = options;
+  }
+  /**
+   * Adds and indexes a full text document with automatic chunking.
+   */
+  async addDocument(documentId, text, metadata) {
+    const createdChunks = chunkDocument(
+      documentId,
+      text,
+      metadata,
+      this.options.chunkOptions
+    );
+    for (const chunk of createdChunks) {
+      if (this.options.customEmbed) {
+        chunk.embedding = await this.options.customEmbed(chunk.text);
+      }
+      this.chunks.set(chunk.id, chunk);
+      this.bm25.add(chunk.id, chunk.text);
+    }
+    return createdChunks;
+  }
+  /**
+   * Executes hybrid search using BM25, dense vector cosine similarity, and RRF ranking.
+   */
+  async search(queryOrOptions, options) {
+    const query = typeof queryOrOptions === "string" ? queryOrOptions : queryOrOptions.query || "";
+    const opts = typeof queryOrOptions === "string" ? options || {} : queryOrOptions;
+    const topK = opts.topK ?? 5;
+    const weight = opts.hybridWeight ?? 0.5;
+    const bm25Ranked = this.bm25.score(query).map((r) => r.id);
+    const vectorScores = /* @__PURE__ */ new Map();
+    let queryVec = opts.queryEmbedding;
+    if (!queryVec && this.options.customEmbed && query.length > 0) {
+      queryVec = await this.options.customEmbed(query);
+    }
+    if (queryVec && queryVec.length > 0) {
+      for (const chunk of this.chunks.values()) {
+        if (chunk.embedding && chunk.embedding.length > 0) {
+          const sim = Math.max(0, cosineSimilarity(queryVec, chunk.embedding));
+          vectorScores.set(chunk.id, sim);
+        }
+      }
+    }
+    const vectorRanked = Array.from(vectorScores.entries()).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+    const fused = reciprocalRankFusion(
+      bm25Ranked,
+      vectorRanked,
+      60,
+      1 - weight,
+      weight
+    );
+    const sortedIds = fused.slice(0, topK);
+    const results = [];
+    for (const item of sortedIds) {
+      const chunk = this.chunks.get(item.id);
+      if (chunk) {
+        results.push({
+          chunk,
+          score: Number(item.score.toFixed(6)),
+          rrfScore: Number(item.score.toFixed(6)),
+          denseScore: vectorScores.get(item.id) ?? 0.5,
+          bm25Rank: item.bm25Rank,
+          vectorRank: item.vectorRank
+        });
+      }
+    }
+    return results;
+  }
+  /**
+   * Formats search results into a clean context block ready for system instructions.
+   */
+  formatForPrompt(results) {
+    if (results.length === 0) return "";
+    const items = results.map(
+      (r, i) => `[Source ${i + 1} (${r.chunk.documentId})]:
+${r.chunk.text}`
+    );
+    return `[RETRIEVED KNOWLEDGE CONTEXT]
+${items.join("\n\n")}`;
+  }
+  /**
+   * Returns total chunk count in index.
+   */
+  getChunkCount() {
+    return this.chunks.size;
+  }
+  /**
+   * Alias for getChunkCount().
+   */
+  count() {
+    return this.chunks.size;
+  }
+  /**
+   * Deletes all chunks associated with a document ID.
+   */
+  deleteDocument(documentId) {
+    for (const [id, chunk] of this.chunks.entries()) {
+      if (chunk.documentId === documentId) {
+        this.chunks.delete(id);
+      }
+    }
+    this.bm25 = new Bm25Index();
+    for (const chunk of this.chunks.values()) {
+      this.bm25.add(chunk.id, chunk.text);
+    }
+  }
+  /**
+   * Clears all documents and resets the index.
+   */
+  clear() {
+    this.chunks.clear();
+    this.bm25 = new Bm25Index();
   }
 };
 
@@ -2657,6 +3399,32 @@ var LlmOptimizer = class {
 };
 
 // src/core/McpBridge.ts
+function coerceToolArguments(args, schema) {
+  if (!args || typeof args !== "object" || !schema?.properties) {
+    return args;
+  }
+  const result = { ...args };
+  for (const [key, prop] of Object.entries(schema.properties)) {
+    const val = result[key];
+    if (val === void 0 || val === null) continue;
+    const propType = prop?.type;
+    if ((propType === "number" || propType === "integer") && typeof val === "string") {
+      const num = Number(val);
+      if (!Number.isNaN(num)) {
+        result[key] = num;
+      }
+    } else if (propType === "boolean" && typeof val === "string") {
+      if (val.toLowerCase() === "true") result[key] = true;
+      if (val.toLowerCase() === "false") result[key] = false;
+    } else if (propType === "object" && typeof val === "string") {
+      try {
+        result[key] = JSON.parse(val);
+      } catch {
+      }
+    }
+  }
+  return result;
+}
 var McpToolBridge = class _McpToolBridge {
   tools = /* @__PURE__ */ new Map();
   constructor(tools) {
@@ -2841,6 +3609,7 @@ var McpToolBridge = class _McpToolBridge {
     } else if (typeof rawArgs === "object" && rawArgs !== null) {
       parsedArgs = rawArgs;
     }
+    parsedArgs = coerceToolArguments(parsedArgs, toolDef.inputSchema);
     if (context?.signal?.aborted) {
       return {
         content: [
@@ -2886,14 +3655,17 @@ var McpToolBridge = class _McpToolBridge {
         _raw: rawResult
       };
     } catch (err) {
+      const errMsg = err.message;
+      const propNames = toolDef.inputSchema?.properties ? Object.keys(toolDef.inputSchema.properties).join(", ") : "none";
       return {
         content: [
           {
             type: "text",
-            text: `Error executing tool '${toolName}': ${err.message}`
+            text: `Error executing tool '${toolName}': ${errMsg}`
           }
         ],
         isError: true,
+        selfHealingHint: `Error executing tool '${toolName}': ${errMsg}. Hint: Verify input arguments against schema properties (${propNames}) and retry.`,
         _raw: err
       };
     }
@@ -3702,6 +4474,175 @@ var GatewayRateLimiter = class {
   }
 };
 
+// src/core/RealtimeClient.ts
+var RealtimeSession = class {
+  ws = null;
+  options;
+  isAlive = false;
+  constructor(options) {
+    this.options = options;
+  }
+  /**
+   * Resolves the WebSocket URL based on provider and model.
+   */
+  resolveUrl() {
+    if (this.options.url) return this.options.url;
+    const provider = this.options.provider || "openai";
+    const model = this.options.model || (provider === "openai" ? "gpt-4o-realtime-preview" : "gemini-2.0-flash-exp");
+    if (provider === "openai") {
+      return `wss://api.openai.com/v1/realtime?model=${model}`;
+    }
+    if (provider === "gemini") {
+      return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.options.apiKey}`;
+    }
+    throw new Error(
+      `Unable to resolve WebSocket URL for custom provider without explicit options.url.`
+    );
+  }
+  /**
+   * Establishes real-time WebSocket connection.
+   */
+  async connect() {
+    const targetUrl = this.resolveUrl();
+    const WebSocketCtor = globalThis.WebSocket;
+    if (!WebSocketCtor) {
+      throw new Error(
+        "WebSocket is not available in the current runtime environment."
+      );
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        const protocols = this.options.provider === "openai" ? ["realtime", `openai-insecure-api-key.${this.options.apiKey}`] : void 0;
+        this.ws = protocols ? new WebSocketCtor(targetUrl, protocols) : new WebSocketCtor(targetUrl);
+        this.ws.onopen = () => {
+          this.isAlive = true;
+          this.options.onOpen?.();
+          this.initializeSession();
+          resolve(this);
+        };
+        this.ws.onclose = (event) => {
+          this.isAlive = false;
+          this.options.onClose?.(event.code, event.reason);
+        };
+        this.ws.onerror = (_event) => {
+          const err = new Error("Realtime WebSocket connection error.");
+          this.options.onError?.(err);
+          if (!this.isAlive) {
+            reject(err);
+          }
+        };
+        this.ws.onmessage = (event) => {
+          this.handleIncomingMessage(event.data);
+        };
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+  /**
+   * Sends initial session setup event.
+   */
+  initializeSession() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.options.provider === "openai") {
+      const sessionUpdate = {
+        type: "session.update",
+        session: {
+          modalities: this.options.modalities ?? ["text", "audio"],
+          instructions: this.options.instructions ?? "You are a helpful real-time AI assistant.",
+          voice: this.options.voice ?? "alloy",
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5
+          }
+        }
+      };
+      this.ws.send(JSON.stringify(sessionUpdate));
+    }
+  }
+  /**
+   * Parses and dispatches incoming WebSocket message events.
+   */
+  handleIncomingMessage(rawData) {
+    try {
+      const text = typeof rawData === "string" ? rawData : String(rawData);
+      const parsed = JSON.parse(text);
+      this.options.onRawMessage?.(parsed);
+      if (parsed.type === "response.audio_transcript.delta" && typeof parsed.delta === "string") {
+        this.options.onTextDelta?.(parsed.delta);
+      } else if (parsed.type === "response.audio.delta" && typeof parsed.delta === "string") {
+        this.options.onAudioDelta?.(parsed.delta);
+      } else if (parsed.type === "response.text.delta" && typeof parsed.delta === "string") {
+        this.options.onTextDelta?.(parsed.delta);
+      }
+    } catch {
+    }
+  }
+  /**
+   * Sends a user text message turn.
+   */
+  sendText(text) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Realtime session is not open.");
+    }
+    const event = {
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }]
+      }
+    };
+    this.ws.send(JSON.stringify(event));
+    this.ws.send(JSON.stringify({ type: "response.create" }));
+  }
+  /**
+   * Appends PCM16 audio chunks in base64 format.
+   */
+  sendAudio(base64Audio) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Realtime session is not open.");
+    }
+    const event = {
+      type: "input_audio_buffer.append",
+      audio: base64Audio
+    };
+    this.ws.send(JSON.stringify(event));
+  }
+  /**
+   * Commits the current audio buffer to trigger model response.
+   */
+  commitAudio() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    this.ws.send(JSON.stringify({ type: "response.create" }));
+  }
+  /**
+   * Closes the real-time WebSocket session.
+   */
+  close() {
+    if (this.ws) {
+      this.isAlive = false;
+      this.ws.close();
+      this.ws = null;
+    }
+  }
+  get connected() {
+    return this.isAlive && this.ws?.readyState === WebSocket.OPEN;
+  }
+};
+var RealtimeClient = class {
+  /**
+   * Connects to a real-time multimodal session.
+   */
+  async connect(options) {
+    const session = new RealtimeSession(options);
+    return session.connect();
+  }
+};
+
 // src/types/index.ts
 var BudgetExceededError = class extends Error {
   currentCostUsd;
@@ -3972,43 +4913,6 @@ function formatOtelMetrics(metrics, options = {}) {
       }
     ]
   };
-}
-
-// src/utils/similarity.ts
-function cosineSimilarity(a, b) {
-  if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
-    return 0;
-  }
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) {
-    return 0;
-  }
-  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denominator === 0) {
-    return 0;
-  }
-  return Math.min(1, Math.max(-1, dotProduct / denominator));
-}
-function extractPromptText(messages) {
-  if (!messages || messages.length === 0) {
-    return "";
-  }
-  return messages.map((m) => {
-    let contentStr = "";
-    if (typeof m.content === "string") {
-      contentStr = m.content;
-    } else if (Array.isArray(m.content)) {
-      contentStr = m.content.filter((p) => p.type === "text").map((p) => p.text).join(" ");
-    }
-    return `${m.role}: ${contentStr.trim()}`;
-  }).join("\n");
 }
 
 // src/core/HedgedExecutor.ts
@@ -5446,6 +6350,10 @@ var SinapsClient = class {
   rateLimiter;
   llmo;
   mcp;
+  memory;
+  rag;
+  realtime = new RealtimeClient();
+  consensus;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
@@ -5499,6 +6407,17 @@ var SinapsClient = class {
         this.llmo = new LlmOptimizer(options.llmo);
       }
     }
+    this.memory = new EpisodicMemory({
+      storage: this.storage,
+      ...options.memory
+    });
+    this.rag = new HybridRagEngine(options.rag);
+    this.consensus = {
+      create: async (consensusOptions) => {
+        const engine = new ConsensusEngine();
+        return engine.execute(this, consensusOptions);
+      }
+    };
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
       onCircuitOpen: (providerId) => {
@@ -6699,6 +7618,49 @@ var sinapsai = createSinapsAI;
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Speculative Multi-Draft Consensus & Model Arbitration Engine
+ *
+ * Implements:
+ * 1. Parallel multi-model speculative drafting.
+ * 2. Pairwise semantic similarity consensus validation (cosine similarity).
+ * 3. Automatic escalation to a Judge Model when drafts diverge beyond threshold.
+ * 4. Resilient fail-soft fallback with latency and cost telemetry.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Long-Term Episodic Vector Memory Engine
+ *
+ * Implements:
+ * 1. User & tenant-partitioned memory storage.
+ * 2. Zero-dependency cosine similarity vector search with local TF or dense embeddings.
+ * 3. Dynamic context injection ([LONG-TERM MEMORY]) into conversational turns.
+ * 4. Pluggable persistence with StateStorage (InMemory, KV, Redis, D1).
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Hybrid RAG Engine (BM25 + Dense Cosine + Reciprocal Rank Fusion)
+ *
+ * Implements:
+ * 1. Semantic paragraph chunker with configurable max token / size and overlap.
+ * 2. Pure in-memory Okapi BM25 inverted index for lexical keyword precision.
+ * 3. Dense vector cosine similarity for deep semantic understanding.
+ * 4. Reciprocal Rank Fusion (RRF) combining sparse + dense rank lists.
+ * 5. Zero external dependencies, pure Web Standards.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Universal LLM Optimization Engine (LLMO)
  *
  * Implements:
@@ -6729,6 +7691,20 @@ var sinapsai = createSinapsAI;
  * In-process automatic redaction of Personally Identifiable Information (PII)
  * from outgoing LLM payloads before they leave the network boundary.
  * No external dependencies, no data leaves the process unprotected.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Real-Time Multimodal Voice & WebSocket Control Plane
+ *
+ * Implements:
+ * 1. Zero-dependency native WebSocket connectivity to OpenAI Realtime and Gemini Live APIs.
+ * 2. Unified bidirectional session lifecycle (session.connect, sendText, sendAudio, close).
+ * 3. Real-time audio and text delta event dispatching.
+ * 4. In-process connection resilience and automatic failover.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

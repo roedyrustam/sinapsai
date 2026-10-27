@@ -11,11 +11,7 @@
  * Run with: npx tsx examples/27-mcp-tool-bridge-and-agent-loop.ts
  */
 
-import {
-  McpToolBridge,
-  OpenAiProvider,
-  SinapsClient,
-} from '../src/index.js';
+import { McpToolBridge, OpenAiProvider, SinapsClient } from '../src/index.js';
 
 async function main() {
   console.log('=== SinapsAI - MCP Tool Bridge & Autonomous Agent Loop ===\n');
@@ -33,7 +29,8 @@ async function main() {
   // 2. Register local in-process MCP tools on the client's MCP bridge
   client.mcp.registerTool({
     name: 'get_stock_quote',
-    description: 'Fetches the current market quote and currency for a given stock ticker symbol.',
+    description:
+      'Fetches the current market quote and currency for a given stock ticker symbol.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -45,10 +42,19 @@ async function main() {
       required: ['symbol'],
     },
     handler: async ({ symbol }: { symbol: string }) => {
-      console.log(`  [MCP Handler] Executing get_stock_quote for symbol: ${symbol}`);
-      const mockDatabase: Record<string, { price: number; currency: string; company: string }> = {
+      console.log(
+        `  [MCP Handler] Executing get_stock_quote for symbol: ${symbol}`,
+      );
+      const mockDatabase: Record<
+        string,
+        { price: number; currency: string; company: string }
+      > = {
         AAPL: { price: 235.5, currency: 'USD', company: 'Apple Inc.' },
-        MSFT: { price: 420.25, currency: 'USD', company: 'Microsoft Corporation' },
+        MSFT: {
+          price: 420.25,
+          currency: 'USD',
+          company: 'Microsoft Corporation',
+        },
         NVDA: { price: 138.1, currency: 'USD', company: 'NVIDIA Corporation' },
       };
 
@@ -62,12 +68,16 @@ async function main() {
 
   client.mcp.registerTool({
     name: 'calculate_portfolio_value',
-    description: 'Calculates the total monetary value of an asset holding given shares and price.',
+    description:
+      'Calculates the total monetary value of an asset holding given shares and price.',
     inputSchema: {
       type: 'object',
       properties: {
         shares: { type: 'number', description: 'Number of owned shares' },
-        pricePerShare: { type: 'number', description: 'Price per individual share' },
+        pricePerShare: {
+          type: 'number',
+          description: 'Price per individual share',
+        },
         currency: { type: 'string', description: 'Currency code' },
       },
       required: ['shares', 'pricePerShare'],
@@ -76,7 +86,11 @@ async function main() {
       shares,
       pricePerShare,
       currency = 'USD',
-    }: { shares: number; pricePerShare: number; currency?: string }) => {
+    }: {
+      shares: number;
+      pricePerShare: number;
+      currency?: string;
+    }) => {
       console.log(
         `  [MCP Handler] Calculating portfolio value: ${shares} shares @ $${pricePerShare} ${currency}`,
       );
@@ -140,7 +154,9 @@ async function main() {
             `\n>>> [Agent Step ${step.stepIndex}] Completed in ${step.durationMs}ms:`,
           );
           for (const tc of step.toolCalls) {
-            console.log(`    Requested Tool: ${tc.function.name}(${tc.function.arguments})`);
+            console.log(
+              `    Requested Tool: ${tc.function.name}(${tc.function.arguments})`,
+            );
           }
           for (const tr of step.toolResults) {
             console.log(`    Tool Output: ${tr.content}`);
@@ -150,7 +166,9 @@ async function main() {
 
       console.log('\nFinal Assistant Response:');
       console.log(result.response.choices[0].message.content);
-      console.log(`\nAgent Summary: ${result.totalSteps} steps executed, ${result.totalTokens} total tokens.`);
+      console.log(
+        `\nAgent Summary: ${result.totalSteps} steps executed, ${result.totalTokens} total tokens.`,
+      );
     } catch (err) {
       console.error('Error during live agent loop:', err);
     }

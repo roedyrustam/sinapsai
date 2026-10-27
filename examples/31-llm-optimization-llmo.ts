@@ -20,7 +20,9 @@ import {
 } from '../src/index.js';
 
 async function main() {
-  console.log('=== 1. Universal LLM Optimization Engine (LLMO) Standalone ===\n');
+  console.log(
+    '=== 1. Universal LLM Optimization Engine (LLMO) Standalone ===\n',
+  );
 
   const optimizer = new LlmOptimizer({
     enabled: true,
@@ -40,11 +42,13 @@ async function main() {
   const unoptimizedPrompt: ChatMessage[] = [
     {
       role: 'system',
-      content: 'You are a Senior Systems Architect.   \n\n\n\nAlways adhere to clean code principles.',
+      content:
+        'You are a Senior Systems Architect.   \n\n\n\nAlways adhere to clean code principles.',
     },
     {
       role: 'system',
-      content: 'Always adhere to clean code principles.\nOutput production-grade TypeScript.',
+      content:
+        'Always adhere to clean code principles.\nOutput production-grade TypeScript.',
     },
     {
       role: 'user',
@@ -66,7 +70,10 @@ Explain the concurrency overhead   and    benchmark the result.   `,
     },
   ];
 
-  console.log('--- Original Prompt (Character count: %d) ---', JSON.stringify(unoptimizedPrompt).length);
+  console.log(
+    '--- Original Prompt (Character count: %d) ---',
+    JSON.stringify(unoptimizedPrompt).length,
+  );
 
   const optimizationResult = optimizer.optimize({
     model: 'auto',
@@ -74,12 +81,24 @@ Explain the concurrency overhead   and    benchmark the result.   `,
   });
 
   console.log('Tokens before optimization:', optimizationResult.originalTokens);
-  console.log('Tokens after optimization: ', optimizationResult.optimizedTokens);
+  console.log(
+    'Tokens after optimization: ',
+    optimizationResult.optimizedTokens,
+  );
   console.log('Tokens saved:             ', optimizationResult.tokensSaved);
-  console.log('Savings ratio:            ', `${(optimizationResult.savingsRatio * 100).toFixed(1)}%`);
-  console.log('Complexity score:         ', optimizationResult.complexity.score);
+  console.log(
+    'Savings ratio:            ',
+    `${(optimizationResult.savingsRatio * 100).toFixed(1)}%`,
+  );
+  console.log(
+    'Complexity score:         ',
+    optimizationResult.complexity.score,
+  );
   console.log('Complexity tier:          ', optimizationResult.complexity.tier);
-  console.log('Complexity signals:       ', optimizationResult.complexity.signals.join(', '));
+  console.log(
+    'Complexity signals:       ',
+    optimizationResult.complexity.signals.join(', '),
+  );
   console.log('Cascaded Model:           ', optimizationResult.cascadeModel);
   console.log('Recommended Thinking:     ', optimizationResult.thinkingBudget);
 
@@ -141,7 +160,8 @@ Explain the concurrency overhead   and    benchmark the result.   `,
           {
             message: {
               role: 'assistant',
-              content: 'LLMO-optimized execution succeeded with minimal token footprint.',
+              content:
+                'LLMO-optimized execution succeeded with minimal token footprint.',
             },
             finishReason: 'stop',
           },
@@ -176,7 +196,9 @@ Explain the concurrency overhead   and    benchmark the result.   `,
     model: 'auto',
     messages: [{ role: 'user', content: '   hi   there!   ' }],
   });
-  console.log(`-> Dispatched to: ${executedModel} (${executedPromptLength} characters)`);
+  console.log(
+    `-> Dispatched to: ${executedModel} (${executedPromptLength} characters)`,
+  );
 
   // Query 2: Deep reasoning prompt (auto-cascaded to Tier 3: gemini-2.5-pro)
   console.log('\nExecuting Deep Architecture Query:');
@@ -190,15 +212,32 @@ Explain the concurrency overhead   and    benchmark the result.   `,
       },
     ],
   });
-  console.log(`-> Dispatched to: ${executedModel} (${executedPromptLength} characters)`);
+  console.log(
+    `-> Dispatched to: ${executedModel} (${executedPromptLength} characters)`,
+  );
 
   console.log('\n=== 4. LLMO FinOps Savings Telemetry ===\n');
   const metrics = client.getMetrics();
-  console.log('Total Optimized Requests:', metrics.llmoMetrics?.totalOptimizedRequests);
-  console.log('Total Tokens Saved:      ', metrics.llmoMetrics?.totalTokensSaved);
-  console.log('Total Estimated USD Saved: $', metrics.llmoMetrics?.totalEstimatedUsdSaved.toFixed(5));
-  console.log('Avg Compression Ratio:   ', `${((1 - (metrics.llmoMetrics?.averageCompressionRatio || 1)) * 100).toFixed(1)}% token reduction`);
-  console.log('Cascaded Requests Count: ', metrics.llmoMetrics?.cascadedRequestsCount);
+  console.log(
+    'Total Optimized Requests:',
+    metrics.llmoMetrics?.totalOptimizedRequests,
+  );
+  console.log(
+    'Total Tokens Saved:      ',
+    metrics.llmoMetrics?.totalTokensSaved,
+  );
+  console.log(
+    'Total Estimated USD Saved: $',
+    metrics.llmoMetrics?.totalEstimatedUsdSaved.toFixed(5),
+  );
+  console.log(
+    'Avg Compression Ratio:   ',
+    `${((1 - (metrics.llmoMetrics?.averageCompressionRatio || 1)) * 100).toFixed(1)}% token reduction`,
+  );
+  console.log(
+    'Cascaded Requests Count: ',
+    metrics.llmoMetrics?.cascadedRequestsCount,
+  );
 
   console.log('\n[PASS] Example 31 completed successfully.');
 }

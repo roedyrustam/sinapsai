@@ -17,13 +17,15 @@
 import {
   HedgedExecutor,
   OpenAiProvider,
-  Provider,
-  UnifiedApiRequest,
-  UnifiedApiResponse,
+  type Provider,
+  type UnifiedApiRequest,
+  type UnifiedApiResponse,
 } from '../src/index.js';
 
 async function main() {
-  console.log('=== SinapsAI: Hedged Requests for P99 Tail-Latency Elimination ===\n');
+  console.log(
+    '=== SinapsAI: Hedged Requests for P99 Tail-Latency Elimination ===\n',
+  );
 
   // --- Mock Redundant Providers with Simulated Latencies ---
   const primaryProvider: Provider = {
@@ -37,7 +39,10 @@ async function main() {
         model: 'primary-model',
         choices: [
           {
-            message: { role: 'assistant', content: 'Response from primary provider.' },
+            message: {
+              role: 'assistant',
+              content: 'Response from primary provider.',
+            },
             finishReason: 'stop',
           },
         ],
@@ -56,7 +61,10 @@ async function main() {
         model: 'backup-model',
         choices: [
           {
-            message: { role: 'assistant', content: 'Response from backup provider.' },
+            message: {
+              role: 'assistant',
+              content: 'Response from backup provider.',
+            },
             finishReason: 'stop',
           },
         ],
@@ -70,16 +78,22 @@ async function main() {
     delayMs: 150, // Hedge threshold: 150ms
     maxHedges: 1,
     onHedgeFired: (primary, backup, delayMs) => {
-      console.log(`⏱️ [HEDGE FIRED] ${primary.name} exceeded ${delayMs}ms. Firing backup ${backup.name}...`);
+      console.log(
+        `⏱️ [HEDGE FIRED] ${primary.name} exceeded ${delayMs}ms. Firing backup ${backup.name}...`,
+      );
     },
     onHedgeWon: (winner, elapsedMs) => {
-      console.log(`🏆 [HEDGE WON] Backup provider "${winner.name}" won the race in ${elapsedMs}ms!`);
+      console.log(
+        `🏆 [HEDGE WON] Backup provider "${winner.name}" won the race in ${elapsedMs}ms!`,
+      );
     },
   });
 
   const request: UnifiedApiRequest = {
     model: 'default',
-    messages: [{ role: 'user', content: 'Explain zero-dependency hedged requests.' }],
+    messages: [
+      { role: 'user', content: 'Explain zero-dependency hedged requests.' },
+    ],
   };
 
   console.log('Sending request through HedgedExecutor...');
@@ -97,9 +111,15 @@ async function main() {
   const totalTime = Date.now() - startTime;
   console.log('\n--- Race Results ---');
   console.log(`Winner Provider : ${raceResult.winnerProvider.name}`);
-  console.log(`Was Hedged      : ${raceResult.wasHedged ? 'YES (Backup Saved P99)' : 'NO'}`);
-  console.log(`Total Elapsed   : ${totalTime}ms (Winner time: ${raceResult.elapsedMs}ms)`);
-  console.log(`Answer Content  : "${raceResult.response.choices[0].message.content}"`);
+  console.log(
+    `Was Hedged      : ${raceResult.wasHedged ? 'YES (Backup Saved P99)' : 'NO'}`,
+  );
+  console.log(
+    `Total Elapsed   : ${totalTime}ms (Winner time: ${raceResult.elapsedMs}ms)`,
+  );
+  console.log(
+    `Answer Content  : "${raceResult.response.choices[0].message.content}"`,
+  );
 
   console.log('\n=== Example 25 Completed Successfully ===');
 }

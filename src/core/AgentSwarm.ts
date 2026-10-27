@@ -103,6 +103,34 @@ export interface SwarmAgentConfig {
    * A2A skills description for Agent Card discovery
    */
   skills?: A2AAgentSkill[];
+  /**
+   * Optional micro-economy budget wallet capping spend for this agent.
+   */
+  wallet?: SwarmAgentWallet;
+}
+
+/**
+ * Micro-economy wallet cap for an individual swarm agent.
+ */
+export interface SwarmAgentWallet {
+  maxCostUsd?: number;
+  maxTokens?: number;
+}
+
+export class AgentWalletExceededError extends Error {
+  public readonly agentId: string;
+  public readonly limitUsd?: number;
+  public readonly currentCostUsd: number;
+
+  constructor(agentId: string, currentCostUsd: number, limitUsd?: number) {
+    super(
+      `Agent "${agentId}" exceeded allocated budget wallet: $${currentCostUsd.toFixed(4)} (limit: $${limitUsd})`,
+    );
+    this.name = 'AgentWalletExceededError';
+    this.agentId = agentId;
+    this.currentCostUsd = currentCostUsd;
+    this.limitUsd = limitUsd;
+  }
 }
 
 /**
@@ -214,6 +242,10 @@ export interface SwarmResult {
    * Cumulative estimated cost across all agent turns (if usage cost available)
    */
   totalCostUsd: number;
+  /**
+   * Spend and token breakdown tracked per agent ID
+   */
+  agentSpendBreakdown?: Record<string, { costUsd: number; tokens: number }>;
 }
 
 /**
@@ -405,6 +437,10 @@ export class AgentSwarm {
     let handoffCount = 0;
     let totalSteps = 0;
     const agentSteps: Record<string, number> = {};
+    const agentSpendBreakdown: Record<
+      string,
+      { costUsd: number; tokens: number }
+    > = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history: ChatMessage[] = options.messages
       ? [...options.messages]
@@ -447,6 +483,59 @@ export class AgentSwarm {
       const choice = response.choices[0];
       if (!choice) {
         break;
+      }
+
+      // Track micro-economy wallet spend per agent
+      const usage = response.usage as
+        | {
+            promptTokens?: number;
+            completionTokens?: number;
+            totalTokens?: number;
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            total_tokens?: number;
+          }
+        | undefined;
+      const promptTokens = usage?.promptTokens ?? usage?.prompt_tokens ?? 0;
+      const completionTokens =
+        usage?.completionTokens ?? usage?.completion_tokens ?? 0;
+      const stepTokens =
+        usage?.totalTokens ??
+        usage?.total_tokens ??
+        promptTokens + completionTokens;
+      const stepCost =
+        (response as { costUsd?: number }).costUsd ??
+        promptTokens * 0.0000015 + completionTokens * 0.000002;
+
+      if (!agentSpendBreakdown[activeAgentId]) {
+        agentSpendBreakdown[activeAgentId] = { costUsd: 0, tokens: 0 };
+      }
+      agentSpendBreakdown[activeAgentId].costUsd = Number(
+        (agentSpendBreakdown[activeAgentId].costUsd + stepCost).toFixed(6),
+      );
+      agentSpendBreakdown[activeAgentId].tokens += stepTokens;
+
+      if (agent.wallet) {
+        if (
+          agent.wallet.maxCostUsd !== undefined &&
+          agentSpendBreakdown[activeAgentId].costUsd > agent.wallet.maxCostUsd
+        ) {
+          throw new AgentWalletExceededError(
+            activeAgentId,
+            agentSpendBreakdown[activeAgentId].costUsd,
+            agent.wallet.maxCostUsd,
+          );
+        }
+        if (
+          agent.wallet.maxTokens !== undefined &&
+          agentSpendBreakdown[activeAgentId].tokens > agent.wallet.maxTokens
+        ) {
+          throw new AgentWalletExceededError(
+            activeAgentId,
+            agentSpendBreakdown[activeAgentId].tokens,
+            agent.wallet.maxTokens,
+          );
+        }
       }
 
       const msg = choice.message;
@@ -539,6 +628,7 @@ export class AgentSwarm {
         totalHandoffs: handoffCount,
         agentSteps,
         totalCostUsd,
+        agentSpendBreakdown,
       };
     }
 
@@ -558,6 +648,7 @@ export class AgentSwarm {
       totalHandoffs: handoffCount,
       agentSteps,
       totalCostUsd,
+      agentSpendBreakdown,
     };
   }
 
@@ -575,6 +666,10 @@ export class AgentSwarm {
     let handoffCount = 0;
     let totalSteps = 0;
     const agentSteps: Record<string, number> = {};
+    const agentSpendBreakdown: Record<
+      string,
+      { costUsd: number; tokens: number }
+    > = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history: ChatMessage[] = options.messages
       ? [...options.messages]
@@ -784,6 +879,7 @@ export class AgentSwarm {
         totalHandoffs: handoffCount,
         agentSteps,
         totalCostUsd,
+        agentSpendBreakdown,
       };
 
       yield {

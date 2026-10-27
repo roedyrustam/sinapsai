@@ -25,7 +25,10 @@ import {
 const storage = new InMemoryStorage({ autoSweep: false });
 
 export default {
-  async fetch(request: Request, env: Record<string, string>): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Record<string, string>,
+  ): Promise<Response> {
     const client = new SinapsClient({
       storage,
       strategy: 'failover',
@@ -48,7 +51,10 @@ export default {
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
-          { role: 'system', content: 'You are running in a Cloudflare Worker.' },
+          {
+            role: 'system',
+            content: 'You are running in a Cloudflare Worker.',
+          },
           { role: 'user', content: 'Say hello from the edge!' },
         ],
       });

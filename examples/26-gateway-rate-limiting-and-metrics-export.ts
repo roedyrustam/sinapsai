@@ -65,7 +65,9 @@ async function main() {
   try {
     const res = await client.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: 'Explain AI gateways in 1 sentence.' }],
+      messages: [
+        { role: 'user', content: 'Explain AI gateways in 1 sentence.' },
+      ],
       user: 'alice-tenant-1',
     });
     console.log('Response received:', res.choices[0].message.content);
@@ -94,9 +96,7 @@ async function main() {
     serviceVersion: '2.7.1',
     resourceAttributes: { 'deployment.environment': 'production' },
   });
-  console.log(
-    JSON.stringify(otelJson, null, 2).slice(0, 600) + '...\n',
-  );
+  console.log(JSON.stringify(otelJson, null, 2).slice(0, 600) + '...\n');
 }
 
 main().catch(console.error);

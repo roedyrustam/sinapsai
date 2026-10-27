@@ -32,7 +32,8 @@ async function run() {
       messages: [
         {
           role: 'user',
-          content: 'How many times does the letter "r" appear in "strawberry"? Explain step by step.',
+          content:
+            'How many times does the letter "r" appear in "strawberry"? Explain step by step.',
         },
       ],
     });

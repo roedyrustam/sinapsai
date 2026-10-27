@@ -434,13 +434,17 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 | `examples/29-gemini-context-caching-and-parallel-agents.ts` | Explicit Google context caching API and parallel tool calls |
 | `examples/30-multi-agent-swarm-and-a2a-handoff.ts` | Multi-agent swarm, A2A handoff protocol, and Agent Cards |
 | `examples/31-llm-optimization-llmo.ts` | Universal LLMO: minification, KV-cache prefixing, cascading |
+| `examples/32-speculative-consensus-and-arbitration.ts` | Speculative multi-draft consensus, cosine similarity, and Supreme Judge arbitration |
+| `examples/33-episodic-memory-and-context-injection.ts` | Long-term episodic vector memory with tenant isolation and prompt enrichment |
+| `examples/34-hybrid-rag-bm25-and-vector.ts` | In-process Hybrid RAG with Okapi BM25, dense vector cosine, and Reciprocal Rank Fusion |
+| `examples/35-realtime-voice-and-websocket.ts` | Realtime multimodal voice and WebSocket client for OpenAI Realtime and Gemini Live |
 
 ---
 
 ## 9. Verification & Quality Metrics
 
-- **Total Test Suites**: 36
-- **Total Unit & Integration Tests**: 429 passing (100% pass rate)
+- **Total Test Suites**: 40
+- **Total Unit & Integration Tests**: 461 passing (100% pass rate)
 - **Linter Status**: 100% compliant with Biome v2 (0 errors, 0 warnings)
 - **TypeScript**: Strict mode with declarations emitted
 - **Runtime Dependencies**: `0` (Zero external dependencies)

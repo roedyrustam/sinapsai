@@ -17,7 +17,9 @@
 import { PIIGuardrails, SinapsClient } from '../src/index.js';
 
 async function main() {
-  console.log('=== SinapsAI: Reversible PII Tokenization & Response Vault ===\n');
+  console.log(
+    '=== SinapsAI: Reversible PII Tokenization & Response Vault ===\n',
+  );
 
   // --- PART A: Standalone Tokenization & Restoration ---
   console.log('--- PART A: Standalone PIIGuardrails Vault ---');

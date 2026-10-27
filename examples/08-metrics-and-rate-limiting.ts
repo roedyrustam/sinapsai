@@ -28,13 +28,13 @@ async function main() {
     providers: [
       new OpenAiProvider({
         apiKey: process.env.OPENAI_API_KEY || 'sk-demo',
-        promptCostPer1k: 0.0025,    // $2.50 / 1M prompt
-        completionCostPer1k: 0.010, // $10.00 / 1M completion
+        promptCostPer1k: 0.0025, // $2.50 / 1M prompt
+        completionCostPer1k: 0.01, // $10.00 / 1M completion
       }),
       new DeepSeekProvider({
         apiKey: process.env.DEEPSEEK_API_KEY || 'sk-demo',
-        promptCostPer1k: 0.00027,   // $0.27 / 1M prompt (cache miss)
-        completionCostPer1k: 0.0011,// $1.10 / 1M completion
+        promptCostPer1k: 0.00027, // $0.27 / 1M prompt (cache miss)
+        completionCostPer1k: 0.0011, // $1.10 / 1M completion
       }),
     ],
     hooks: {
@@ -47,7 +47,9 @@ async function main() {
         );
       },
       onFallback: (err, from, to) => {
-        console.warn(`[Fallback] ${from.name} -> ${to.name} due to: ${err.message}`);
+        console.warn(
+          `[Fallback] ${from.name} -> ${to.name} due to: ${err.message}`,
+        );
       },
     },
     cache: {
@@ -61,7 +63,9 @@ async function main() {
   try {
     const res = await client.chat.completions.create({
       model: 'deepseek-chat',
-      messages: [{ role: 'user', content: 'Explain quantum computing in 2 sentences.' }],
+      messages: [
+        { role: 'user', content: 'Explain quantum computing in 2 sentences.' },
+      ],
       maxTokens: 100,
     });
 
@@ -78,7 +82,9 @@ async function main() {
   console.log(`Successful: ${metrics.successfulRequests}`);
   console.log(`Failed: ${metrics.failedRequests}`);
   console.log(`Cached: ${metrics.cachedRequests}`);
-  console.log(`Total Tokens: ${metrics.totalTokens} (Prompt: ${metrics.totalPromptTokens}, Completion: ${metrics.totalCompletionTokens})`);
+  console.log(
+    `Total Tokens: ${metrics.totalTokens} (Prompt: ${metrics.totalPromptTokens}, Completion: ${metrics.totalCompletionTokens})`,
+  );
   console.log(`Estimated Spend: $${metrics.estimatedCostUsd.toFixed(6)} USD`);
   console.log('\nProvider breakdown:');
   console.table(metrics.providerMetrics);

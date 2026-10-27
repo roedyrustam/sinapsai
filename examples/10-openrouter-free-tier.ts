@@ -7,10 +7,10 @@
  */
 
 import {
+  createOpenRouterFreeProvider,
   GeminiProvider,
   OpenRouterProvider,
   SinapsClient,
-  createOpenRouterFreeProvider,
 } from '../src/index.js';
 
 /**

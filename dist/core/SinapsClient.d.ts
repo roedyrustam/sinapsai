@@ -10,12 +10,16 @@ import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, Cached
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
+import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
+import { EpisodicMemory, type EpisodicMemoryOptions } from './EpisodicMemory.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
+import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
 import { type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions } from './LlmOptimizer.js';
 import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { GatewayRateLimiter } from './RateLimiter.js';
+import { RealtimeClient } from './RealtimeClient.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import { SecurityGuardrails } from './SecurityGuardrails.js';
 import type { StateStorage } from './StateStorage.js';
@@ -86,6 +90,14 @@ export interface SinapsClientOptions {
      * automated complexity-based model cascading, and dynamic thinking allocation.
      */
     llmo?: LlmOptimizationOptions | boolean;
+    /**
+     * Optional episodic long-term vector memory configuration.
+     */
+    memory?: EpisodicMemoryOptions;
+    /**
+     * Optional in-process hybrid RAG configuration.
+     */
+    rag?: HybridRagOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -97,6 +109,12 @@ export declare class SinapsClient {
     readonly rateLimiter?: GatewayRateLimiter;
     readonly llmo?: LlmOptimizer;
     readonly mcp: McpToolBridge;
+    readonly memory: EpisodicMemory;
+    readonly rag: HybridRagEngine;
+    readonly realtime: RealtimeClient;
+    readonly consensus: {
+        create: (options: ConsensusOptions) => Promise<ConsensusResult>;
+    };
     private isReversiblePII;
     private modelAliases;
     private hooks?;

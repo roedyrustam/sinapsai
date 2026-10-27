@@ -65,7 +65,9 @@ async function run() {
     strategy: 'failover',
     providers: [
       geminiProvider,
-      new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY || 'backup-key' }),
+      new OpenAiProvider({
+        apiKey: process.env.OPENAI_API_KEY || 'backup-key',
+      }),
     ],
   });
 
@@ -103,7 +105,9 @@ async function run() {
       dimensions: 512, // Matryoshka Representation Learning (MRL) reduction
     });
 
-    console.log(`Generated embedding vector length: ${embedding.data[0].embedding.length}`);
+    console.log(
+      `Generated embedding vector length: ${embedding.data[0].embedding.length}`,
+    );
   } catch (err) {
     console.log('Embeddings call simulated:', (err as Error).message);
   }

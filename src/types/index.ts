@@ -812,12 +812,43 @@ export type AgentStreamEvent =
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
 
 export {
+  AgentWalletExceededError,
+  type SwarmAgentWallet,
+} from '../core/AgentSwarm.js';
+export {
+  type ConsensusDraftResult,
+  ConsensusEngine,
+  type ConsensusOptions,
+  type ConsensusResult,
+  calculatePairwiseSimilarity,
+  computeTermFrequencyVector,
+} from '../core/ConsensusEngine.js';
+export {
+  EpisodicMemory,
+  type EpisodicMemoryOptions,
+  type MemoryRecallOptions,
+  type MemoryRecallResult,
+  type MemoryRecord,
+  type MemoryStoreOptions,
+} from '../core/EpisodicMemory.js';
+export {
   type ContextCacheEligibility,
   canonicalizeJsonValue,
   GeminiAgentBooster,
   type ThinkingBudgetTier,
   type ThinkingComplexityAnalysis,
 } from '../core/GeminiAgentBooster.js';
+export {
+  Bm25Index,
+  type ChunkOptions,
+  chunkDocument,
+  type DocumentChunk,
+  HybridRagEngine,
+  type HybridRagOptions,
+  type RagSearchOptions,
+  type RagSearchResult,
+  reciprocalRankFusion,
+} from '../core/HybridRag.js';
 export {
   canonicalizeTools,
   DEFAULT_CASCADE_TIERS,
@@ -834,6 +865,7 @@ export {
   minifyProsePreservingCode,
 } from '../core/LlmOptimizer.js';
 export {
+  coerceToolArguments,
   type McpContent,
   type McpImageContent,
   type McpJsonRpcRequest,
@@ -852,6 +884,12 @@ export {
   GatewayRateLimitError,
   GatewayRateLimiter,
 } from '../core/RateLimiter.js';
+export {
+  RealtimeClient,
+  type RealtimeConnectOptions,
+  type RealtimeProviderType,
+  RealtimeSession,
+} from '../core/RealtimeClient.js';
 export type { RouterOptions } from '../core/Router.js';
 export type {
   ExtendedPIIGuardrailsOptions,

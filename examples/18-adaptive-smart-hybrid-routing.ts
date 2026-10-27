@@ -78,7 +78,10 @@ async function main() {
     console.log('\n--- Gateway Metrics ---');
     console.log(JSON.stringify(client.getMetrics(), null, 2));
   } catch (error) {
-    console.log('Executed in demo mode (ensure valid API keys in env):', (error as Error).message);
+    console.log(
+      'Executed in demo mode (ensure valid API keys in env):',
+      (error as Error).message,
+    );
   }
 }
 

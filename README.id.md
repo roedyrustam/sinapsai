@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-429%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-461%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -23,7 +23,7 @@ Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalis
 > 🤖 **Panduan Cepat untuk AI / LLM Ingestion**:
 > Jika Anda adalah asisten AI (ChatGPT, Claude, Gemini, Perplexity), agen otonom, atau AI coding copilot (Cursor, Copilot, Windsurf):
 > - **Roadmap Ringkas**: Baca [`llms.txt`](./llms.txt) untuk rangkuman berdensitas tinggi mengenai seluruh fitur dan impor standar.
-> - **Spesifikasi Konteks Penuh**: Baca [`llms-full.txt`](./llms-full.txt) untuk dokumen referensi teknis tunggal yang memuat semua interface TypeScript, konfigurasi provider, kode error, dan 31 contoh kode siap pakai.
+> - **Spesifikasi Konteks Penuh**: Baca [`llms-full.txt`](./llms-full.txt) untuk dokumen referensi teknis tunggal yang memuat semua interface TypeScript, konfigurasi provider, kode error, dan 35 contoh kode siap pakai.
 > - **Invarian In-Process**: `sinapsai` berjalan 100% di dalam proses aplikasi dengan **0 dependensi runtime eksternal**. Bukan server proxy eksternal (tidak memerlukan Docker/Python/Redis).
 
 ---
@@ -1547,6 +1547,99 @@ export class OllamaProvider implements Provider {
 
 ---
 
+## 37. Konsensus Spekulatif, Memori Episodik, Hybrid RAG & Realtime Voice
+
+SinapsAI v2.12 menghadirkan kapabilitas tingkat enterprise untuk konsensus multi-agen, retensi memori jangka panjang, dan audio streaming multimodal:
+
+### 37.1 Konsensus Multi-Draft Spekulatif & Arbitrase AI Hakim Tertinggi
+Menjalankan draf kandidat model secara paralel (misal `gemini-2.5-flash` + `llama-3.3-70b`), mengkalkulasi matriks cosine similarity secara in-process, dan secara otonom mengeskalasi ke Model Hakim Tertinggi saat draf berbeda pendapat:
+
+```typescript
+const consensus = await client.consensus.create({
+  draftModels: ['gemini-2.5-flash-lite', 'llama-3.3-70b-versatile'],
+  judgeModel: 'gemini-2.5-pro',
+  consensusThreshold: 0.85,
+  messages: [{ role: 'user', content: 'Jelaskan konsep zero-knowledge rollups' }],
+});
+
+if (consensus.consensusReached) {
+  console.log('Konsensus bulat:', consensus.synthesizedText);
+} else {
+  console.log('Keputusan Hakim Tertinggi:', consensus.synthesizedText);
+}
+```
+
+### 37.2 Memori Vektor Episodik Jangka Panjang & Injeksi Prompt
+Menyimpan fakta memori terisolasi per user/tenant dengan cosine similarity karakter n-gram dan pengayaan otomatis ke instruksi sistem:
+
+```typescript
+// Simpan fakta preferensi user
+await client.memory.store({
+  userId: 'user_123',
+  content: 'User menyukai contoh kode TypeScript murni dengan functional style.',
+});
+
+// Otomatis injeksi fakta relevan ke dalam ChatMessage[]
+const enrichedMessages = await client.memory.injectIntoMessages(
+  messages,
+  'Buatkan boilerplate router API',
+  'user_123'
+);
+```
+
+### 37.3 In-Process Hybrid RAG (BM25 + Vektor Dense + RRF)
+Menggabungkan indeks leksikal Okapi BM25 dengan cosine similarity vektor semantik menggunakan formula matematis Reciprocal Rank Fusion (RRF):
+
+```typescript
+// Tambah dan otomatis chunk dokumen pengetahuan
+await client.rag.addDocument('kb_arch', 'Penjelasan arsitektur SinapsAI...');
+
+// Eksekusi pencarian hybrid sparse + dense
+const matches = await client.rag.search('Apa saja komponen internal SinapsAI?', {
+  topK: 3,
+  hybridWeight: 0.5, // 0.0 = hanya BM25, 1.0 = hanya Vektor
+});
+
+const contextBlock = client.rag.formatForPrompt(matches);
+```
+
+### 37.4 Klien WebSocket & Suara Multimodal Real-Time
+Koneksi WebSocket dua arah langsung ke OpenAI Realtime (`gpt-4o-realtime-preview`) dan Gemini Live (`gemini-2.0-flash-exp`) tanpa dependensi pihak ketiga:
+
+```typescript
+const session = await client.realtime.connect({
+  provider: 'openai',
+  apiKey: process.env.OPENAI_API_KEY,
+  instructions: 'Anda adalah asisten suara berkecepatan tinggi.',
+  onTextDelta: (delta) => process.stdout.write(delta),
+  onAudioDelta: (base64Pcm) => playSpeakerChunk(base64Pcm),
+});
+
+session.sendText('Ringkas statistik deployment hari ini');
+```
+
+### 37.5 Dompet Anggaran Ekonomi-Mikro Agen Swarm
+Membatasi biaya USD dan token secara ketat untuk setiap agen spesialis di `client.swarm()`:
+
+```typescript
+const swarm = client.swarm({
+  agents: [
+    {
+      id: 'coder',
+      name: 'Code Specialist',
+      role: 'TypeScript Refactoring',
+      instructions: 'Tulis kode produksi bersih.',
+      wallet: {
+        maxCostUsd: 0.50, // Batas maksimal $0.50
+        maxTokens: 50000,
+      },
+    },
+  ],
+});
+```
+
+---
+
 ## ⚙️ Referensi Konfigurasi
 
 ### `SinapsClientOptions`
@@ -1570,6 +1663,8 @@ export class OllamaProvider implements Provider {
 | `modelAliases` | `Record<string, string>` | `undefined` | Pemetaan alias model virtual (contoh: `{ 'fast': 'gpt-4o-mini' }`) |
 | `hedging` | `HedgingOptions` | `undefined` | Permintaan spekulatif hedged untuk reduksi latensi P99 (`delayMs`, `maxHedges`) |
 | `llmo` | `LlmOptimizationOptions \| boolean` | `undefined` | Mesin optimasi LLM universal (`minifyPrompts`, `deduplicateSystem`, `alignKvCachePrefix`, `autoCascadeModel`, `cascadeTiers`, `dynamicThinking`) |
+| `memory` | `EpisodicMemoryOptions` | `undefined` | Memori vektor episodik in-process dengan isolasi user/tenant dan injeksi prompt otomatis |
+| `rag` | `HybridRagOptions` | `undefined` | Mesin pencarian hybrid in-process BM25 + vektor dense dengan Reciprocal Rank Fusion |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
 
 ### `CircuitBreakerOptions`

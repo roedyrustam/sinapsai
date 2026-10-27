@@ -30,7 +30,10 @@ async function main() {
     inputSchema: {
       type: 'object',
       properties: {
-        tokenLength: { type: 'number', description: 'Length of generated token' },
+        tokenLength: {
+          type: 'number',
+          description: 'Length of generated token',
+        },
       },
       required: ['tokenLength'],
     },
@@ -62,7 +65,8 @@ async function main() {
               choices: [
                 {
                   delta: {
-                    content: 'I will analyze your request and hand off to the System Architect...',
+                    content:
+                      'I will analyze your request and hand off to the System Architect...',
                     tool_calls: [
                       {
                         index: 0,
@@ -71,7 +75,8 @@ async function main() {
                         function: {
                           name: 'transfer_to_architect',
                           arguments: JSON.stringify({
-                            reason: 'User needs enterprise architectural design',
+                            reason:
+                              'User needs enterprise architectural design',
                             context_updates: {
                               workload: 'Financial Settlement Gateway',
                               slaRequirement: '99.999%',
@@ -112,7 +117,8 @@ async function main() {
             {
               message: {
                 role: 'assistant',
-                content: 'Classified requirement as high-availability architecture. Delegating...',
+                content:
+                  'Classified requirement as high-availability architecture. Delegating...',
                 tool_calls: [
                   {
                     id: 'tc_1',
@@ -145,7 +151,8 @@ async function main() {
             {
               message: {
                 role: 'assistant',
-                content: 'Checking cryptographic requirements before final review...',
+                content:
+                  'Checking cryptographic requirements before final review...',
                 tool_calls: [
                   {
                     id: 'tc_crypto_1',
@@ -172,7 +179,8 @@ async function main() {
             {
               message: {
                 role: 'assistant',
-                content: 'Blueprint drafted. Delegating to AppSec Specialist for final security audit.',
+                content:
+                  'Blueprint drafted. Delegating to AppSec Specialist for final security audit.',
                 tool_calls: [
                   {
                     id: 'tc_handoff_2',
@@ -231,7 +239,8 @@ async function main() {
         id: 'triage',
         name: 'Triage Director',
         role: 'Inquiry Classifier',
-        instructions: 'Classify incoming technical requirements and delegate to the appropriate engineer.',
+        instructions:
+          'Classify incoming technical requirements and delegate to the appropriate engineer.',
         handoffs: ['architect'],
         skills: [
           {
@@ -245,7 +254,8 @@ async function main() {
         id: 'architect',
         name: 'Principal Cloud Architect',
         role: 'High-Availability System Designer',
-        instructions: 'Design resilient zero-downtime distributed systems. Delegate to security when finished.',
+        instructions:
+          'Design resilient zero-downtime distributed systems. Delegate to security when finished.',
         handoffs: ['security'],
         skills: [
           {
@@ -259,19 +269,23 @@ async function main() {
         id: 'security',
         name: 'Principal AppSec Engineer',
         role: 'Zero-Trust Security Auditor',
-        instructions: 'Audit blueprints against ReDoS, prototype pollution, and sensitive data leakage.',
+        instructions:
+          'Audit blueprints against ReDoS, prototype pollution, and sensitive data leakage.',
         skills: [
           {
             id: 'sec-audit',
             name: 'AppSec Invariant Audit',
-            description: 'Validates cryptographic entropy and security guardrails',
+            description:
+              'Validates cryptographic entropy and security guardrails',
           },
         ],
       },
     ],
   });
 
-  console.log('=== 2. Exporting A2A Agent Cards (/.well-known/agent.json standard) ===');
+  console.log(
+    '=== 2. Exporting A2A Agent Cards (/.well-known/agent.json standard) ===',
+  );
   const agentCards = swarm.exportAgentCards('https://sinapsai.internal/a2a');
   console.log(JSON.stringify(agentCards, null, 2));
 
@@ -295,20 +309,28 @@ async function main() {
     task: 'Stream a distributed architecture plan.',
   })) {
     if (event.type === 'agent-start') {
-      console.log(`\n[Agent Activated] ${event.agentName} (${event.agentId}) - Step ${event.step}`);
+      console.log(
+        `\n[Agent Activated] ${event.agentName} (${event.agentId}) - Step ${event.step}`,
+      );
     } else if (event.type === 'text-delta') {
       process.stdout.write(event.textDelta);
     } else if (event.type === 'handoff') {
-      console.log(`\n[A2A Handoff] Transferring: ${event.fromAgentId} -> ${event.toAgentId} (Reason: ${event.reason})`);
+      console.log(
+        `\n[A2A Handoff] Transferring: ${event.fromAgentId} -> ${event.toAgentId} (Reason: ${event.reason})`,
+      );
       if (event.contextUpdates) {
         console.log('Context Updates:', event.contextUpdates);
       }
     } else if (event.type === 'done') {
-      console.log(`\n\n[Done] Orchestration complete in ${event.result.totalSteps} steps!`);
+      console.log(
+        `\n\n[Done] Orchestration complete in ${event.result.totalSteps} steps!`,
+      );
     }
   }
 
-  console.log('\n✨ Multi-Agent Swarm & A2A Handoff Protocol demonstrated successfully!');
+  console.log(
+    '\n✨ Multi-Agent Swarm & A2A Handoff Protocol demonstrated successfully!',
+  );
 }
 
 main().catch(console.error);

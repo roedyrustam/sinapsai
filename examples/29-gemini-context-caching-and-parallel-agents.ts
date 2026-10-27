@@ -32,7 +32,12 @@ async function main() {
             finishReason: 'stop',
           },
         ],
-        usage: { promptTokens: 35000, completionTokens: 150, totalTokens: 35150, cachedPromptTokens: 34500 },
+        usage: {
+          promptTokens: 35000,
+          completionTokens: 150,
+          totalTokens: 35150,
+          cachedPromptTokens: 34500,
+        },
       };
     },
     // Context caching provider methods
@@ -74,7 +79,9 @@ async function main() {
   });
   console.log('Context Cache Eligibility Analysis:');
   console.log(`- Eligible: ${eligibility.eligible}`);
-  console.log(`- Estimated Prefix Tokens: ${eligibility.estimatedPrefixTokens}`);
+  console.log(
+    `- Estimated Prefix Tokens: ${eligibility.estimatedPrefixTokens}`,
+  );
   console.log(`- Threshold Tokens: ${eligibility.thresholdTokens}`);
 
   // Create context cache
@@ -82,7 +89,10 @@ async function main() {
     model: GEMINI_MODELS.PRO_4,
     displayName: 'Monolithic Codebase Documentation Cache',
     messages: [
-      { role: 'system', content: 'Full monolithic codebase dump and AST schema' },
+      {
+        role: 'system',
+        content: 'Full monolithic codebase dump and AST schema',
+      },
     ],
     ttl: '7200s',
   });
@@ -95,12 +105,16 @@ async function main() {
   // Query using cachedContent
   const response = await client.chat.completions.create({
     model: GEMINI_MODELS.PRO_4,
-    messages: [{ role: 'user', content: 'How does the auth subsystem verify tokens?' }],
+    messages: [
+      { role: 'user', content: 'How does the auth subsystem verify tokens?' },
+    ],
     cachedContent: cachedContent.name,
   });
   console.log('\nResponse received with Prompt Caching:');
   console.log(`- Content: ${response.choices[0].message.content}`);
-  console.log(`- Cached Prompt Tokens: ${response.usage?.cachedPromptTokens} (75-90% discount)`);
+  console.log(
+    `- Cached Prompt Tokens: ${response.usage?.cachedPromptTokens} (75-90% discount)`,
+  );
 
   console.log('\n=== 2. Massively Parallel Tool Execution (Agentic MoE) ===');
 
@@ -111,7 +125,9 @@ async function main() {
     description: 'Searches vector database for semantic matches',
     inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
     handler: async (args) => {
-      console.log(`  -> [Tool 1] Executing search_vector_db(${args.query}) concurrently...`);
+      console.log(
+        `  -> [Tool 1] Executing search_vector_db(${args.query}) concurrently...`,
+      );
       await new Promise((r) => setTimeout(r, 80));
       return { matches: ['doc_1', 'doc_2'] };
     },
@@ -122,7 +138,9 @@ async function main() {
     description: 'Fetches git blame for file',
     inputSchema: { type: 'object', properties: { file: { type: 'string' } } },
     handler: async (args) => {
-      console.log(`  -> [Tool 2] Executing fetch_git_blame(${args.file}) concurrently...`);
+      console.log(
+        `  -> [Tool 2] Executing fetch_git_blame(${args.file}) concurrently...`,
+      );
       await new Promise((r) => setTimeout(r, 80));
       return { author: 'Roedy Rustam', commit: '05fe8b3' };
     },
@@ -149,13 +167,19 @@ async function main() {
                       index: 0,
                       id: 'call_search_1',
                       type: 'function',
-                      function: { name: 'search_vector_db', arguments: '{"query":"auth"}' },
+                      function: {
+                        name: 'search_vector_db',
+                        arguments: '{"query":"auth"}',
+                      },
                     },
                     {
                       index: 1,
                       id: 'call_blame_2',
                       type: 'function',
-                      function: { name: 'fetch_git_blame', arguments: '{"file":"auth.ts"}' },
+                      function: {
+                        name: 'fetch_git_blame',
+                        arguments: '{"file":"auth.ts"}',
+                      },
                     },
                   ],
                 },
@@ -171,7 +195,8 @@ async function main() {
               {
                 delta: {
                   role: 'assistant',
-                  content: 'Both vector search and git blame completed in parallel.',
+                  content:
+                    'Both vector search and git blame completed in parallel.',
                 },
                 finishReason: 'stop',
               },
@@ -188,7 +213,12 @@ async function main() {
   });
 
   const stream = agentClient.runWithToolsStream({
-    messages: [{ role: 'user', content: 'Investigate auth.ts commit history and vector docs' }],
+    messages: [
+      {
+        role: 'user',
+        content: 'Investigate auth.ts commit history and vector docs',
+      },
+    ],
     maxSteps: 2,
   });
 
@@ -198,8 +228,12 @@ async function main() {
     } else if (event.type === 'tool-call-result') {
       console.log(`Received result for tool: ${event.toolName}`);
     } else if (event.type === 'done') {
-      console.log(`Agent loop completed in ${event.result.totalSteps} step(s).`);
-      console.log(`Final message: ${event.result.response.choices[0].message.content}`);
+      console.log(
+        `Agent loop completed in ${event.result.totalSteps} step(s).`,
+      );
+      console.log(
+        `Final message: ${event.result.response.choices[0].message.content}`,
+      );
     }
   }
 

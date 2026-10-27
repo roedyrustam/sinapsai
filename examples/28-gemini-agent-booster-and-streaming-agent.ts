@@ -15,7 +15,9 @@ import {
 } from '../src/index.js';
 
 async function main() {
-  console.log('=== 1. GeminiAgentBooster: Dynamic Thinking Budget & KV-Cache Optimizer ===');
+  console.log(
+    '=== 1. GeminiAgentBooster: Dynamic Thinking Budget & KV-Cache Optimizer ===',
+  );
 
   const trivialAnalysis = GeminiAgentBooster.analyzeComplexity({
     messages: [{ role: 'user', content: 'Hello!' }],
@@ -35,14 +37,19 @@ async function main() {
         type: 'function',
         function: {
           name: 'scan_ast',
-          parameters: { type: 'object', properties: { file: { type: 'string' } } },
+          parameters: {
+            type: 'object',
+            properties: { file: { type: 'string' } },
+          },
         },
       },
     ],
   });
   console.log('Deep audit complexity:', deepAuditAnalysis);
 
-  console.log('\n=== 2. Streaming Autonomous Agent Loop + Streaming Reversible PII Vault ===');
+  console.log(
+    '\n=== 2. Streaming Autonomous Agent Loop + Streaming Reversible PII Vault ===',
+  );
 
   let turn = 0;
   const mockStreamingProvider: Provider = {
@@ -56,88 +63,89 @@ async function main() {
       }
       return (async function* () {
         turn++;
-      if (turn === 1) {
-        yield {
-          id: 'step-1',
-          model: GEMINI_MODELS.ARGON_4,
-          choices: [
-            {
-              delta: {
-                role: 'assistant',
-                reasoning_content: 'Checking account status for {{PII_EMAIL_1}}...',
-              },
-              finishReason: null,
-            },
-          ],
-        };
-        yield {
-          id: 'step-1',
-          model: GEMINI_MODELS.ARGON_4,
-          choices: [
-            {
-              delta: {
-                tool_calls: [
-                  {
-                    index: 0,
-                    id: 'call_acct_1',
-                    type: 'function',
-                    function: {
-                      name: 'get_subscription_tier',
-                      arguments: '{"email":"{{PII_',
-                    },
-                  },
-                ],
-              },
-              finishReason: null,
-            },
-          ],
-        };
-        yield {
-          id: 'step-1',
-          model: GEMINI_MODELS.ARGON_4,
-          choices: [
-            {
-              delta: {
-                tool_calls: [
-                  {
-                    index: 0,
-                    function: {
-                      arguments: 'EMAIL_1}}"}',
-                    },
-                  },
-                ],
-              },
-              finishReason: 'tool_calls',
-            },
-          ],
-          usage: { promptTokens: 30, completionTokens: 15, totalTokens: 45 },
-        };
-      } else {
-        const chunks = [
-          'Verified! Account {{PII_',
-          'EMAIL_1}} is on the ',
-          'Enterprise Sovereign tier.',
-        ];
-        for (let i = 0; i < chunks.length; i++) {
+        if (turn === 1) {
           yield {
-            id: 'step-2',
+            id: 'step-1',
             model: GEMINI_MODELS.ARGON_4,
             choices: [
               {
                 delta: {
                   role: 'assistant',
-                  content: chunks[i],
+                  reasoning_content:
+                    'Checking account status for {{PII_EMAIL_1}}...',
                 },
-                finishReason: i === chunks.length - 1 ? 'stop' : null,
+                finishReason: null,
               },
             ],
-            usage:
-              i === chunks.length - 1
-                ? { promptTokens: 50, completionTokens: 20, totalTokens: 70 }
-                : undefined,
           };
+          yield {
+            id: 'step-1',
+            model: GEMINI_MODELS.ARGON_4,
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_acct_1',
+                      type: 'function',
+                      function: {
+                        name: 'get_subscription_tier',
+                        arguments: '{"email":"{{PII_',
+                      },
+                    },
+                  ],
+                },
+                finishReason: null,
+              },
+            ],
+          };
+          yield {
+            id: 'step-1',
+            model: GEMINI_MODELS.ARGON_4,
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: 'EMAIL_1}}"}',
+                      },
+                    },
+                  ],
+                },
+                finishReason: 'tool_calls',
+              },
+            ],
+            usage: { promptTokens: 30, completionTokens: 15, totalTokens: 45 },
+          };
+        } else {
+          const chunks = [
+            'Verified! Account {{PII_',
+            'EMAIL_1}} is on the ',
+            'Enterprise Sovereign tier.',
+          ];
+          for (let i = 0; i < chunks.length; i++) {
+            yield {
+              id: 'step-2',
+              model: GEMINI_MODELS.ARGON_4,
+              choices: [
+                {
+                  delta: {
+                    role: 'assistant',
+                    content: chunks[i],
+                  },
+                  finishReason: i === chunks.length - 1 ? 'stop' : null,
+                },
+              ],
+              usage:
+                i === chunks.length - 1
+                  ? { promptTokens: 50, completionTokens: 20, totalTokens: 70 }
+                  : undefined,
+            };
+          }
         }
-      }
       })();
     },
   };

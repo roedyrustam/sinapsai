@@ -64,7 +64,9 @@ async function main() {
   console.log(
     'In active probe mode (options.ping = true), SinapsAI sends a 1-token heartbeat ping to each provider.',
   );
-  console.log('Example: await client.checkHealth({ ping: true, timeoutMs: 2000 });');
+  console.log(
+    'Example: await client.checkHealth({ ping: true, timeoutMs: 2000 });',
+  );
 
   console.log('\nDone!');
 }

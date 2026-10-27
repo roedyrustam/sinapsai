@@ -6,12 +6,18 @@
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
 - **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits
-- **Test Suite**: 429 unit & integration tests passing across 36 test suites (100% pass rate)
+- **Test Suite**: 461 unit & integration tests passing across 40 test suites (100% pass rate)
 - **Quality**: 100% Biome Clean, TypeScript strict mode
 
 ## Core Capabilities
 
 - **10 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **Speculative Multi-Draft Consensus & AI Arbitration (`client.consensus.create`)**: Parallel speculative drafting across diverse models, in-process pairwise cosine similarity, and automatic escalation to a Supreme AI Judge Model upon divergence.
+- **In-Process Episodic Vector Memory (`client.memory`)**: Long-term fact store with multi-tenant user isolation, subword n-gram cosine matching, and dynamic prompt injection (`injectIntoMessages`).
+- **In-Process Hybrid RAG (`client.rag`)**: Okapi BM25 keyword precision + dense vector cosine similarity combined via Reciprocal Rank Fusion (RRF) with semantic paragraph chunking.
+- **Real-Time Multimodal Voice & WebSocket Client (`client.realtime.connect`)**: Zero-dependency native WebSocket connectivity to OpenAI Realtime and Gemini Live with bi-directional audio/text delta streaming.
+- **Agent Swarm with Micro-Economy Wallets (`client.swarm`)**: Role-based autonomous specialists, A2A handoffs (`transfer_to_<agent>`), hard USD & token budget wallets per agent (`SwarmAgentWallet`), and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
+- **Autonomous MCP Tool Self-Healing (`coerceToolArguments`, `selfHealingHint`)**: In-process Model Context Protocol tool registry, automatic argument coercion according to JSON Schema, and schema-guided self-healing error hints for autonomous agent loops (`runWithTools`, `runWithToolsStream`).
 - **6 Dynamic Routing Strategies**: `adaptive` (smart-hybrid multi-factor reliability/latency/cost), `lowest-cost` (dual-pricing prompt vs completion tokens), `lowest-latency` (moving average latency with auto-probing), `failover` (strict priority), `load-balance` (round-robin).
 - **In-Process Circuit Breaker**: Anti-cascading fault isolation (`CLOSED` -> `OPEN` -> `HALF_OPEN`) with anti-thundering-herd strict single canary probing.
 - **In-Process Gateway Rate Limiter**: Zero-dependency sliding-window counter enforcing RPM and TPM globally, per-user, per-model, and per-provider with post-response token adjustment across streaming & non-streaming.
@@ -27,8 +33,6 @@
   - Deterministic KV-cache prefix alignment & tool schema canonicalization.
   - Multi-signal complexity analysis & 3-tier model cascading (`tier1: fast/cheap`, `tier2: standard`, `tier3: deep reasoning`).
   - Dynamic thinking budget allocation & FinOps savings telemetry (`client.getMetrics().llmoMetrics`).
-- **MCP Tool Bridge (`McpToolBridge`)**: In-process Model Context Protocol tool registry, JSON Schema bi-directional conversion, JSON-RPC 2.0 dispatcher (`tools/list`, `tools/call`, `ping`), and multi-step autonomous agent loops (`runWithTools`, `runWithToolsStream`).
-- **Multi-Agent Swarm (`client.swarm`)**: Role-based specialist agents, automatic A2A handoff tool synthesis (`transfer_to_<agent>`), thread-safe shared context memory (`SwarmContext`), ping-pong cycle protection (`maxHandoffs`), and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
 - **Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Official `LanguageModelV1` and `EmbeddingModelV1` implementations supporting `streamText`, `generateText`, and `embed`.
 - **Telemetry Exporters**: Native Prometheus / OpenMetrics (`exportPrometheusMetrics`) and OpenTelemetry OTLP JSON (`exportOtelMetrics`).
 

@@ -50,6 +50,10 @@ export interface McpTool {
 export interface McpToolResult {
   content: McpContent[];
   isError?: boolean;
+  /**
+   * Diagnostic self-healing hint provided for autonomous agent loops to retry or rectify parameter mismatches.
+   */
+  selfHealingHint?: string;
   // biome-ignore lint/suspicious/noExplicitAny: raw handler result
   _raw?: any;
 }
@@ -100,6 +104,49 @@ export interface McpJsonRpcResponse {
     // biome-ignore lint/suspicious/noExplicitAny: error data
     data?: any;
   };
+}
+
+/**
+ * Automatically coerces tool arguments according to the tool's JSON Schema
+ * (e.g. converting numeric strings to numbers, boolean strings to booleans, JSON strings to objects).
+ */
+export function coerceToolArguments(
+  args: Record<string, unknown>,
+  schema?: McpToolInputSchema,
+): Record<string, unknown> {
+  if (!args || typeof args !== 'object' || !schema?.properties) {
+    return args;
+  }
+
+  const result: Record<string, unknown> = { ...args };
+
+  for (const [key, prop] of Object.entries(schema.properties)) {
+    const val = result[key];
+    if (val === undefined || val === null) continue;
+
+    const propType = (prop as { type?: string })?.type;
+
+    if (
+      (propType === 'number' || propType === 'integer') &&
+      typeof val === 'string'
+    ) {
+      const num = Number(val);
+      if (!Number.isNaN(num)) {
+        result[key] = num;
+      }
+    } else if (propType === 'boolean' && typeof val === 'string') {
+      if (val.toLowerCase() === 'true') result[key] = true;
+      if (val.toLowerCase() === 'false') result[key] = false;
+    } else if (propType === 'object' && typeof val === 'string') {
+      try {
+        result[key] = JSON.parse(val);
+      } catch {
+        // Leave as is if parse fails
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -329,6 +376,9 @@ export class McpToolBridge {
       parsedArgs = rawArgs;
     }
 
+    // Apply automatic parameter coercion if schema properties are defined
+    parsedArgs = coerceToolArguments(parsedArgs, toolDef.inputSchema);
+
     if (context?.signal?.aborted) {
       return {
         content: [
@@ -383,14 +433,19 @@ export class McpToolBridge {
         _raw: rawResult,
       };
     } catch (err) {
+      const errMsg = (err as Error).message;
+      const propNames = toolDef.inputSchema?.properties
+        ? Object.keys(toolDef.inputSchema.properties).join(', ')
+        : 'none';
       return {
         content: [
           {
             type: 'text',
-            text: `Error executing tool '${toolName}': ${(err as Error).message}`,
+            text: `Error executing tool '${toolName}': ${errMsg}`,
           },
         ],
         isError: true,
+        selfHealingHint: `Error executing tool '${toolName}': ${errMsg}. Hint: Verify input arguments against schema properties (${propNames}) and retry.`,
         _raw: err,
       };
     }

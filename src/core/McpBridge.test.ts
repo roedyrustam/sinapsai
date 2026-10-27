@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Provider } from '../providers/Provider.js';
 import type { ToolCall } from '../types/index.js';
-import { McpToolBridge } from './McpBridge.js';
+import { coerceToolArguments, McpToolBridge } from './McpBridge.js';
 import { SinapsClient } from './SinapsClient.js';
 
 describe('McpToolBridge', () => {
@@ -898,5 +898,61 @@ describe('SinapsClient.runWithTools', () => {
     const res = finalDoneResult as { totalSteps: number; totalTokens: number };
     expect(res.totalSteps).toBe(1);
     expect(res.totalTokens).toBe(80);
+  });
+
+  describe('coerceToolArguments and Self-Healing hints', () => {
+    it('coerces string numbers, booleans, and JSON strings into typed values', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: {
+          limit: { type: 'number' },
+          page: { type: 'integer' },
+          active: { type: 'boolean' },
+          filters: { type: 'object' },
+        },
+      };
+
+      const raw = {
+        limit: '50',
+        page: '2',
+        active: 'true',
+        filters: '{"status":"published"}',
+      };
+
+      const coerced = coerceToolArguments(raw, schema);
+
+      expect(coerced.limit).toBe(50);
+      expect(coerced.page).toBe(2);
+      expect(coerced.active).toBe(true);
+      expect(coerced.filters).toEqual({ status: 'published' });
+    });
+
+    it('attaches diagnostic selfHealingHint when tool execution throws', async () => {
+      const bridge = new McpToolBridge();
+      bridge.registerTool({
+        name: 'validate_payment',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            amount: { type: 'number' },
+          },
+        },
+        handler: () => {
+          throw new Error('Insufficient balance');
+        },
+      });
+
+      const res = await bridge.executeToolCall({
+        id: 'c1',
+        type: 'function',
+        function: { name: 'validate_payment', arguments: '{"amount": 100}' },
+      });
+
+      expect(res.isError).toBe(true);
+      expect(res.selfHealingHint).toBeDefined();
+      expect(res.selfHealingHint).toContain('validate_payment');
+      expect(res.selfHealingHint).toContain('Insufficient balance');
+      expect(res.selfHealingHint).toContain('amount');
+    });
   });
 });

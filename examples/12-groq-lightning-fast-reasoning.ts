@@ -6,11 +6,7 @@
  * @license MIT
  */
 
-import {
-  GroqProvider,
-  OpenAiProvider,
-  SinapsClient,
-} from '../src/index.js';
+import { GroqProvider, OpenAiProvider, SinapsClient } from '../src/index.js';
 
 /**
  * Example 12: Groq LPU Ultra-Fast Inference & Reasoning Integration
@@ -63,7 +59,9 @@ async function run() {
         );
       },
       onFallback: (err, from, to) => {
-        console.warn(`[Failover] ${from.name} failed (${err.message}). Switched to ${to.name}.`);
+        console.warn(
+          `[Failover] ${from.name} failed (${err.message}). Switched to ${to.name}.`,
+        );
       },
     },
   });
@@ -74,7 +72,10 @@ async function run() {
       model: 'fast-chat', // maps to llama-3.1-8b-instant
       messages: [
         { role: 'system', content: 'You are a concise AI assistant.' },
-        { role: 'user', content: 'Explain what makes LPUs faster than GPUs in 2 sentences.' },
+        {
+          role: 'user',
+          content: 'Explain what makes LPUs faster than GPUs in 2 sentences.',
+        },
       ],
       temperature: 0.7,
       maxTokens: 100,
@@ -96,7 +97,10 @@ async function run() {
     });
 
     if (reasoningRes.choices[0].message.reasoning_content) {
-      console.log('Reasoning Chain:', reasoningRes.choices[0].message.reasoning_content);
+      console.log(
+        'Reasoning Chain:',
+        reasoningRes.choices[0].message.reasoning_content,
+      );
     }
     console.log('Final Answer:', reasoningRes.choices[0].message.content);
   } catch (err) {
@@ -108,7 +112,11 @@ async function run() {
     const structuredRes = await client.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: 'user', content: 'Extract entities: "Groq was founded by Jonathan Ross in Mountain View."' },
+        {
+          role: 'user',
+          content:
+            'Extract entities: "Groq was founded by Jonathan Ross in Mountain View."',
+        },
       ],
       responseFormat: {
         type: 'json_schema',

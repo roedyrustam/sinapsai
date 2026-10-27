@@ -2,6 +2,31 @@
 
 ## [2.12.0] - 2026-10-28
 ### Added
+- **Speculative Multi-Draft Consensus & AI Arbitration (`ConsensusEngine`, `client.consensus`)**:
+  - **Parallel Speculative Drafting**: Simultaneously requests candidate completions from multiple diverse models (e.g. `gemini-2.5-flash-lite`, `llama-3.3-70b-versatile`, `gpt-4o-mini`).
+  - **In-Process Pairwise Cosine Similarity**: Evaluates consensus score using bag-of-words / TF vectors without external vector database dependencies.
+  - **Autonomous Supreme AI Judge Arbitration**: Automatically detects divergence below threshold and escalates candidate drafts to an authoritative judge model (e.g. `gemini-2.5-pro` or `claude-3-7-sonnet`) to eliminate hallucinations and synthesize the definitive response.
+  - **Fail-Soft Candidate Resilience**: Continues evaluation even if a subset of candidate models encounter rate limits or timeouts.
+- **In-Process Long-Term Episodic Vector Memory (`EpisodicMemory`, `client.memory`)**:
+  - **User & Tenant Partition Isolation**: Safely silos episodic knowledge facts across multi-tenant applications.
+  - **Subword Character N-Gram Vectorizer**: Pure TypeScript embedding with character trigram hashing for zero-dependency semantic cosine matching.
+  - **Dynamic Prompt Injection (`injectIntoMessages`, `injectContext`)**: Enriches outgoing `ChatMessage[]` with retrieved memory facts in system instructions (`[LONG-TERM EPISODIC MEMORY / USER FACTS]`).
+  - **StateStorage Persistence**: Full backing support for `InMemoryStorage`, `RedisStorage`, `CloudflareKVStorage`, and `D1Storage`.
+- **In-Process Hybrid RAG Engine (`HybridRagEngine`, `client.rag`)**:
+  - **Semantic Document Chunker (`chunkDocument`)**: Splits text into clean paragraph or sentence blocks with configurable token sizes and overlapping tails.
+  - **Okapi BM25 Inverted Index (`Bm25Index`)**: Pure TypeScript Robertson-Spärck Jones BM25 scoring for exact keyword precision.
+  - **Reciprocal Rank Fusion (`reciprocalRankFusion`)**: Combines sparse lexical rankings and dense semantic vectors into a unified rank list with mathematical robustness.
+  - **Prompt Synthesis (`formatForPrompt`)**: Automatically synthesizes retrieved context blocks ready for system prompt ingestion.
+- **Real-Time Multimodal Voice & WebSocket Client (`RealtimeClient`, `RealtimeSession`, `client.realtime`)**:
+  - **Zero-Dependency Native WebSocket**: Direct full-duplex bi-directional streaming for OpenAI Realtime (`gpt-4o-realtime-preview`) and Google Gemini Multimodal Live (`gemini-2.0-flash-exp`).
+  - **Unified Event Dispatcher**: Emits `onTextDelta`, `onAudioDelta` (PCM16 base64 chunks), `onError`, and `onClose`.
+  - **Turn & Audio Control**: Methods for `sendText`, `sendAudio`, and `commitAudio`.
+- **Agent Swarm Micro-Economy Budget Wallets (`SwarmAgentWallet`, `AgentWalletExceededError`)**:
+  - Sets hard `maxCostUsd` and `maxTokens` spending caps per specialist agent in `AgentSwarm`.
+  - Emits detailed `agentSpendBreakdown` per agent in `SwarmResult`.
+- **Autonomous MCP Tool Argument Coercion & Self-Healing (`coerceToolArguments`, `selfHealingHint`)**:
+  - Automatically coerces numeric strings to numbers, boolean strings to booleans, and JSON strings to parsed objects based on the tool's JSON Schema.
+  - Appends diagnostic `selfHealingHint` with allowed schema properties on tool handler errors, enabling autonomous agent loops to retry and self-heal.
 - **Universal LLM Optimization Engine (`LlmOptimizer`, `client.llmo`, `client.optimizePrompt`)**:
   - **Code-Block Aware Prompt Minification (`minifyProsePreservingCode`)**: Intelligently trims excessive horizontal spacing, tabs, and multi-line breaks while leaving indented markdown code blocks (````` ``` ... ``` ````) 100% untouched. Supports `lossless` and `aggressive` conversational fluff pruning modes.
   - **System Instruction Deduplication (`deduplicateSystemInstructions`)**: Automatically aggregates and deduplicates repeated rule statements across multiple system messages in conversational history.
@@ -13,10 +38,14 @@
   - **FinOps Savings Telemetry (`llmoMetrics`)**: Emits `totalOptimizedRequests`, `totalTokensSaved`, `totalEstimatedUsdSaved`, `averageCompressionRatio`, and `cascadedRequestsCount` via `client.getMetrics().llmoMetrics`.
 - **Standard LLMO & GEO Manifests (`llms.txt` & `llms-full.txt`)**:
   - Published concise and exhaustive markdown specifications conforming to the open `llms.txt` standard for instantaneous, zero-hallucination ingestion by AI search engines, Perplexity, Cursor, Windsurf, Claude, and Gemini.
-- **Runnable Example 31 (`examples/31-llm-optimization-llmo.ts`)**:
-  - End-to-end demonstration of standalone and client-integrated prompt minification, 3-tier model cascading, KV-cache alignment, and FinOps telemetry reporting.
-- **Comprehensive Unit Testing (`src/core/LlmOptimizer.test.ts`)**:
-  - 10 new comprehensive unit tests; total 429/429 tests passing across 36 test suites with 100% pass rate.
+- **4 New Runnable Examples (Examples 32–35)**:
+  - `32-speculative-consensus-and-arbitration.ts`
+  - `33-episodic-memory-and-context-injection.ts`
+  - `34-hybrid-rag-bm25-and-vector.ts`
+  - `35-realtime-voice-and-websocket.ts`
+- **Comprehensive Unit Testing**:
+  - 32 new unit tests added across 4 new test suites (`ConsensusEngine.test.ts`, `EpisodicMemory.test.ts`, `HybridRag.test.ts`, `RealtimeClient.test.ts`).
+  - **461/461 tests passing across 40 test suites** with 100% pass rate.
 
 ## [2.11.0] - 2026-10-27
 ### Added

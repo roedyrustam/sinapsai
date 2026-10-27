@@ -56,19 +56,27 @@ async function run() {
     providers: [groq, openai, anthropic, gemini],
     hooks: {
       onSuccess: (provider, res, latencyMs) => {
-        console.log(`[Fastest Route] Served by ${provider.name} in ${latencyMs}ms`);
+        console.log(
+          `[Fastest Route] Served by ${provider.name} in ${latencyMs}ms`,
+        );
         if (res.usage?.cachedPromptTokens) {
-          console.log(`[KV-Cache Hit] Cached prompt tokens: ${res.usage.cachedPromptTokens}`);
+          console.log(
+            `[KV-Cache Hit] Cached prompt tokens: ${res.usage.cachedPromptTokens}`,
+          );
         }
       },
       onFallback: (err, from, to) => {
-        console.warn(`[Failover] ${from.name} failed (${err.message}). Route adjusted to ${to.name}.`);
+        console.warn(
+          `[Failover] ${from.name} failed (${err.message}). Route adjusted to ${to.name}.`,
+        );
       },
     },
   });
 
   console.log('--- 1. Testing Universal Reasoning Request ---');
-  console.log('Dispatching complex problem with extended thinking parameters...\n');
+  console.log(
+    'Dispatching complex problem with extended thinking parameters...\n',
+  );
 
   try {
     const res = await client.chat.completions.create({
@@ -76,7 +84,8 @@ async function run() {
       messages: [
         {
           role: 'user',
-          content: 'Calculate the probability of drawing 4 aces in a 5-card poker hand and explain the derivation.',
+          content:
+            'Calculate the probability of drawing 4 aces in a 5-card poker hand and explain the derivation.',
         },
       ],
       // Frontier Reasoning Parameters
@@ -98,21 +107,31 @@ async function run() {
       console.log('\n--- Usage & Cache Metrics ---');
       console.log(`- Prompt Tokens: ${res.usage?.promptTokens}`);
       console.log(`- Completion Tokens: ${res.usage?.completionTokens}`);
-      console.log(`- Cached Tokens (KV-Cache): ${res.usage?.cachedPromptTokens ?? 0}`);
+      console.log(
+        `- Cached Tokens (KV-Cache): ${res.usage?.cachedPromptTokens ?? 0}`,
+      );
     }
   } catch (err) {
-    console.log(`(Simulated execution without live API key: ${(err as Error).message})\n`);
+    console.log(
+      `(Simulated execution without live API key: ${(err as Error).message})\n`,
+    );
   }
 
   console.log('--- 2. Checking Gateway Global Metrics & Latencies ---');
   const metrics = client.getMetrics();
   console.log('Gateway Telemetry:');
   console.log(`- Total Requests: ${metrics.totalRequests}`);
-  console.log(`- Total Cached Prompt Tokens: ${metrics.totalCachedPromptTokens ?? 0}`);
-  console.log(`- Estimated Total Cost: $${metrics.estimatedCostUsd.toFixed(6)}`);
+  console.log(
+    `- Total Cached Prompt Tokens: ${metrics.totalCachedPromptTokens ?? 0}`,
+  );
+  console.log(
+    `- Estimated Total Cost: $${metrics.estimatedCostUsd.toFixed(6)}`,
+  );
 
   console.log('\nProvider Latencies (Dynamic Ranking):');
-  for (const [providerId, pMetrics] of Object.entries(metrics.providerMetrics)) {
+  for (const [providerId, pMetrics] of Object.entries(
+    metrics.providerMetrics,
+  )) {
     console.log(
       `  • ${providerId}: avg ${pMetrics.averageLatencyMs}ms (${pMetrics.requests} requests, ${pMetrics.successes} ok, ${pMetrics.failures} err)`,
     );

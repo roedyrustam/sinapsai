@@ -53,7 +53,9 @@ async function main() {
   // 1. xAI with reasoning effort & JSON schema
   const xaiReq = xai.formatRequest({
     model: 'grok-3',
-    messages: [{ role: 'user', content: 'Design a distributed rate limiter in Go.' }],
+    messages: [
+      { role: 'user', content: 'Design a distributed rate limiter in Go.' },
+    ],
     reasoningEffort: 'high',
     responseFormat: { type: 'json_object' },
   });
@@ -66,7 +68,9 @@ async function main() {
   // 2. Cohere v2 with tools & strict schema
   const cohereReq = cohere.formatRequest({
     model: 'command-a',
-    messages: [{ role: 'user', content: 'What is the current stock price of TSLA?' }],
+    messages: [
+      { role: 'user', content: 'What is the current stock price of TSLA?' },
+    ],
     tools: [
       {
         type: 'function',
@@ -101,7 +105,10 @@ async function main() {
     },
   });
 
-  console.log('Client initialized with model aliases:', client.getModelAliases());
+  console.log(
+    'Client initialized with model aliases:',
+    client.getModelAliases(),
+  );
   console.log('Ready for unified completions across xAI and Cohere.');
 
   console.log('\n=== Example 24 Completed Successfully ===');

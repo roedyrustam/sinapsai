@@ -678,10 +678,15 @@ export type AgentStreamEvent = {
     result: RunWithToolsResult;
 };
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
+export { AgentWalletExceededError, type SwarmAgentWallet, } from '../core/AgentSwarm.js';
+export { type ConsensusDraftResult, ConsensusEngine, type ConsensusOptions, type ConsensusResult, calculatePairwiseSimilarity, computeTermFrequencyVector, } from '../core/ConsensusEngine.js';
+export { EpisodicMemory, type EpisodicMemoryOptions, type MemoryRecallOptions, type MemoryRecallResult, type MemoryRecord, type MemoryStoreOptions, } from '../core/EpisodicMemory.js';
 export { type ContextCacheEligibility, canonicalizeJsonValue, GeminiAgentBooster, type ThinkingBudgetTier, type ThinkingComplexityAnalysis, } from '../core/GeminiAgentBooster.js';
+export { Bm25Index, type ChunkOptions, chunkDocument, type DocumentChunk, HybridRagEngine, type HybridRagOptions, type RagSearchOptions, type RagSearchResult, reciprocalRankFusion, } from '../core/HybridRag.js';
 export { canonicalizeTools, DEFAULT_CASCADE_TIERS, deduplicateSystemInstructions, estimateTextTokens, type LlmCascadeTiers, type LlmComplexityAnalysis, type LlmComplexityTier, type LlmOptimizationMetrics, type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions, minifyProsePreservingCode, } from '../core/LlmOptimizer.js';
-export { type McpContent, type McpImageContent, type McpJsonRpcRequest, type McpJsonRpcResponse, type McpResourceContent, type McpTextContent, type McpTool, McpToolBridge, type McpToolContext, type McpToolDefinition, type McpToolHandler, type McpToolInputSchema, type McpToolResult, } from '../core/McpBridge.js';
+export { coerceToolArguments, type McpContent, type McpImageContent, type McpJsonRpcRequest, type McpJsonRpcResponse, type McpResourceContent, type McpTextContent, type McpTool, McpToolBridge, type McpToolContext, type McpToolDefinition, type McpToolHandler, type McpToolInputSchema, type McpToolResult, } from '../core/McpBridge.js';
 export { GatewayRateLimitError, GatewayRateLimiter, } from '../core/RateLimiter.js';
+export { RealtimeClient, type RealtimeConnectOptions, type RealtimeProviderType, RealtimeSession, } from '../core/RealtimeClient.js';
 export type { RouterOptions } from '../core/Router.js';
 export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';
 //# sourceMappingURL=index.d.ts.map
