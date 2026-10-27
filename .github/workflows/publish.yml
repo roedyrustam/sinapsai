@@ -19,10 +19,10 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v7
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.x
         uses: actions/setup-node@v7
         with:
-          node-version: 20.x
+          node-version: 22.x
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
         env:
@@ -40,10 +40,10 @@ jobs:
       - name: Publish to NPM & Create GitHub Release if Version Bumped
         run: |
           if [ -n "$NODE_AUTH_TOKEN" ]; then
-            echo "🔐 Menggunakan autentikasi NPM Token..."
+            echo "Ã°Å¸â€Â Menggunakan autentikasi NPM Token..."
             echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           else
-            echo "🌐 Menggunakan autentikasi NPM Trusted Publishing (OIDC / Provenance)..."
+            echo "Ã°Å¸Å’Â Menggunakan autentikasi NPM Trusted Publishing (OIDC / Provenance)..."
           fi
 
           CURRENT_VERSION=$(node -p "require('./package.json').version")
@@ -52,15 +52,15 @@ jobs:
           echo "Published npm registry version: $PUBLISHED_VERSION"
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "🚀 New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
+            echo "Ã°Å¸Å¡â‚¬ New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
             npm publish --access public --provenance
-            echo "✅ Successfully published sinapsai@$CURRENT_VERSION to NPM!"
+            echo "Ã¢Å“â€¦ Successfully published sinapsai@$CURRENT_VERSION to NPM!"
           else
-            echo "ℹ️ Version $CURRENT_VERSION is already published on NPM. Skipping publish."
+            echo "Ã¢â€žÂ¹Ã¯Â¸Â Version $CURRENT_VERSION is already published on NPM. Skipping publish."
           fi
 
           if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
-            echo "🏷️ Creating GitHub Release v$CURRENT_VERSION..."
+            echo "Ã°Å¸ÂÂ·Ã¯Â¸Â Creating GitHub Release v$CURRENT_VERSION..."
             gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
           fi
         env:
