@@ -93,6 +93,10 @@ npx tsx examples/28-gemini-agent-booster-and-streaming-agent.ts
 
 # 29. Gemini Context Caching Control Plane & Massively Parallel Agent Loops
 npx tsx examples/29-gemini-context-caching-and-parallel-agents.ts
+
+# 30. In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
+npx tsx examples/30-multi-agent-swarm-and-a2a-handoff.ts
 ```
+
 
 

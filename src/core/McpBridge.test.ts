@@ -467,7 +467,7 @@ describe('McpToolBridge', () => {
       expect(initRes.id).toBe(10);
       expect(initRes.result.protocolVersion).toBe('2024-11-05');
       expect(initRes.result.serverInfo.name).toBe('sinapsai-mcp');
-      expect(initRes.result.serverInfo.version).toBe('2.10.0');
+      expect(initRes.result.serverInfo.version).toBe('2.11.0');
 
       const notifRes = await bridge.handleJsonRpc({
         jsonrpc: '2.0',

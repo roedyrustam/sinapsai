@@ -120,6 +120,14 @@ run();
 
 ## Fitur Utama per Versi Rilis
 
+### Fitur Utama v2.11.0 (Multi-Agent Swarm, Agent-to-Agent / A2A Handoff Protocol & Shared Context Memory)
+1. **Multi-Agent Swarm Engine In-Process (`client.swarm`, `AgentSwarm`)**: Orkestrasi multi-agen in-process dengan pembagian peran spesialisasi domain tanpa dependensi runtime eksternal.
+2. **Protokol Delegasi Dinamis Agent-to-Agent (A2A Handoff)**: Pembangkitan tool transfer otomatis (`transfer_to_<agent_id>`) untuk setiap agen target yang diizinkan (`handoffTargets`), memungkinkan model mendelegasikan tugas secara otonom lengkap dengan alasan (`reason`) dan pembaruan konteks (`context_updates`).
+3. **Memori Konteks Bersama Thread-Safe (`SwarmContext`)**: Penyimpanan state bersama antar-agen (`get`, `set`, `has`, `delete`, `getAll`, `toPromptSection`) yang diinjeksikan secara deterministik ke dalam prompt sistem agen aktif (`[SHARED SWARM CONTEXT]`).
+4. **Proteksi Loop Siklus Ping-Pong (`maxHandoffs`)**: Penjaga batas rekursi pendelegasian agen (`maxHandoffs`, default 10) untuk mencegah loop delegasi tak terbatas dan pemborosan kuota token.
+5. **Ekspor Kartu Agen Standar Terbuka A2A (`exportAgentCards`)**: Menghasilkan spesifikasi kartu agen standar A2A (`A2AAgentCard`) yang kompatibel dengan protokol interoperabilitas agen terbuka Linux Foundation (`/.well-known/agent.json`).
+6. **Dukungan Streaming Event Waktu-Nyata (`swarm.runStream`)**: Generator asynchronous emisi event granular (`agent-start`, `text-delta`, `reasoning-delta`, `tool-call-start`, `tool-call-result`, `handoff`, `done`).
+
 ### Fitur Utama v2.10.0 (ReDoS & Prototype Pollution Hardening, Atomic Storage Counters, Parallel Tools & Context Caching)
 1. **Pencegahan ReDoS Infinite Loop pada Guardrail Keamanan**: Proteksi regex zero-length match pada `SecurityGuardrails` untuk mencegah `lastIndex` hang (100% CPU lock), isolasi `allowedPatterns` tanpa flag `/g`, dan perbaikan substitusi string `$1`/`$&` dengan replacer function `() => redactedReplacement`.
 2. **Kekebalan Prototype Pollution pada Kanonikalisasi Tools**: Filter ketat atribut berbahaya (`__proto__`, `constructor`, `prototype`) pada `GeminiAgentBooster.canonicalizeTools()` sebelum rekonstruksi objek skema JSON.
@@ -193,9 +201,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 411/411 unit & integration tests lulus di 34 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge, parallel tool execution, Gemini Context Caching, ReDoS hardening, prototype pollution immunity, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 419/419 unit & integration tests lulus di 35 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge, parallel tool execution, Gemini Context Caching, ReDoS hardening, prototype pollution immunity, Multi-Agent Swarm, A2A handoff protocol, semantic cache, batch engine, PII, budget, security, dan hedged requests.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **29 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 29) teruji dan 100% lulus kompilasi TypeScript.
+- **30 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 30) teruji dan 100% lulus kompilasi TypeScript.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

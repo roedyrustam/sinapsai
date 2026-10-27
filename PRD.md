@@ -37,6 +37,7 @@ Menciptakan "Control Plane" AI in-process berbasis NPM package (TypeScript/Node.
 ### C. Developer Experience & Ecosystem
 - **Official Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Implementasi resmi spesifikasi `LanguageModelV1` dan `EmbeddingModelV1` murni tanpa dependensi eksternal, mendukung `streamText`, `generateText`, `streamObject`, `embed`, dan `embedMany`.
 - **In-Process Model Context Protocol (MCP) Tool Bridge (`McpToolBridge`)**: Registri tools lokal zero-dependency dengan validasi skema JSON Schema, handler async, dispatcher JSON-RPC 2.0 (`tools/list`, `tools/call`, `ping`), dan loop agen otonom multi-langkah (`client.runWithTools` & `client.runWithToolsStream`).
+- **In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol (`client.swarm`)**: Orkestrasi multi-agen in-process dengan delegasi peran horizontal, memori konteks bersama thread-safe (`SwarmContext`), auto-generated transfer tools (`transfer_to_<agent_id>`), ping-pong recursion protection (`maxHandoffs`), real-time streaming handoff events (`runStream`), dan ekspor kartu agen standar A2A (`exportAgentCards()`) sesuai spesifikasi `/.well-known/agent.json`.
 - **Massively Parallel Tool Execution**: Eksekusi serentak panggilan tool menggunakan `Promise.all` di `runWithToolsStream` saat model menghasilkan beberapa tool call sekaligus dalam 1 putaran agen.
 - **Universal Frontier Reasoning Engine**: Kontrol terpadu Chain-of-Thought (`thinkingBudget: number | 'auto'`, `reasoningEffort: 'low' | 'medium' | 'high'`, dan ekstraksi `reasoning_content`) untuk Gemini 4 Pro / Flash Thinking, Claude 3.7 Sonnet, OpenAI o1/o3/o4, DeepSeek R1, Groq LPU, dan xAI Grok.
 - **Native Gemini Context Caching (`client.contextCache`)**: Integrasi penuh explicit context caching Google Gemini (>32k tokens) dengan diskon 75%–90% pada FinOps tracking, dilengkapi helper CRUD in-process (`create`, `get`, `list`, `delete`, `evaluateEligibility`).
@@ -51,4 +52,4 @@ Menciptakan "Control Plane" AI in-process berbasis NPM package (TypeScript/Node.
 - **Zero Runtime Dependencies**: Murni memanfaatkan standar runtime web (`fetch`, Web Streams, EventSource SSE).
 - **Edge Runtime Certified**: Kompatibel 100% di Node.js 18+, Bun, Deno, dan Cloudflare Workers.
 - **Type Safety**: TypeScript 100% strict mode dengan isolated declarations dan types definition lengkap.
-- **Verifikasi Kualitas**: 411/411 unit & integration tests lulus di 34 test suites (100% pass rate), 100% Biome clean, dan 29 contoh siap pakai di `examples/`.
+- **Verifikasi Kualitas**: 419/419 unit & integration tests lulus di 35 test suites (100% pass rate), 100% Biome clean, dan 30 contoh siap pakai di `examples/`.

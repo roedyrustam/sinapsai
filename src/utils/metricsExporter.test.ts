@@ -180,7 +180,7 @@ describe('metricsExporter', () => {
       });
       expect(attrs).toContainEqual({
         key: 'service.version',
-        value: { stringValue: '2.10.0' },
+        value: { stringValue: '2.11.0' },
       });
     });
   });

@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.11.0] - 2026-10-27
+### Added
+- **In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol (`AgentSwarm`, `client.swarm`)**:
+  - **Specialist Agent Definitions (`SwarmAgentConfig`)**: Define role-based autonomous agents with individual system instructions, model overrides (e.g. fast triage model vs frontier coding model), reasoning budgets, tools, and authorized handoff targets.
+  - **Automated A2A Handoff Tool Synthesis**: Automatically generates `transfer_to_<agent_id>` functions with parameters `reason` and `context_updates`, enabling models to seamlessly delegate tasks without manual prompt hacking.
+  - **Shared Memory Context (`SwarmContext`)**: Thread-safe in-process state store updated dynamically across agent turns, injected automatically into subsequent agent system instructions (`[SHARED SWARM CONTEXT]`).
+  - **A2A Agent Card Exporter (`exportAgentCards`)**: Exports discovery manifests conforming to the open `/.well-known/agent.json` Agent-to-Agent standard, describing capabilities, streaming support, and skills.
+  - **Both Non-Streaming & Real-Time Streaming Modes**:
+    - `swarm.run({ task, context })`: Returns complete `SwarmResult` with final text, step breakdown by agent, and cumulative cost.
+    - `swarm.runStream({ task, context })`: Asynchronous generator streaming real-time events (`agent-start`, `text-delta`, `reasoning-delta`, `tool-call-start`, `tool-call-result`, `handoff`, `done`).
+  - **Cycle & Loop Detection**: Built-in `maxHandoffs` guard preventing infinite ping-pong loops between delegating agents.
+  - **Integration with MCP Tool Bridge**: Swarm agents seamlessly inherit tools registered on `client.mcp` or specify custom tool subsets.
+- **Runnable Example 30 (`examples/30-multi-agent-swarm-and-a2a-handoff.ts`)**:
+  - Full demonstration of multi-agent swarm orchestration with Triage, Cloud Architect, and AppSec Engineer specialists exchanging shared state and executing A2A handoffs.
+
 ## [2.10.0] - 2026-10-27
 ### Security & Bug Fixes
 - **ReDoS & Infinite Loop Prevention in `SecurityGuardrails` (`src/core/SecurityGuardrails.ts`)**:

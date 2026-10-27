@@ -8,6 +8,7 @@
 import type { Provider } from '../providers/Provider.js';
 import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CachedContentInfo, CircuitBreakerStatus, ContextCacheEligibility, CreateCachedContentOptions, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
+import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
@@ -229,5 +230,10 @@ export declare class SinapsClient {
      * fragmented streaming tool call arguments and executing MCP tools between turns.
      */
     runWithToolsStream(options: RunWithToolsStreamOptions): AsyncGenerator<AgentStreamEvent, RunWithToolsResult, unknown>;
+    /**
+     * Instantiate an in-process multi-agent swarm orchestrator
+     * supporting role-based specialist delegation, A2A handoffs, and shared memory.
+     */
+    swarm(options: AgentSwarmOptions): AgentSwarm;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

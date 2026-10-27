@@ -169,7 +169,7 @@ for await (const chunk of stream) {
 
 # 📊 Fakta Teknis & Pengujian Kualitas
 
-- **411 Unit & Integration Tests**: 100% lolos verifikasi di 34 test suites dalam waktu <2 detik di Vitest.
+- **419 Unit & Integration Tests**: 100% lolos verifikasi di 35 test suites dalam waktu <2 detik di Vitest.
 - **Zero Runtime Dependencies**: Dibangun murni menggunakan web standard modern (`fetch`, `ReadableStream`, `AsyncIterable`).
 - **Edge Runtime Ready**: 100% kompatibel di Node.js 18+, Bun, Deno, dan Cloudflare Workers.
 - **Dual Build ESM & CJS**: Dilengkapi definisi TypeScript lengkap (`.d.ts`).
@@ -222,8 +222,9 @@ SinapsAI adalah 100% In-Process AI Gateway & Control Plane untuk Node.js dan Typ
 ⚡ Lowest-Latency Auto-Routing: Mengarahkan prompt secara dinamis ke provider tercepat berdasarkan moving average latency.
 💰 KV-Cache & Semantic Caching: Lacak token ter-cache untuk hemat biaya 70-90% + cache semantik in-process 0ms.
 📦 Zero Runtime Dependencies & Edge Ready (Node.js, Bun, Deno, Cloudflare Workers).
+🐝 In-Process Multi-Agent Swarms & A2A Handoff: Koordinasi agen domain dengan memori bersama dan delegasi otonom.
 
-Proyek ini 100% Open Source di bawah lisensi MIT dengan 411 automated test suites yang lolos 100%.
+Proyek ini 100% Open Source di bawah lisensi MIT dengan 419 automated tests di 35 test suites yang lolos 100%.
 
 Instal sekarang melalui NPM:
 👉 npm install sinapsai

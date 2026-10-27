@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 2.11.x  | :white_check_mark: |
 | 2.10.x  | :white_check_mark: |
 | 2.x     | :white_check_mark: |
 | < 2.0   | :x:                |
@@ -12,6 +13,7 @@
 
 SinapsAI is engineered with defense-in-depth principles:
 - **100% In-Process Execution**: Prompt payloads and API keys remain strictly in application memory space and are never proxied through external intermediate cloud gateways.
+- **Multi-Agent Ping-Pong & Recursion Defense (`maxHandoffs`)**: Autonomous agent swarms enforce a strict delegation ceiling preventing infinite loops, token exhaustion, and runaway costs when agents have circular handoff relationships.
 - **ReDoS Prevention**: All internal regex scanners in `SecurityGuardrails` and `PIIGuardrails` feature zero-length match advancing guards and clone state per execution to prevent infinite CPU loops.
 - **Prototype Pollution Immunity**: Recursive JSON schema canonicalization in `GeminiAgentBooster` filters dangerous prototype attributes (`__proto__`, `constructor`, `prototype`).
 - **Atomic Concurrency Protection**: Rate limit counters utilize atomic storage increment operations (`storage.increment`) preventing race conditions during burst traffic.

@@ -154,7 +154,7 @@ export function formatOtelMetrics(
   options: OtelExportOptions = {},
 ): OtelResourceMetrics {
   const serviceName = options.serviceName || 'sinapsai-gateway';
-  const serviceVersion = options.serviceVersion || '2.10.0';
+  const serviceVersion = options.serviceVersion || '2.11.0';
   const nowNano = `${Date.now()}000000`;
 
   const resourceAttrs: Array<{

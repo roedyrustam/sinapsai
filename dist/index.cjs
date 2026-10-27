@@ -1422,6 +1422,473 @@ function tryExtractJson(text) {
   }
 }
 
+// src/core/AgentSwarm.ts
+var SwarmContext = class {
+  store = /* @__PURE__ */ new Map();
+  constructor(initialData) {
+    if (initialData) {
+      for (const [key, value] of Object.entries(initialData)) {
+        this.store.set(key, value);
+      }
+    }
+  }
+  get(key) {
+    return this.store.get(key);
+  }
+  set(key, value) {
+    this.store.set(key, value);
+    return this;
+  }
+  has(key) {
+    return this.store.has(key);
+  }
+  delete(key) {
+    return this.store.delete(key);
+  }
+  clear() {
+    this.store.clear();
+  }
+  getAll() {
+    return Object.fromEntries(this.store.entries());
+  }
+  toPromptSection() {
+    if (this.store.size === 0) return "";
+    return `
+
+[SHARED SWARM CONTEXT]:
+${JSON.stringify(this.getAll(), null, 2)}`;
+  }
+};
+var AgentSwarm = class {
+  client;
+  agents = /* @__PURE__ */ new Map();
+  defaultAgentId;
+  maxHandoffs;
+  defaultModel;
+  constructor(client, options) {
+    this.client = client;
+    this.maxHandoffs = options.maxHandoffs ?? 10;
+    this.defaultModel = options.defaultModel;
+    if (!options.agents || options.agents.length === 0) {
+      throw new Error("AgentSwarm requires at least one specialist agent.");
+    }
+    for (const agent of options.agents) {
+      this.agents.set(agent.id, agent);
+    }
+    this.defaultAgentId = options.defaultAgentId || options.agents[0].id;
+    if (!this.agents.has(this.defaultAgentId)) {
+      throw new Error(
+        `Default agent ID "${this.defaultAgentId}" is not in the registered agents list.`
+      );
+    }
+  }
+  /**
+   * Get an agent by its ID
+   */
+  getAgent(id) {
+    return this.agents.get(id);
+  }
+  /**
+   * List all registered swarm agents
+   */
+  listAgents() {
+    return Array.from(this.agents.values());
+  }
+  /**
+   * Export A2A Agent Cards for all registered agents in this swarm
+   */
+  exportAgentCards(baseUrl) {
+    return Array.from(this.agents.values()).map((agent) => ({
+      name: agent.name,
+      description: `${agent.role}: ${agent.instructions.slice(0, 200)}`,
+      url: baseUrl ? `${baseUrl.replace(/\/$/, "")}/agents/${agent.id}` : void 0,
+      version: "2.11.0",
+      capabilities: {
+        streaming: true,
+        handoffs: agent.handoffs && agent.handoffs.length > 0 || false
+      },
+      skills: agent.skills || [
+        {
+          id: `${agent.id}-core`,
+          name: agent.name,
+          description: agent.role,
+          tags: [agent.id, "sinapsai-swarm"],
+          inputModes: ["text/plain", "application/json"],
+          outputModes: ["text/plain", "application/json"]
+        }
+      ]
+    }));
+  }
+  /**
+   * Synthesize handoff tool definitions for an agent
+   */
+  getHandoffTools(agent) {
+    if (!agent.handoffs || agent.handoffs.length === 0) {
+      return [];
+    }
+    const tools = [];
+    for (const targetId of agent.handoffs) {
+      const target = this.agents.get(targetId);
+      if (!target) continue;
+      tools.push({
+        type: "function",
+        function: {
+          name: `transfer_to_${target.id}`,
+          description: `Delegate the task to ${target.name} (${target.role}). ${target.instructions.slice(0, 140)}`,
+          parameters: {
+            type: "object",
+            properties: {
+              reason: {
+                type: "string",
+                description: "Detailed explanation of why you are transferring this task"
+              },
+              context_updates: {
+                type: "object",
+                description: "Key-value state updates to commit to shared memory before handoff",
+                additionalProperties: true
+              }
+            },
+            required: ["reason"]
+          }
+        }
+      });
+    }
+    return tools;
+  }
+  /**
+   * Compile full tool list for an agent, combining its specific tools, client.mcp tools, and handoff tools
+   */
+  compileAgentTools(agent) {
+    const handoffTools = this.getHandoffTools(agent);
+    const mcpTools = this.client.mcp.toUnifiedTools();
+    if (agent.tools) {
+      return [...agent.tools, ...handoffTools];
+    }
+    return [...mcpTools, ...handoffTools];
+  }
+  /**
+   * Run the multi-agent swarm to completion (non-streaming)
+   */
+  async run(options) {
+    const context = new SwarmContext(options.context);
+    let activeAgentId = options.initialAgentId || this.defaultAgentId;
+    let handoffCount = 0;
+    let totalSteps = 0;
+    const agentSteps = {};
+    const startCost = this.client.getMetrics().estimatedCostUsd;
+    const history = options.messages ? [...options.messages] : [];
+    if (options.task && history.length === 0) {
+      history.push({ role: "user", content: options.task });
+    }
+    while (handoffCount <= this.maxHandoffs) {
+      const agent = this.agents.get(activeAgentId);
+      if (!agent) {
+        throw new Error(`Active agent "${activeAgentId}" not found in Swarm.`);
+      }
+      agentSteps[activeAgentId] = (agentSteps[activeAgentId] || 0) + 1;
+      totalSteps++;
+      const systemContent = `${agent.instructions}
+
+You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
+      const stepMessages = [
+        { role: "system", content: systemContent },
+        ...history.filter((m) => m.role !== "system")
+      ];
+      const tools = this.compileAgentTools(agent);
+      const req = {
+        model: agent.model || this.defaultModel || "default",
+        messages: stepMessages,
+        tools: tools.length > 0 ? tools : void 0,
+        thinkingBudget: agent.thinkingBudget
+      };
+      const response = await this.client.chat.completions.create(
+        req
+      );
+      const choice = response.choices[0];
+      if (!choice) {
+        break;
+      }
+      const msg = choice.message;
+      history.push(msg);
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+        let delegatedTo;
+        for (const tc of msg.tool_calls) {
+          const fnName = tc.function.name;
+          if (fnName.startsWith("transfer_to_")) {
+            const targetId = fnName.replace("transfer_to_", "");
+            if (this.agents.has(targetId)) {
+              delegatedTo = targetId;
+              let parsedArgs = {};
+              try {
+                parsedArgs = JSON.parse(tc.function.arguments || "{}");
+              } catch {
+                parsedArgs = {};
+              }
+              if (parsedArgs.context_updates) {
+                for (const [k, v] of Object.entries(
+                  parsedArgs.context_updates
+                )) {
+                  context.set(k, v);
+                }
+              }
+              history.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                name: fnName,
+                content: JSON.stringify({
+                  status: "transferred",
+                  targetAgent: targetId,
+                  reason: parsedArgs.reason || "Delegated to specialist"
+                })
+              });
+              break;
+            }
+          }
+        }
+        if (delegatedTo) {
+          handoffCount++;
+          activeAgentId = delegatedTo;
+          continue;
+        }
+        const toolResults = await this.client.mcp.executeToolCalls(
+          msg.tool_calls
+        );
+        for (const tr of toolResults) {
+          history.push(tr);
+        }
+        continue;
+      }
+      const finalContent = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.filter((p) => p.type === "text").map((p) => p.text).join("") : "";
+      const endCost2 = this.client.getMetrics().estimatedCostUsd;
+      const totalCostUsd2 = Number(Math.max(0, endCost2 - startCost).toFixed(6));
+      return {
+        content: finalContent,
+        finalAgentId: activeAgentId,
+        history,
+        sharedContext: context.getAll(),
+        totalSteps,
+        totalHandoffs: handoffCount,
+        agentSteps,
+        totalCostUsd: totalCostUsd2
+      };
+    }
+    const lastMsg = history[history.length - 1];
+    const endCost = this.client.getMetrics().estimatedCostUsd;
+    const totalCostUsd = Number(Math.max(0, endCost - startCost).toFixed(6));
+    return {
+      content: typeof lastMsg?.content === "string" ? lastMsg.content : "Max handoffs reached.",
+      finalAgentId: activeAgentId,
+      history,
+      sharedContext: context.getAll(),
+      totalSteps,
+      totalHandoffs: handoffCount,
+      agentSteps,
+      totalCostUsd
+    };
+  }
+  /**
+   * Run the multi-agent swarm with real-time streaming events
+   */
+  async *runStream(options) {
+    const context = new SwarmContext(options.context);
+    let activeAgentId = options.initialAgentId || this.defaultAgentId;
+    let handoffCount = 0;
+    let totalSteps = 0;
+    const agentSteps = {};
+    const startCost = this.client.getMetrics().estimatedCostUsd;
+    const history = options.messages ? [...options.messages] : [];
+    if (options.task && history.length === 0) {
+      history.push({ role: "user", content: options.task });
+    }
+    while (handoffCount <= this.maxHandoffs) {
+      const agent = this.agents.get(activeAgentId);
+      if (!agent) {
+        throw new Error(`Active agent "${activeAgentId}" not found in Swarm.`);
+      }
+      agentSteps[activeAgentId] = (agentSteps[activeAgentId] || 0) + 1;
+      totalSteps++;
+      yield {
+        type: "agent-start",
+        agentId: activeAgentId,
+        agentName: agent.name,
+        step: totalSteps,
+        handoffCount
+      };
+      const systemContent = `${agent.instructions}
+
+You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
+      const stepMessages = [
+        { role: "system", content: systemContent },
+        ...history.filter((m) => m.role !== "system")
+      ];
+      const tools = this.compileAgentTools(agent);
+      const req = {
+        model: agent.model || this.defaultModel || "default",
+        messages: stepMessages,
+        tools: tools.length > 0 ? tools : void 0,
+        thinkingBudget: agent.thinkingBudget,
+        stream: true
+      };
+      const stream = await this.client.chat.completions.create(
+        req
+      );
+      let contentAcc = "";
+      let reasoningAcc = "";
+      const toolCallsMap = /* @__PURE__ */ new Map();
+      for await (const chunk of stream) {
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        const delta = choice.delta;
+        if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+          reasoningAcc += delta.reasoning_content;
+          yield {
+            type: "reasoning-delta",
+            agentId: activeAgentId,
+            reasoningDelta: delta.reasoning_content,
+            chunk
+          };
+        }
+        if (typeof delta.content === "string" && delta.content) {
+          contentAcc += delta.content;
+          yield {
+            type: "text-delta",
+            agentId: activeAgentId,
+            textDelta: delta.content,
+            chunk
+          };
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            const existing = toolCallsMap.get(idx) || {
+              id: "",
+              name: "",
+              arguments: ""
+            };
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name += tc.function.name;
+            if (tc.function?.arguments)
+              existing.arguments += tc.function.arguments;
+            toolCallsMap.set(idx, existing);
+          }
+        }
+      }
+      const assembledToolCalls = Array.from(toolCallsMap.entries()).sort(([a], [b]) => a - b).map(([idx, tc]) => ({
+        id: tc.id || `call_${totalSteps}_${idx}`,
+        type: "function",
+        function: {
+          name: tc.name,
+          arguments: tc.arguments || "{}"
+        }
+      }));
+      const assistantMsg = {
+        role: "assistant",
+        content: contentAcc,
+        reasoning_content: reasoningAcc || void 0,
+        tool_calls: assembledToolCalls.length > 0 ? assembledToolCalls : void 0
+      };
+      history.push(assistantMsg);
+      if (assembledToolCalls.length > 0) {
+        yield {
+          type: "tool-call-start",
+          agentId: activeAgentId,
+          toolCalls: assembledToolCalls
+        };
+        let delegatedTo;
+        for (const tc of assembledToolCalls) {
+          const fnName = tc.function.name;
+          if (fnName.startsWith("transfer_to_")) {
+            const targetId = fnName.replace("transfer_to_", "");
+            if (this.agents.has(targetId)) {
+              delegatedTo = targetId;
+              let parsedArgs = {};
+              try {
+                parsedArgs = JSON.parse(tc.function.arguments || "{}");
+              } catch {
+                parsedArgs = {};
+              }
+              if (parsedArgs.context_updates) {
+                for (const [k, v] of Object.entries(
+                  parsedArgs.context_updates
+                )) {
+                  context.set(k, v);
+                }
+              }
+              yield {
+                type: "handoff",
+                fromAgentId: activeAgentId,
+                toAgentId: targetId,
+                reason: parsedArgs.reason || "Delegated to specialist",
+                contextUpdates: parsedArgs.context_updates
+              };
+              history.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                name: fnName,
+                content: JSON.stringify({
+                  status: "transferred",
+                  targetAgent: targetId,
+                  reason: parsedArgs.reason || "Delegated to specialist"
+                })
+              });
+              break;
+            }
+          }
+        }
+        if (delegatedTo) {
+          handoffCount++;
+          activeAgentId = delegatedTo;
+          continue;
+        }
+        const toolResults = await this.client.mcp.executeToolCalls(assembledToolCalls);
+        for (const tr of toolResults) {
+          history.push(tr);
+        }
+        yield {
+          type: "tool-call-result",
+          agentId: activeAgentId,
+          toolCalls: assembledToolCalls,
+          results: toolResults
+        };
+        continue;
+      }
+      const endCost2 = this.client.getMetrics().estimatedCostUsd;
+      const totalCostUsd2 = Number(Math.max(0, endCost2 - startCost).toFixed(6));
+      const result2 = {
+        content: contentAcc,
+        finalAgentId: activeAgentId,
+        history,
+        sharedContext: context.getAll(),
+        totalSteps,
+        totalHandoffs: handoffCount,
+        agentSteps,
+        totalCostUsd: totalCostUsd2
+      };
+      yield {
+        type: "done",
+        result: result2
+      };
+      return;
+    }
+    const endCost = this.client.getMetrics().estimatedCostUsd;
+    const totalCostUsd = Number(Math.max(0, endCost - startCost).toFixed(6));
+    const result = {
+      content: "Max handoffs reached.",
+      finalAgentId: activeAgentId,
+      history,
+      sharedContext: context.getAll(),
+      totalSteps,
+      totalHandoffs: handoffCount,
+      agentSteps,
+      totalCostUsd
+    };
+    yield {
+      type: "done",
+      result
+    };
+  }
+};
+
 // src/core/BatchExecutor.ts
 var BatchExecutionError = class extends Error {
   results;
@@ -2271,7 +2738,7 @@ var McpToolBridge = class _McpToolBridge {
             },
             serverInfo: {
               name: "sinapsai-mcp",
-              version: "2.10.0"
+              version: "2.11.0"
             }
           }
         };
@@ -3096,7 +3563,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.10.0";
+  const serviceVersion = options.serviceVersion || "2.11.0";
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
@@ -5459,6 +5926,13 @@ var SinapsClient = class {
       result: finalResult
     };
     return finalResult;
+  }
+  /**
+   * Instantiate an in-process multi-agent swarm orchestrator
+   * supporting role-based specialist delegation, A2A handoffs, and shared memory.
+   */
+  swarm(options) {
+    return new AgentSwarm(this, options);
   }
 };
 
@@ -8799,6 +9273,21 @@ var XAiProvider = class {
  * @license MIT
  */
 /**
+ * SinapsAI - In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
+ *
+ * Implements an in-memory, zero-dependency multi-agent orchestrator featuring:
+ * - Role-based specialist agent definitions with custom system prompts and models
+ * - Automated handoff tool synthesis (transfer_to_<agent>) with cycle/loop detection
+ * - Shared context memory (SwarmContext) updated atomically across agent turns
+ * - Standard A2A Agent Card exporter conforming to /.well-known/agent.json spec
+ * - Both synchronous (run) and real-time streaming (runStream) execution modes
+ * - Concurrency and PII / Security guardrail compatibility
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
  * SinapsAI - In-Process AI Gateway & Control Plane
  *
  * Model Context Protocol (MCP) In-Process Tool Bridge & JSON-RPC Protocol
@@ -8884,6 +9373,7 @@ var XAiProvider = class {
  * @license MIT
  */
 
+exports.AgentSwarm = AgentSwarm;
 exports.AnthropicProvider = AnthropicProvider;
 exports.BatchExecutionError = BatchExecutionError;
 exports.BudgetExceededError = BudgetExceededError;
@@ -8919,6 +9409,7 @@ exports.SecurityGuardrails = SecurityGuardrails;
 exports.SinapsClient = SinapsClient;
 exports.SinapsEmbeddingModel = SinapsEmbeddingModel;
 exports.SinapsLanguageModel = SinapsLanguageModel;
+exports.SwarmContext = SwarmContext;
 exports.XAI_MODELS = XAI_MODELS;
 exports.XAiProvider = XAiProvider;
 exports.accumulateStream = accumulateStream;

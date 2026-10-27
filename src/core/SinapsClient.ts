@@ -51,6 +51,7 @@ import {
   extractJsonFromText,
   tryExtractJson,
 } from '../utils/structuredOutput.js';
+import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { executeBatch } from './BatchExecutor.js';
 import {
   CircuitBreaker,
@@ -1081,5 +1082,13 @@ export class SinapsClient {
     };
 
     return finalResult;
+  }
+
+  /**
+   * Instantiate an in-process multi-agent swarm orchestrator
+   * supporting role-based specialist delegation, A2A handoffs, and shared memory.
+   */
+  public swarm(options: AgentSwarmOptions): AgentSwarm {
+    return new AgentSwarm(this, options);
   }
 }

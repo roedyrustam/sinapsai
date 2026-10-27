@@ -21,6 +21,7 @@ classDiagram
         +batch.embeddings(requests, options)
         +runWithTools(options)
         +runWithToolsStream(options)
+        +swarm(options)
         +checkHealth(options)
         +getMetrics()
         +getCircuitBreakerStatus()
@@ -214,6 +215,30 @@ classDiagram
         +extractCodeExecution(metadata)
     }
 
+    class SwarmContext {
+        -Map state
+        +get(key)
+        +set(key, value)
+        +has(key)
+        +delete(key)
+        +clear()
+        +getAll()
+        +toPromptSection()
+    }
+
+    class AgentSwarm {
+        -SinapsClient client
+        -Map agents
+        -SwarmContext context
+        -string defaultAgentId
+        -number maxHandoffs
+        +getAgent(id)
+        +listAgents()
+        +exportAgentCards(baseUrl)
+        +run(options)
+        +runStream(options)
+    }
+
     StateStorage <|.. InMemoryStorage : implements
     StateStorage <|.. CloudflareKVStorage : implements
     StateStorage <|.. RedisStorage : implements
@@ -233,6 +258,8 @@ classDiagram
     SinapsClient "1" *-- "1" Router : delegates to
     SinapsClient "1" *-- "1" StateStorage : maintains
     SinapsClient "1" *-- "1" McpToolBridge : orchestrates tools via
+    SinapsClient "1" *-- "many" AgentSwarm : spawns
+    AgentSwarm "1" *-- "1" SwarmContext : maintains shared memory
     SinapsClient "1" *-- "0..1" GeminiAgentBooster : optimizes via
     SinapsClient "1" *-- "0..1" PIIGuardrails : safeguards with
     SinapsClient "1" *-- "0..1" SecurityGuardrails : secures with

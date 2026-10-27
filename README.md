@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-411%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-419%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -86,6 +86,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [32. In-Process Model Context Protocol (MCP) Tool Bridge & Agent Loop](#32-in-process-model-context-protocol-mcp-tool-bridge--agent-loop)
   - [33. Gemini Agent Booster, Streaming Agent Loop & Streaming Reversible PII Vault](#33-gemini-agent-booster-streaming-agent-loop--streaming-reversible-pii-vault)
   - [34. Gemini Explicit Context Caching & Massively Parallel Tool Execution](#34-gemini-explicit-context-caching--massively-parallel-tool-execution)
+  - [35. In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol](#35-in-process-multi-agent-swarm--agent-to-agent-a2a-handoff-protocol)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -122,6 +123,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 - 💳 **FinOps Spend & Token Guardrails (`budget`)**: Set strict hard caps (`action: 'block'`) or soft alert thresholds (`action: 'warn'`) for cumulative USD spend and token volumes.
 - ⏱️ **Speculative Hedged Requests (`HedgedExecutor`)**: Launch backup requests after a configured delay to eliminate tail latency (P99/P99.9) across redundant providers, aborting slower calls automatically.
 - 🪐 **Extensible Frontier Providers**: First-class integration for xAI Grok (with `reasoningEffort`), Cohere v2 (Command A, Embed v4), Google Gemini (header auth, schema sanitization), Anthropic Claude, OpenAI, DeepSeek, and Groq.
+- 🐝 **In-Process Multi-Agent Swarms & A2A Handoff Protocol (`client.swarm`)**: Coordinate specialized domain agents with thread-safe shared context memory (`SwarmContext`), automated dynamic handoff tool generation (`transfer_to_<agent_id>`), ping-pong recursion protection (`maxHandoffs`), streaming real-time handoff events (`runStream`), and standard A2A Agent Card export (`exportAgentCards()`) conforming to `/.well-known/agent.json`.
 - 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`, `onSecurityViolation`, `onBudgetWarning`) for APM metrics and custom alerting.
 
 ---
@@ -1323,6 +1325,72 @@ for await (const event of client.runWithToolsStream({
   if (event.type === 'tool-call-start') {
     // All 3 tools run concurrently via Promise.all
     console.log(`Dispatched ${event.toolCalls.length} tool calls in parallel!`);
+  }
+}
+```
+
+---
+
+### 35. In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
+
+Coordinate specialized sub-agents with dynamic role delegation, thread-safe shared context memory (`SwarmContext`), ping-pong recursion protection (`maxHandoffs`), and standardized Agent Card export conforming to the open Agent-to-Agent (A2A) standard (`/.well-known/agent.json`):
+
+```typescript
+import { GEMINI_MODELS, GeminiProvider, SinapsClient } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GeminiProvider({
+      apiKey: process.env.GEMINI_API_KEY!,
+      defaultModel: GEMINI_MODELS.FLASH_2_5,
+    }),
+  ],
+});
+
+// 1. Initialize the Multi-Agent Swarm with specialized domain agents
+const swarm = client.swarm({
+  defaultAgentId: 'triage',
+  maxHandoffs: 6,
+  agents: [
+    {
+      id: 'triage',
+      name: 'Triage Director',
+      role: 'Routes customer requests to specialized technical domains',
+      instructions: 'Analyze inquiries. Delegate cloud tasks to cloud-architect and security tasks to sec-engineer.',
+      handoffTargets: ['cloud-architect', 'sec-engineer'],
+    },
+    {
+      id: 'cloud-architect',
+      name: 'Cloud Infrastructure Architect',
+      role: 'Designs resilient cloud infrastructure and Kubernetes topologies',
+      instructions: 'Recommend architectures and update shared context with architecture blueprints.',
+      handoffTargets: ['sec-engineer'],
+    },
+    {
+      id: 'sec-engineer',
+      name: 'Application Security Engineer',
+      role: 'Audits topologies for zero-trust security compliance',
+      instructions: 'Review designs against CIS benchmarks and OWASP Top 10.',
+    },
+  ],
+});
+
+// 2. Export standard A2A Agent Cards
+const cards = swarm.exportAgentCards('https://api.enterprise.io');
+console.log('Registered Agents:', cards.map((c) => c.name));
+
+// 3. Execute streaming swarm with real-time handoff events
+for await (const event of swarm.runStream({
+  messages: [{ role: 'user', content: 'Deploy a multi-region Kubernetes cluster compliant with ISO 27001' }],
+})) {
+  if (event.type === 'agent-start') {
+    console.log(`\n🤖 Active Agent: ${event.agentId}`);
+  } else if (event.type === 'handoff') {
+    console.log(`🔀 Handoff: ${event.fromAgentId} -> ${event.toAgentId} (Reason: ${event.reason})`);
+  } else if (event.type === 'text-delta') {
+    process.stdout.write(event.textDelta);
+  } else if (event.type === 'done') {
+    console.log(`\n\n✅ Swarm Completed | Handoffs: ${event.result.handoffHistory.length} | Cost: $${event.result.totalCostUsd}`);
   }
 }
 ```

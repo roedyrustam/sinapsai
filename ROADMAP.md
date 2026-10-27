@@ -143,7 +143,18 @@
 - [x] **Streaming Tool Deduplication & Atomic Rate Limit Increment**: Perbaikan duplikasi nama tool calling pada stream accumulator dan dukungan atomic increment dengan TTL pada `StateStorage`.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 29 (`examples/29-gemini-context-caching-and-parallel-agents.ts`); total 411/411 tes lulus di 34 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.10.0.
 
-## Phase 18: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
+## Phase 18: In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol (v2.11.0) - *Completed*
+- [x] **In-Process Multi-Agent Swarm (`AgentSwarm`, `client.swarm`)**: Orkestrasi multi-agen otonom in-memory dengan peran terspesialisasi (`SwarmAgentConfig`), instruksi sistem independen, dan override model per agen.
+- [x] **Automated A2A Handoff Tool Synthesis**: Sintesis otomatis pemanggilan alat delegasi `transfer_to_<agent>` dengan argumen alasan (`reason`) dan pembaruan konteks (`context_updates`).
+- [x] **Thread-Safe Shared Memory Context (`SwarmContext`)**: State memori bersama yang dimutasi secara atomik lintas putaran agen dan diinjeksikan secara transparan ke instruksi sistem agen berikutnya.
+- [x] **Standard A2A Agent Card Exporter (`exportAgentCards`)**: Ekspor manifesto penemuan agen sesuai standar terbuka `/.well-known/agent.json` mencakup kapabilitas, streaming, dan skill metadata.
+- [x] **Dual Execution Modes (Non-Streaming & Streaming)**:
+  - `swarm.run()`: Eksekusi lengkap berjenjang mengembalikan `SwarmResult` dengan breakdown langkah per agen dan biaya kumulatif.
+  - `swarm.runStream()`: Generator asynchronous menyiarkan event real-time (`agent-start`, `text-delta`, `reasoning-delta`, `tool-call-start`, `tool-call-result`, `handoff`, `done`).
+- [x] **Cycle & Ping-Pong Safeguard**: Deteksi perulangan siklus otomatis (`maxHandoffs`) untuk mencegah deadlock atau infinite delegation loop antar agen.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 30 (`examples/30-multi-agent-swarm-and-a2a-handoff.ts`); total 419/419 tes lulus di 35 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.11.0.
+
+## Phase 19: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
 - [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
 
 

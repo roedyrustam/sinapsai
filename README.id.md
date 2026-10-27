@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-411%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-419%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -88,6 +88,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [32. Model Context Protocol (MCP) Tool Bridge & Loop Agen Otonom](#32-model-context-protocol-mcp-tool-bridge--loop-agen-otonom)
   - [33. Gemini Agent Booster, Loop Agen Streaming & Vault PII Reversibel Streaming](#33-gemini-agent-booster-loop-agen-streaming--vault-pii-reversibel-streaming)
   - [34. Gemini Explicit Context Caching & Eksekusi Tool Paralel Massal](#34-gemini-explicit-context-caching--eksekusi-tool-paralel-massal)
+  - [35. Multi-Agent Swarm In-Process & Protokol Handoff Agent-to-Agent (A2A)](#35-multi-agent-swarm-in-process--protokol-handoff-agent-to-agent-a2a)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -124,6 +125,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 - 💳 **Guardrail Anggaran FinOps (`budget`)**: Tentukan batas keras (`action: 'block'`) atau peringatan lembut (`action: 'warn'`) untuk pengeluaran kumulatif USD dan volume token.
 - ⏱️ **Permintaan Spekulatif Hedged (`HedgedExecutor`)**: Luncurkan permintaan cadangan setelah jeda waktu tertentu guna memangkas latensi ekor (P99/P99.9) pada provider redundan, dengan pembatalan otomatis bagi request yang kalah cepat.
 - 🪐 **Dukungan Provider Frontier Luas**: Integrasi kelas satu untuk xAI Grok (dengan `reasoningEffort`), Cohere v2 (Command A, Embed v4), Google Gemini (otentikasi header, sanitasi schema), Anthropic Claude, OpenAI, DeepSeek, dan Groq.
+- 🐝 **Multi-Agent Swarm In-Process & Protokol Handoff A2A (`client.swarm`)**: Orkestrasi sub-agen spesialis dengan memori konteks bersama thread-safe (`SwarmContext`), pembuatan tool delegasi otomatis (`transfer_to_<agent_id>`), perlindungan siklus rekursi (`maxHandoffs`), event streaming handoff real-time (`runStream`), dan ekspor kartu agen standar A2A (`exportAgentCards()`) sesuai spesifikasi `/.well-known/agent.json`.
 - 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`, `onSecurityViolation`, `onBudgetWarning`) untuk integrasi ke sistem APM, Prometheus, atau logging.
 
 ---
@@ -1327,6 +1329,72 @@ for await (const event of client.runWithToolsStream({
   if (event.type === 'tool-call-start') {
     // Ketiga tool dijalankan serentak via Promise.all
     console.log(`Mengeksekusi ${event.toolCalls.length} tool calls secara paralel!`);
+  }
+}
+```
+
+---
+
+### 35. Multi-Agent Swarm In-Process & Protokol Handoff Agent-to-Agent (A2A)
+
+Orkestrasi sub-agen spesialis dengan pendelegasian peran dinamis, memori konteks bersama (*shared context*) yang thread-safe (`SwarmContext`), proteksi loop ping-pong rekursif (`maxHandoffs`), dan ekspor kartu agen terstandarisasi sesuai spesifikasi terbuka Linux Foundation / Open Agentic standard (`/.well-known/agent.json`):
+
+```typescript
+import { GEMINI_MODELS, GeminiProvider, SinapsClient } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GeminiProvider({
+      apiKey: process.env.GEMINI_API_KEY!,
+      defaultModel: GEMINI_MODELS.FLASH_2_5,
+    }),
+  ],
+});
+
+// 1. Inisialisasi Multi-Agent Swarm dengan agen domain spesialis
+const swarm = client.swarm({
+  defaultAgentId: 'triage',
+  maxHandoffs: 6,
+  agents: [
+    {
+      id: 'triage',
+      name: 'Direktur Triage',
+      role: 'Mengarahkan permintaan pelanggan ke domain teknis spesialis',
+      instructions: 'Analisis kebutuhan pengguna. Delegasikan arsitektur cloud ke cloud-architect dan audit keamanan ke sec-engineer.',
+      handoffTargets: ['cloud-architect', 'sec-engineer'],
+    },
+    {
+      id: 'cloud-architect',
+      name: 'Arsitek Infrastruktur Cloud',
+      role: 'Merancang topologi cloud dan Kubernetes multi-region yang tangguh',
+      instructions: 'Rekomendasikan arsitektur dan perbarui shared context dengan spesifikasi topologi.',
+      handoffTargets: ['sec-engineer'],
+    },
+    {
+      id: 'sec-engineer',
+      name: 'Insinyur Keamanan Aplikasi',
+      role: 'Mengaudit kepatuhan arsitektur terhadap zero-trust security',
+      instructions: 'Review desain terhadap benchmark CIS dan OWASP Top 10.',
+    },
+  ],
+});
+
+// 2. Ekspor Kartu Agen Standar A2A (Agent Cards)
+const cards = swarm.exportAgentCards('https://api.perusahaan.id');
+console.log('Agen Terdaftar:', cards.map((c) => c.name));
+
+// 3. Eksekusi swarm streaming dengan event handoff waktu-nyata
+for await (const event of swarm.runStream({
+  messages: [{ role: 'user', content: 'Rancang arsitektur kluster Kubernetes multi-region yang patuh standar ISO 27001' }],
+})) {
+  if (event.type === 'agent-start') {
+    console.log(`\n🤖 Agen Aktif: ${event.agentId}`);
+  } else if (event.type === 'handoff') {
+    console.log(`🔀 Handoff: ${event.fromAgentId} -> ${event.toAgentId} (Alasan: ${event.reason})`);
+  } else if (event.type === 'text-delta') {
+    process.stdout.write(event.textDelta);
+  } else if (event.type === 'done') {
+    console.log(`\n\n✅ Swarm Selesai | Total Handoff: ${event.result.handoffHistory.length} | Biaya: $${event.result.totalCostUsd}`);
   }
 }
 ```
