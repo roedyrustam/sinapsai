@@ -40,10 +40,10 @@ jobs:
       - name: Publish to NPM & Create GitHub Release if Version Bumped
         run: |
           if [ -n "$NODE_AUTH_TOKEN" ]; then
-            echo "Ã°Å¸â€Â Menggunakan autentikasi NPM Token..."
+            echo "[Auth] Using NPM Token authentication..."
             echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           else
-            echo "Ã°Å¸Å’Â Menggunakan autentikasi NPM Trusted Publishing (OIDC / Provenance)..."
+            echo "[Auth] Using NPM Trusted Publishing (OIDC / Provenance)..."
           fi
 
           CURRENT_VERSION=$(node -p "require('./package.json').version")
@@ -52,19 +52,17 @@ jobs:
           echo "Published npm registry version: $PUBLISHED_VERSION"
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "Ã°Å¸Å¡â‚¬ New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
+            echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
             npm publish --access public --provenance
-            echo "Ã¢Å“â€¦ Successfully published sinapsai@$CURRENT_VERSION to NPM!"
+            echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM!"
           else
-            echo "Ã¢â€žÂ¹Ã¯Â¸Â Version $CURRENT_VERSION is already published on NPM. Skipping publish."
+            echo "[Skip] Version $CURRENT_VERSION is already published on NPM. Skipping publish."
           fi
 
           if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
-            echo "Ã°Å¸ÂÂ·Ã¯Â¸Â Creating GitHub Release v$CURRENT_VERSION..."
+            echo "[Release] Creating GitHub Release v$CURRENT_VERSION..."
             gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
