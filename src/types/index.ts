@@ -132,6 +132,10 @@ export interface UnifiedApiRequest {
   googleSearch?: boolean;
   codeExecution?: boolean;
   /**
+   * Optional request-level LLM Optimization overrides (minify, cascade, mode).
+   */
+  llmo?: import('../core/LlmOptimizer.js').LlmRequestOptimizationOptions;
+  /**
    * A unique identifier representing your end-user, useful for tracking abuse and rate limiting.
    */
   user?: string;
@@ -274,6 +278,10 @@ export interface SinapsMetrics {
   totalTokens: number;
   estimatedCostUsd: number;
   providerMetrics: Record<string, ProviderMetricEntry>;
+  /**
+   * Cumulative metrics tracking token & USD savings achieved via LLM Optimization (LLMO).
+   */
+  llmoMetrics?: import('../core/LlmOptimizer.js').LlmOptimizationMetrics;
 }
 
 export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
@@ -810,7 +818,21 @@ export {
   type ThinkingBudgetTier,
   type ThinkingComplexityAnalysis,
 } from '../core/GeminiAgentBooster.js';
-
+export {
+  canonicalizeTools,
+  DEFAULT_CASCADE_TIERS,
+  deduplicateSystemInstructions,
+  estimateTextTokens,
+  type LlmCascadeTiers,
+  type LlmComplexityAnalysis,
+  type LlmComplexityTier,
+  type LlmOptimizationMetrics,
+  type LlmOptimizationOptions,
+  type LlmOptimizationResult,
+  LlmOptimizer,
+  type LlmRequestOptimizationOptions,
+  minifyProsePreservingCode,
+} from '../core/LlmOptimizer.js';
 export {
   type McpContent,
   type McpImageContent,
@@ -826,12 +848,10 @@ export {
   type McpToolInputSchema,
   type McpToolResult,
 } from '../core/McpBridge.js';
-
 export {
   GatewayRateLimitError,
   GatewayRateLimiter,
 } from '../core/RateLimiter.js';
-
 export type { RouterOptions } from '../core/Router.js';
 export type {
   ExtendedPIIGuardrailsOptions,

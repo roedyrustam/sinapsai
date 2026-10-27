@@ -178,6 +178,16 @@ run();
 1. **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'`)**: Skoring cerdas multi-faktor memadukan keandalan (Laplace-smoothed reliability), latensi bergerak (moving-average latency), dan estimasi biaya per request secara real-time.
 2. **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang menyamarkan data sensitif sebelum dikirim ke LLM dan secara otomatis mengembalikan nilai asli pada respons non-streaming.
 
+### Fitur Utama v2.12.0 (Universal LLM Optimization Engine & AI-Ready Manifests)
+1. **Universal LLM Optimization Engine (`LlmOptimizer` / LLMO)**:
+   - **Code-Block Aware Prompt Minification**: Pemangkasan spasi berlebih, tab horizontal, dan trailing newline pada prosa dengan tetap mempertahankan blok kode (fenced code blocks) 100% utuh tanpa merusak indentasi dan sintaksis.
+   - **System Instruction Deduplication**: Penggabungan dan pembersihan otomatis aturan instruksi sistem yang berulang lintas riwayat percakapan.
+   - **Deterministic KV-Cache Prefix Alignment**: Pengurutan leksikografis parameter tools dan skema JSON secara deterministik untuk memaksimalkan hit rate prompt caching (penghematan 75%–90% biaya token).
+   - **Adaptive Multi-Signal Model Cascading**: Skoring kompleksitas prompt [0.0, 1.0] yang secara otomatis mengeskalasikan atau mendowngrade permintaan ke 3 tingkatan model (`tier1`: Fast/Light, `tier2`: Standard, `tier3`: Deep Reasoning).
+   - **Dynamic Thinking Budget Allocation**: Pemberian alokasi anggaran penalaran (0, 2048, 8192 token) secara otomatis berdasarkan analisis kompleksitas prompt.
+   - **FinOps Savings Telemetry (`llmoMetrics`)**: Penjejakan token yang dihemat, estimasi penghematan USD, rasio kompresi, dan jumlah request yang di-cascade pada `client.getMetrics()`.
+2. **Standar LLMO / GEO Manifests (`llms.txt` & `llms-full.txt`)**: Dokumen referensi standar yang siap dicerna oleh model LLM (ChatGPT, Claude, Gemini, Perplexity, Cursor, Copilot) untuk pemahaman instan tanpa halusinasi.
+
 ### Fitur Utama v2.2.0 (Distributed Edge Storages & In-Process PII Guardrails)
 1. **Distributed Edge & Cluster Storage Adapters**: Integrasi state Circuit Breaker dan cache untuk Cloudflare KV (`CloudflareKVStorage`), Cloudflare D1 (`D1Storage`), dan Redis Cluster (`RedisStorage`) tanpa dependensi runtime eksternal.
 2. **Zero-Dependency In-Process PII Guardrails (`PIIGuardrails`)**: Deteksi dan redaksi otomatis data pribadi sensitif (email, nomor telepon, kartu kredit tervalidasi algoritma Luhn, SSN, IPv4/IPv6, nomor paspor, IBAN, JWT, dan URL).
@@ -201,9 +211,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 419/419 unit & integration tests lulus di 35 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge, parallel tool execution, Gemini Context Caching, ReDoS hardening, prototype pollution immunity, Multi-Agent Swarm, A2A handoff protocol, semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 429/429 unit & integration tests lulus di 36 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge, parallel tool execution, Gemini Context Caching, ReDoS hardening, prototype pollution immunity, Multi-Agent Swarm, A2A handoff protocol, Universal LLM Optimization Engine (LLMO), semantic cache, batch engine, PII, budget, security, dan hedged requests.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **30 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 30) teruji dan 100% lulus kompilasi TypeScript.
+- **31 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 31) teruji dan 100% lulus kompilasi TypeScript.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

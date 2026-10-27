@@ -64,6 +64,12 @@ import {
 import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
+import {
+  type LlmOptimizationOptions,
+  type LlmOptimizationResult,
+  LlmOptimizer,
+  type LlmRequestOptimizationOptions,
+} from './LlmOptimizer.js';
 import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { GatewayRateLimitError, GatewayRateLimiter } from './RateLimiter.js';
@@ -136,6 +142,12 @@ export interface SinapsClientOptions {
    * If provided, client.mcp will use this bridge; otherwise a default in-process bridge is created.
    */
   mcpBridge?: McpToolBridge;
+  /**
+   * Optional LLM Optimization (LLMO) pipeline configuration.
+   * Enables prompt minification, deterministic KV-cache prefix alignment,
+   * automated complexity-based model cascading, and dynamic thinking allocation.
+   */
+  llmo?: LlmOptimizationOptions | boolean;
 }
 
 export class SinapsClient {
@@ -146,6 +158,7 @@ export class SinapsClient {
   public readonly contextCompressor?: ContextCompressor;
   public readonly hedgedExecutor?: HedgedExecutor;
   public readonly rateLimiter?: GatewayRateLimiter;
+  public readonly llmo?: LlmOptimizer;
   public readonly mcp: McpToolBridge;
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
@@ -202,6 +215,15 @@ export class SinapsClient {
       this.contextCompressor = new ContextCompressor(
         options.contextCompression,
       );
+    }
+
+    // Initialize LLM Optimizer (LLMO) if configured
+    if (options.llmo) {
+      if (options.llmo === true) {
+        this.llmo = new LlmOptimizer();
+      } else {
+        this.llmo = new LlmOptimizer(options.llmo);
+      }
     }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
@@ -274,7 +296,30 @@ export class SinapsClient {
           messages = compressed.messages;
         }
 
-        const resolvedModel = this.resolveModel(request.model);
+        let tools = request.tools;
+        let thinkingBudget = request.thinkingBudget;
+        let requestedModel = request.model;
+
+        // Apply LLM Optimization (LLMO) if configured
+        if (this.llmo) {
+          const opt = this.llmo.optimize(
+            {
+              model: this.resolveModel(request.model),
+              messages,
+              tools,
+              thinkingBudget,
+            },
+            request.llmo,
+          );
+          messages = opt.messages;
+          tools = opt.tools;
+          thinkingBudget = opt.thinkingBudget;
+          if (opt.cascadeModel) {
+            requestedModel = opt.cascadeModel;
+          }
+        }
+
+        const resolvedModel = this.resolveModel(requestedModel);
 
         const fullReq: UnifiedApiRequest = {
           model: resolvedModel,
@@ -283,16 +328,17 @@ export class SinapsClient {
           maxTokens: request.maxTokens,
           stream: request.stream,
           signal: request.signal,
-          tools: request.tools,
+          tools,
           toolChoice: request.toolChoice,
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
-          thinkingBudget: request.thinkingBudget,
+          thinkingBudget,
           reasoningEffort: request.reasoningEffort,
           cachedContent: request.cachedContent,
           googleSearch: request.googleSearch,
           codeExecution: request.codeExecution,
           user: request.user,
+          llmo: request.llmo,
         };
 
         let estimatedTokens = 0;
@@ -559,7 +605,25 @@ export class SinapsClient {
   };
 
   public getMetrics(): SinapsMetrics {
-    return this.router.getMetrics();
+    const base = this.router.getMetrics();
+    if (this.llmo) {
+      return {
+        ...base,
+        llmoMetrics: this.llmo.getMetrics(),
+      };
+    }
+    return base;
+  }
+
+  /**
+   * Helper to analyze and optimize prompt messages using LLMO (Large Language Model Optimization).
+   */
+  public optimizePrompt(
+    request: UnifiedApiRequest,
+    options?: LlmRequestOptimizationOptions,
+  ): LlmOptimizationResult {
+    const optimizer = this.llmo ?? new LlmOptimizer();
+    return optimizer.optimize(request, options);
   }
 
   public async getCircuitBreakerStatus(): Promise<

@@ -16,6 +16,7 @@ export * from './core/D1Storage.js';
 export * from './core/GeminiAgentBooster.js';
 export * from './core/HedgedExecutor.js';
 export * from './core/InMemoryStorage.js';
+export * from './core/LlmOptimizer.js';
 export * from './core/McpBridge.js';
 export * from './core/PIIGuardrails.js';
 export * from './core/RateLimiter.js';

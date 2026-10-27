@@ -12,6 +12,7 @@ import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
+import { type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions } from './LlmOptimizer.js';
 import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
 import { GatewayRateLimiter } from './RateLimiter.js';
@@ -79,6 +80,12 @@ export interface SinapsClientOptions {
      * If provided, client.mcp will use this bridge; otherwise a default in-process bridge is created.
      */
     mcpBridge?: McpToolBridge;
+    /**
+     * Optional LLM Optimization (LLMO) pipeline configuration.
+     * Enables prompt minification, deterministic KV-cache prefix alignment,
+     * automated complexity-based model cascading, and dynamic thinking allocation.
+     */
+    llmo?: LlmOptimizationOptions | boolean;
 }
 export declare class SinapsClient {
     private router;
@@ -88,6 +95,7 @@ export declare class SinapsClient {
     readonly contextCompressor?: ContextCompressor;
     readonly hedgedExecutor?: HedgedExecutor;
     readonly rateLimiter?: GatewayRateLimiter;
+    readonly llmo?: LlmOptimizer;
     readonly mcp: McpToolBridge;
     private isReversiblePII;
     private modelAliases;
@@ -146,6 +154,10 @@ export declare class SinapsClient {
         create: <TReq, TRes>(items: TReq[], handler: (item: TReq, index: number) => Promise<TRes>, options?: BatchOptions) => Promise<BatchResult<TRes>>;
     };
     getMetrics(): SinapsMetrics;
+    /**
+     * Helper to analyze and optimize prompt messages using LLMO (Large Language Model Optimization).
+     */
+    optimizePrompt(request: UnifiedApiRequest, options?: LlmRequestOptimizationOptions): LlmOptimizationResult;
     getCircuitBreakerStatus(): Promise<Record<string, CircuitBreakerStatus>>;
     resetCircuitBreaker(providerId?: string): Promise<void>;
     clearCache(): Promise<void>;

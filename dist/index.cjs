@@ -2405,6 +2405,299 @@ var InMemoryStorage = class {
   }
 };
 
+// src/core/LlmOptimizer.ts
+var COMPLEX_REASONING_REGEX2 = /\b(architect(?:ure)?|refactor|optimiz(?:e|ation)|vulnerabilit(?:y|ies)|security\s+audit|prove|theorem|algorithm|concurren(?:t|cy)|deadlock|race\s+condition|distributed|microkernel|step[\s-]by[\s-]step|root\s+cause|stack\s+trace|benchmark|formal\s+verification|regex|memory\s+leak|reverse\s+engineer)\b/i;
+var CODE_OR_MATH_REGEX2 = /```[\s\S]*?```|\b(?:function|class|interface|SELECT\s+.+\s+FROM|CREATE\s+TABLE|async\s+function|Promise\.all|TypeError:|ReferenceError:|Error:\s+at\s+)\b|\$\$[\s\S]+?\$\$/i;
+var SIMPLE_INTENT_REGEX2 = /^(?:hi|hello|hey|halo|ping|ok|okay|thanks|thank\s+you|terima\s+kasih|yes|no|ya|tidak|translate\s+to\s+\w+:|classify\s*:)/i;
+var AGGRESSIVE_FLUFF_REGEX = /^(?:(?:could|can|would)\s+you\s+(?:please\s+)?(?:help\s+me\s+)?(?:to\s+)?|please\s+(?:kindly\s+)?|kindly\s+|i\s+(?:would\s+like|want)\s+you\s+to\s+)/i;
+var DEFAULT_CASCADE_TIERS = {
+  tier1: "gemini-2.5-flash-lite",
+  tier2: "gemini-2.5-flash",
+  tier3: "gemini-2.5-pro"
+};
+function estimateTextTokens(text) {
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+function minifyProsePreservingCode(text, mode = "lossless") {
+  if (!text || text.length === 0) {
+    return text;
+  }
+  const codeBlockRegex = /(```[\s\S]*?```|````[\s\S]*?````)/g;
+  const parts = text.split(codeBlockRegex);
+  const processedParts = parts.map((part) => {
+    if (part.startsWith("```") || part.startsWith("````")) {
+      return part;
+    }
+    let p = part.replace(/\r\n/g, "\n");
+    if (mode === "aggressive") {
+      p = p.replace(AGGRESSIVE_FLUFF_REGEX, "");
+    }
+    p = p.replace(/[ \t]+/g, " ");
+    p = p.split("\n").map((line) => line.trim()).join("\n");
+    p = p.replace(/\n{3,}/g, "\n\n");
+    return p;
+  });
+  return processedParts.join("").trim();
+}
+function deduplicateSystemInstructions(messages) {
+  const systemMessages = [];
+  const otherMessages = [];
+  for (const m of messages) {
+    if (m.role === "system") {
+      systemMessages.push(m);
+    } else {
+      otherMessages.push(m);
+    }
+  }
+  if (systemMessages.length <= 1) {
+    return messages;
+  }
+  const seenLines = /* @__PURE__ */ new Set();
+  const combinedLines = [];
+  for (const sm of systemMessages) {
+    const content = typeof sm.content === "string" ? sm.content : Array.isArray(sm.content) ? sm.content.filter((c) => c.type === "text").map((c) => c.text).join("\n") : "";
+    const lines = content.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        combinedLines.push("");
+        continue;
+      }
+      if (!seenLines.has(trimmed)) {
+        seenLines.add(trimmed);
+        combinedLines.push(trimmed);
+      }
+    }
+  }
+  const mergedSystemContent = combinedLines.join("\n").replace(/\n{3,}/g, "\n\n");
+  const mergedSystemMessage = {
+    role: "system",
+    content: mergedSystemContent
+  };
+  return [mergedSystemMessage, ...otherMessages];
+}
+function canonicalizeTools(tools) {
+  if (!tools || tools.length === 0) {
+    return tools;
+  }
+  return [...tools].sort((a, b) => a.function.name.localeCompare(b.function.name)).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters ? canonicalizeJsonValue(tool.function.parameters) : void 0
+    }
+  }));
+}
+var LlmOptimizer = class {
+  options;
+  metrics = {
+    totalOptimizedRequests: 0,
+    totalTokensSaved: 0,
+    totalEstimatedUsdSaved: 0,
+    averageCompressionRatio: 1,
+    cascadedRequestsCount: 0
+  };
+  constructor(options = {}) {
+    this.options = {
+      enabled: options.enabled ?? true,
+      minifyPrompts: options.minifyPrompts ?? true,
+      minificationMode: options.minificationMode ?? "lossless",
+      deduplicateSystem: options.deduplicateSystem ?? true,
+      alignKvCachePrefix: options.alignKvCachePrefix ?? true,
+      autoCascadeModel: options.autoCascadeModel ?? false,
+      cascadeTiers: options.cascadeTiers ?? DEFAULT_CASCADE_TIERS,
+      dynamicThinking: options.dynamicThinking ?? true
+    };
+  }
+  /**
+   * Analyzes prompt messages to calculate a normalized complexity score [0.0, 1.0],
+   * complexity tier, and recommended model/thinking budget.
+   */
+  analyzeComplexity(messages, tiers = this.options.cascadeTiers ?? DEFAULT_CASCADE_TIERS) {
+    const resolvedTiers = { ...DEFAULT_CASCADE_TIERS, ...tiers };
+    const signals = [];
+    let score = 0.2;
+    let totalChars = 0;
+    let hasCodeOrMath = false;
+    let hasComplexReasoning = false;
+    let hasSimpleIntent = false;
+    for (const m of messages) {
+      const text = typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.filter((p) => p.type === "text").map((p) => p.text).join(" ") : "";
+      totalChars += text.length;
+      if (CODE_OR_MATH_REGEX2.test(text)) {
+        hasCodeOrMath = true;
+      }
+      if (COMPLEX_REASONING_REGEX2.test(text)) {
+        hasComplexReasoning = true;
+      }
+      if (m.role === "user" && SIMPLE_INTENT_REGEX2.test(text.trim())) {
+        hasSimpleIntent = true;
+      }
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        signals.push("tool_calling_history");
+        score += 0.15;
+      }
+    }
+    if (hasSimpleIntent && totalChars < 80 && !hasCodeOrMath && !hasComplexReasoning) {
+      signals.push("simple_intent");
+      score -= 0.15;
+    }
+    if (hasCodeOrMath) {
+      signals.push("code_or_math_blocks");
+      score += 0.3;
+    }
+    if (hasComplexReasoning) {
+      signals.push("complex_reasoning_keywords");
+      score += 0.35;
+    }
+    if (messages.length > 6) {
+      signals.push("multi_turn_depth");
+      score += 0.15;
+    }
+    if (totalChars > 4e3) {
+      signals.push("long_context");
+      score += 0.2;
+    }
+    score = Math.max(0, Math.min(1, Number(score.toFixed(3))));
+    let tier = "tier2";
+    let recommendedBudget = 2048;
+    let recommendedModel = resolvedTiers.tier2;
+    if (score <= 0.35) {
+      tier = "tier1";
+      recommendedBudget = 0;
+      recommendedModel = resolvedTiers.tier1;
+    } else if (score > 0.7) {
+      tier = "tier3";
+      recommendedBudget = 8192;
+      recommendedModel = resolvedTiers.tier3;
+    }
+    return {
+      score,
+      tier,
+      signals,
+      recommendedModel,
+      recommendedThinkingBudget: recommendedBudget
+    };
+  }
+  /**
+   * Executes the full LLM Optimization pipeline on an incoming UnifiedApiRequest.
+   */
+  optimize(request, overrideOptions) {
+    const isEnabled = this.options.enabled !== false;
+    const originalTokens = estimateTotalTokens(request.messages);
+    if (!isEnabled) {
+      const complexity2 = this.analyzeComplexity(request.messages);
+      return {
+        messages: request.messages,
+        originalTokens,
+        optimizedTokens: originalTokens,
+        tokensSaved: 0,
+        savingsRatio: 0,
+        complexity: complexity2,
+        tools: request.tools,
+        thinkingBudget: request.thinkingBudget
+      };
+    }
+    let messages = [...request.messages];
+    const shouldMinify = overrideOptions?.minify ?? this.options.minifyPrompts ?? true;
+    const mode = overrideOptions?.mode ?? this.options.minificationMode ?? "lossless";
+    if (this.options.deduplicateSystem) {
+      messages = deduplicateSystemInstructions(messages);
+    }
+    if (shouldMinify) {
+      messages = messages.map((m) => {
+        if (typeof m.content === "string") {
+          return {
+            ...m,
+            content: minifyProsePreservingCode(m.content, mode)
+          };
+        }
+        if (Array.isArray(m.content)) {
+          return {
+            ...m,
+            content: m.content.map((part) => {
+              if (part.type === "text") {
+                return {
+                  ...part,
+                  text: minifyProsePreservingCode(
+                    part.text,
+                    mode
+                  )
+                };
+              }
+              return part;
+            })
+          };
+        }
+        return m;
+      });
+    }
+    let tools = request.tools;
+    if (this.options.alignKvCachePrefix && tools) {
+      tools = canonicalizeTools(tools);
+    }
+    const complexity = this.analyzeComplexity(messages);
+    let cascadeModel;
+    const shouldCascade = overrideOptions?.cascade ?? (this.options.autoCascadeModel || request.model === "auto");
+    if (shouldCascade && complexity.recommendedModel) {
+      cascadeModel = complexity.recommendedModel;
+    }
+    let thinkingBudget = request.thinkingBudget;
+    if (this.options.dynamicThinking && thinkingBudget === void 0) {
+      if (complexity.recommendedThinkingBudget !== void 0) {
+        thinkingBudget = complexity.recommendedThinkingBudget;
+      }
+    }
+    const optimizedTokens = estimateTotalTokens(messages);
+    const tokensSaved = Math.max(0, originalTokens - optimizedTokens);
+    const savingsRatio = originalTokens > 0 ? Number((tokensSaved / originalTokens).toFixed(4)) : 0;
+    this.recordMetrics(
+      tokensSaved,
+      originalTokens,
+      optimizedTokens,
+      !!cascadeModel
+    );
+    return {
+      messages,
+      originalTokens,
+      optimizedTokens,
+      tokensSaved,
+      savingsRatio,
+      complexity,
+      cascadeModel,
+      tools,
+      thinkingBudget
+    };
+  }
+  recordMetrics(tokensSaved, originalTokens, optimizedTokens, cascaded) {
+    this.metrics.totalOptimizedRequests++;
+    this.metrics.totalTokensSaved += tokensSaved;
+    this.metrics.totalEstimatedUsdSaved += tokensSaved / 1e3 * 3e-3;
+    if (cascaded) {
+      this.metrics.cascadedRequestsCount++;
+    }
+    const ratio = originalTokens > 0 ? optimizedTokens / originalTokens : 1;
+    const n = this.metrics.totalOptimizedRequests;
+    this.metrics.averageCompressionRatio = Number(
+      ((this.metrics.averageCompressionRatio * (n - 1) + ratio) / n).toFixed(4)
+    );
+  }
+  getMetrics() {
+    return { ...this.metrics };
+  }
+  resetMetrics() {
+    this.metrics = {
+      totalOptimizedRequests: 0,
+      totalTokensSaved: 0,
+      totalEstimatedUsdSaved: 0,
+      averageCompressionRatio: 1,
+      cascadedRequestsCount: 0
+    };
+  }
+};
+
 // src/core/McpBridge.ts
 var McpToolBridge = class _McpToolBridge {
   tools = /* @__PURE__ */ new Map();
@@ -5193,6 +5486,7 @@ var SinapsClient = class {
   contextCompressor;
   hedgedExecutor;
   rateLimiter;
+  llmo;
   mcp;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
@@ -5239,6 +5533,13 @@ var SinapsClient = class {
       this.contextCompressor = new ContextCompressor(
         options.contextCompression
       );
+    }
+    if (options.llmo) {
+      if (options.llmo === true) {
+        this.llmo = new LlmOptimizer();
+      } else {
+        this.llmo = new LlmOptimizer(options.llmo);
+      }
     }
     const cb = new CircuitBreaker(this.storage, {
       ...options.circuitBreaker,
@@ -5301,7 +5602,27 @@ var SinapsClient = class {
           const compressed = this.contextCompressor.compress(messages);
           messages = compressed.messages;
         }
-        const resolvedModel = this.resolveModel(request.model);
+        let tools = request.tools;
+        let thinkingBudget = request.thinkingBudget;
+        let requestedModel = request.model;
+        if (this.llmo) {
+          const opt = this.llmo.optimize(
+            {
+              model: this.resolveModel(request.model),
+              messages,
+              tools,
+              thinkingBudget
+            },
+            request.llmo
+          );
+          messages = opt.messages;
+          tools = opt.tools;
+          thinkingBudget = opt.thinkingBudget;
+          if (opt.cascadeModel) {
+            requestedModel = opt.cascadeModel;
+          }
+        }
+        const resolvedModel = this.resolveModel(requestedModel);
         const fullReq = {
           model: resolvedModel,
           messages,
@@ -5309,16 +5630,17 @@ var SinapsClient = class {
           maxTokens: request.maxTokens,
           stream: request.stream,
           signal: request.signal,
-          tools: request.tools,
+          tools,
           toolChoice: request.toolChoice,
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
-          thinkingBudget: request.thinkingBudget,
+          thinkingBudget,
           reasoningEffort: request.reasoningEffort,
           cachedContent: request.cachedContent,
           googleSearch: request.googleSearch,
           codeExecution: request.codeExecution,
-          user: request.user
+          user: request.user,
+          llmo: request.llmo
         };
         let estimatedTokens = 0;
         let candidateProviderId;
@@ -5511,7 +5833,21 @@ var SinapsClient = class {
     }
   };
   getMetrics() {
-    return this.router.getMetrics();
+    const base = this.router.getMetrics();
+    if (this.llmo) {
+      return {
+        ...base,
+        llmoMetrics: this.llmo.getMetrics()
+      };
+    }
+    return base;
+  }
+  /**
+   * Helper to analyze and optimize prompt messages using LLMO (Large Language Model Optimization).
+   */
+  optimizePrompt(request, options) {
+    const optimizer = this.llmo ?? new LlmOptimizer();
+    return optimizer.optimize(request, options);
   }
   async getCircuitBreakerStatus() {
     return this.router.getCircuitBreakerStatus();
@@ -9289,6 +9625,22 @@ var XAiProvider = class {
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Universal LLM Optimization Engine (LLMO)
+ *
+ * Implements:
+ * 1. Universal Prompt Token Minification & Whitespace Pruning (code-block aware).
+ * 2. System Instruction Deduplication & Normalization.
+ * 3. Deterministic KV-Cache Prefix Alignment & Tool Schema Canonicalization.
+ * 4. Multi-Signal Complexity Analysis & Adaptive Model Cascading (Tier 1/2/3).
+ * 5. Dynamic Thinking Budget Allocation & Output Token Optimization.
+ * 6. FinOps Token & USD Savings Telemetry.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  *
  * Model Context Protocol (MCP) In-Process Tool Bridge & JSON-RPC Protocol
  *
@@ -9327,14 +9679,6 @@ var XAiProvider = class {
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
  * Vercel AI SDK LanguageModelV1 Implementation
- *
- * @author Roedy Rustam <roedyrustam.id@gmail.com>
- * @copyright 2026 Roedy Rustam
- * @license MIT
- */
-/**
- * SinapsAI - In-Process AI Gateway & Control Plane
- * Vercel AI SDK v1 Specification Types
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
@@ -9384,6 +9728,7 @@ exports.CloudflareKVStorage = CloudflareKVStorage;
 exports.CohereProvider = CohereProvider;
 exports.ContextCompressor = ContextCompressor;
 exports.D1Storage = D1Storage;
+exports.DEFAULT_CASCADE_TIERS = DEFAULT_CASCADE_TIERS;
 exports.DeepSeekProvider = DeepSeekProvider;
 exports.GEMINI_AVAILABILITY_FALLBACKS = GEMINI_AVAILABILITY_FALLBACKS;
 exports.GEMINI_DEFAULT_PRICING = GEMINI_DEFAULT_PRICING;
@@ -9395,6 +9740,7 @@ exports.GeminiProvider = GeminiProvider;
 exports.GroqProvider = GroqProvider;
 exports.HedgedExecutor = HedgedExecutor;
 exports.InMemoryStorage = InMemoryStorage;
+exports.LlmOptimizer = LlmOptimizer;
 exports.McpToolBridge = McpToolBridge;
 exports.MistralProvider = MistralProvider;
 exports.OPENROUTER_FREE_MODELS = OPENROUTER_FREE_MODELS;
@@ -9414,12 +9760,15 @@ exports.XAI_MODELS = XAI_MODELS;
 exports.XAiProvider = XAiProvider;
 exports.accumulateStream = accumulateStream;
 exports.canonicalizeJsonValue = canonicalizeJsonValue;
+exports.canonicalizeTools = canonicalizeTools;
 exports.convertPromptToSinapsMessages = convertPromptToSinapsMessages;
 exports.convertToolsAndMode = convertToolsAndMode;
 exports.cosineSimilarity = cosineSimilarity;
 exports.createOpenRouterFreeProvider = createOpenRouterFreeProvider;
 exports.createSinapsAI = createSinapsAI;
+exports.deduplicateSystemInstructions = deduplicateSystemInstructions;
 exports.estimateMessageTokens = estimateMessageTokens;
+exports.estimateTextTokens = estimateTextTokens;
 exports.estimateTotalTokens = estimateTotalTokens;
 exports.executeBatch = executeBatch;
 exports.extractBalancedJson = extractBalancedJson;
@@ -9430,6 +9779,7 @@ exports.formatPrometheusMetrics = formatPrometheusMetrics;
 exports.isOpenRouterFreeModel = isOpenRouterFreeModel;
 exports.linkAbortSignal = linkAbortSignal;
 exports.mapFinishReason = mapFinishReason;
+exports.minifyProsePreservingCode = minifyProsePreservingCode;
 exports.sinapsai = sinapsai;
 exports.tryExtractJson = tryExtractJson;
 //# sourceMappingURL=index.cjs.map

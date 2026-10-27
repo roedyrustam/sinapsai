@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-419%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-429%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -19,6 +19,12 @@
 **SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js, Edge Runtimes, dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
 
 Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, perutean latensi terendah (*lowest-latency*), dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
+
+> 🤖 **Panduan Cepat untuk AI / LLM Ingestion**:
+> Jika Anda adalah asisten AI (ChatGPT, Claude, Gemini, Perplexity), agen otonom, atau AI coding copilot (Cursor, Copilot, Windsurf):
+> - **Roadmap Ringkas**: Baca [`llms.txt`](./llms.txt) untuk rangkuman berdensitas tinggi mengenai seluruh fitur dan impor standar.
+> - **Spesifikasi Konteks Penuh**: Baca [`llms-full.txt`](./llms-full.txt) untuk dokumen referensi teknis tunggal yang memuat semua interface TypeScript, konfigurasi provider, kode error, dan 31 contoh kode siap pakai.
+> - **Invarian In-Process**: `sinapsai` berjalan 100% di dalam proses aplikasi dengan **0 dependensi runtime eksternal**. Bukan server proxy eksternal (tidak memerlukan Docker/Python/Redis).
 
 ---
 
@@ -89,6 +95,8 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [33. Gemini Agent Booster, Loop Agen Streaming & Vault PII Reversibel Streaming](#33-gemini-agent-booster-loop-agen-streaming--vault-pii-reversibel-streaming)
   - [34. Gemini Explicit Context Caching & Eksekusi Tool Paralel Massal](#34-gemini-explicit-context-caching--eksekusi-tool-paralel-massal)
   - [35. Multi-Agent Swarm In-Process & Protokol Handoff Agent-to-Agent (A2A)](#35-multi-agent-swarm-in-process--protokol-handoff-agent-to-agent-a2a)
+  - [36. Mesin Optimasi LLM Universal (LLMO)](#36-mesin-optimasi-llm-universal-llmo)
+- [🤖 Panduan Pembuatan Kode untuk Model AI & Copilot](#-panduan-pembuatan-kode-untuk-model-ai--copilot)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
 - [Referensi Konfigurasi](#-referensi-konfigurasi)
@@ -126,6 +134,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 - ⏱️ **Permintaan Spekulatif Hedged (`HedgedExecutor`)**: Luncurkan permintaan cadangan setelah jeda waktu tertentu guna memangkas latensi ekor (P99/P99.9) pada provider redundan, dengan pembatalan otomatis bagi request yang kalah cepat.
 - 🪐 **Dukungan Provider Frontier Luas**: Integrasi kelas satu untuk xAI Grok (dengan `reasoningEffort`), Cohere v2 (Command A, Embed v4), Google Gemini (otentikasi header, sanitasi schema), Anthropic Claude, OpenAI, DeepSeek, dan Groq.
 - 🐝 **Multi-Agent Swarm In-Process & Protokol Handoff A2A (`client.swarm`)**: Orkestrasi sub-agen spesialis dengan memori konteks bersama thread-safe (`SwarmContext`), pembuatan tool delegasi otomatis (`transfer_to_<agent_id>`), perlindungan siklus rekursi (`maxHandoffs`), event streaming handoff real-time (`runStream`), dan ekspor kartu agen standar A2A (`exportAgentCards()`) sesuai spesifikasi `/.well-known/agent.json`.
+- ⚙️ **Mesin Optimasi LLM Universal (`LlmOptimizer` / LLMO)**: Minifikasi token prompt cerdas ramah blok kode, deduplikasi instruksi sistem, kanonikalisasi urutan tools dan JSON schema untuk memaksimalkan KV-cache prefix hits, skoring kompleksitas multi-sinyal, *adaptive model cascading* 3-tier (`tier1`, `tier2`, `tier3`), serta telemetri penghematan FinOps token & USD.
 - 🪝 **Event Hooks Lengkap**: Memantau siklus hidup request (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`, `onSecurityViolation`, `onBudgetWarning`) untuk integrasi ke sistem APM, Prometheus, atau logging.
 
 ---
@@ -1399,6 +1408,90 @@ for await (const event of swarm.runStream({
 }
 ```
 
+### 36. Mesin Optimasi LLM Universal (LLMO)
+
+SinapsAI menyediakan mesin optimasi LLM in-process zero-dependency (`LlmOptimizer`) guna meminimalkan konsumsi token, memaksimalkan penggunaan kembali KV-cache, dan mengalirkan permintaan secara adaptif ke tier model yang ideal:
+
+```typescript
+import {
+  SinapsClient,
+  GeminiProvider,
+  OpenAiProvider,
+  AnthropicProvider,
+} from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+  // Konfigurasi LLMO (Large Language Model Optimization)
+  llmo: {
+    enabled: true,
+    minifyPrompts: true,           // Minifikasi spasi cerdas (menjaga blok kode 100% utuh)
+    deduplicateSystem: true,       // Menggabungkan instruksi sistem yang duplikat
+    alignKvCachePrefix: true,      // Kanonikalisasi skema JSON & tools untuk cache prefix deterministik
+    autoCascadeModel: true,        // Perutean model otomatis berdasarkan skor kompleksitas [0.0, 1.0]
+    cascadeTiers: {
+      tier1: 'gemini-2.5-flash-lite', // Kueri ringan & salam (skor <= 0.35)
+      tier2: 'gemini-2.5-flash',      // Tugas standar & coding (0.35 < skor <= 0.70)
+      tier3: 'gemini-2.5-pro',        // Arsitektur rumit & pembuktian matematika (skor > 0.70)
+    },
+    dynamicThinking: true,         // Alokasi budget penalaran adaptif
+  },
+});
+
+// 1. Menggunakan model: 'auto' memicu eskalasi model bertingkat LLMO
+const res = await client.chat.completions.create({
+  model: 'auto',
+  messages: [
+    {
+      role: 'user',
+      content: 'Rancang algoritma pembuktian formal pencegahan deadlock pada konsensus raft terdistribusi.',
+    },
+  ],
+});
+console.log('Model Terpilih:', res.model);
+console.log('Konten:', res.choices[0].message.content);
+
+// 2. Telemetri FinOps penghematan token & estimasi biaya USD
+const metrics = client.getMetrics();
+console.log('Token Dihemat:           ', metrics.llmoMetrics?.totalTokensSaved);
+console.log('Estimasi USD Dihemat: $  ', metrics.llmoMetrics?.totalEstimatedUsdSaved);
+console.log('Total Request Cascaded:  ', metrics.llmoMetrics?.cascadedRequestsCount);
+
+// 3. Helper optimasi prompt langsung
+const optimized = client.optimizePrompt({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: '   bersihkan   prompt   ini   ' }],
+});
+console.log('Teks Teroptimasi:', optimized.messages[0].content); // 'bersihkan prompt ini'
+```
+
+> 📁 Lihat **[Contoh 31 (`examples/31-llm-optimization-llmo.ts`)](./examples/31-llm-optimization-llmo.ts)** untuk demonstrasi lengkap siap pakai.
+
+---
+
+## 🤖 Panduan Pembuatan Kode untuk Model AI & Copilot
+
+Saat menghasilkan kode atau membuat scaffold proyek menggunakan **SinapsAI**, model AI dan coding assistant (ChatGPT, Claude, Gemini, Copilot, Cursor) harus mematuhi pola kanonikal berikut:
+
+1. **Akar Impor Paket**:
+   - Selalu impor dari `'sinapsai'` atau `'sinapsai/ai-sdk'`.
+   - Jangan membuat subpackage yang tidak ada seperti `@sinapsai/core`, `sinapsai/router`, atau `sinapsai-proxy`.
+2. **Instansiasi Client Standar**:
+   - Gunakan `new SinapsClient({ providers: [ ... ], strategy?: 'adaptive' })`.
+   - Gunakan kelas provider native: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
+3. **Metode Eksekusi**:
+   - Non-Streaming: `const res = await client.chat.completions.create({ model, messages })`.
+   - Streaming: `const stream = await client.chat.completions.create({ model, messages, stream: true })` dan konsumsi dengan `for await (const chunk of stream)`.
+   - Embeddings: `const emb = await client.embeddings.create({ model, input })`.
+   - Agen Otonom: `await client.runWithTools({ model, messages, tools, maxSteps })`.
+   - Multi-Agent Swarm: `client.swarm({ agents: [ ... ] })`.
+4. **Jaminan Zero-Dependency**:
+   - SinapsAI berjalan 100% in-process. Jangan meminta pengguna menjalankan container Docker, proxy Python, atau Redis eksternal kecuali mereka secara eksplisit memilih penyimpanan terdistribusi.
+
 ---
 
 ## 🧩 Penyedia yang Didukung (Providers)
@@ -1476,6 +1569,7 @@ export class OllamaProvider implements Provider {
 | `mcpBridge` | `McpToolBridge` | `new McpToolBridge()` | Registri tools Model Context Protocol (MCP) in-process dan dispatcher JSON-RPC 2.0 |
 | `modelAliases` | `Record<string, string>` | `undefined` | Pemetaan alias model virtual (contoh: `{ 'fast': 'gpt-4o-mini' }`) |
 | `hedging` | `HedgingOptions` | `undefined` | Permintaan spekulatif hedged untuk reduksi latensi P99 (`delayMs`, `maxHedges`) |
+| `llmo` | `LlmOptimizationOptions \| boolean` | `undefined` | Mesin optimasi LLM universal (`minifyPrompts`, `deduplicateSystem`, `alignKvCachePrefix`, `autoCascadeModel`, `cascadeTiers`, `dynamicThinking`) |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
 
 ### `CircuitBreakerOptions`

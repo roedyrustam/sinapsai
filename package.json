@@ -1,7 +1,7 @@
 {
   "name": "sinapsai",
-  "version": "2.11.0",
-  "description": "Zero-dependency in-process AI Gateway & Control Plane with Multi-Agent Swarm, A2A Handoff Protocol, MCP Tool Bridge, Autonomous Agent Loop, Circuit Breaker, Rate Limiting, PII/Security Guardrails, KV-Cache Tracking, and Unified LLM API for Node.js, Edge & TypeScript",
+  "version": "2.12.0",
+  "description": "Zero-dependency in-process AI Gateway & Control Plane with Universal LLM Optimization (LLMO), Multi-Agent Swarm, A2A Handoff Protocol, MCP Tool Bridge, Autonomous Agent Loop, Circuit Breaker, Rate Limiting, PII/Security Guardrails, KV-Cache Tracking, and Unified LLM API for Node.js, Edge & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -11,76 +11,171 @@
       "types": "./dist/index.d.ts",
       "workerd": "./dist/index.js",
       "edge-light": "./dist/index.js",
+      "bun": "./dist/index.js",
+      "deno": "./dist/index.js",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
     },
     "./ai-sdk": {
       "types": "./dist/ai-sdk/index.d.ts",
       "workerd": "./dist/ai-sdk/index.js",
       "edge-light": "./dist/ai-sdk/index.js",
+      "bun": "./dist/ai-sdk/index.js",
+      "deno": "./dist/ai-sdk/index.js",
       "import": "./dist/ai-sdk/index.js",
-      "require": "./dist/ai-sdk/index.cjs"
+      "require": "./dist/ai-sdk/index.cjs",
+      "default": "./dist/ai-sdk/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "ai-sdk": ["dist/ai-sdk/index.d.ts"]
     }
   },
+  "sideEffects": false,
   "files": [
     "dist",
     "README.md",
     "README.id.md",
     "CHANGELOG.md",
     "LICENSE",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    "llms.txt",
+    "llms-full.txt",
+    "BLUEPRINT.md",
+    "DOKUMENTASI.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "bun": ">=1.0.0",
+    "deno": ">=2.0.0"
+  },
+  "packageManager": "npm@10.9.2",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/roedyrustam"
+    }
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/roedyrustam/sinapsai.git"
+    "url": "git+https://github.com/roedyrustam/sinapsai.git",
+    "directory": "."
   },
   "bugs": {
-    "url": "https://github.com/roedyrustam/sinapsai/issues"
+    "url": "https://github.com/roedyrustam/sinapsai/issues",
+    "email": "roedyrustam.id@gmail.com"
   },
   "homepage": "https://github.com/roedyrustam/sinapsai#readme",
+  "author": {
+    "name": "Roedy Rustam",
+    "email": "roedyrustam.id@gmail.com",
+    "url": "https://github.com/roedyrustam"
+  },
+  "contributors": [
+    {
+      "name": "Roedy Rustam",
+      "email": "roedyrustam.id@gmail.com",
+      "url": "https://github.com/roedyrustam"
+    }
+  ],
+  "license": "MIT",
   "keywords": [
     "ai",
     "llm",
+    "llmo",
+    "llm-optimization",
+    "geo",
+    "generative-engine-optimization",
+    "prompt-optimization",
+    "model-cascading",
     "ai-gateway",
     "llm-gateway",
+    "control-plane",
     "circuit-breaker",
     "failover",
     "load-balancer",
     "mcp",
     "model-context-protocol",
     "ai-agents",
+    "ai-swarm",
+    "multi-agent",
+    "agent-to-agent",
+    "a2a",
+    "autonomous-agent",
     "vercel-ai-sdk",
+    "vercel-ai-sdk-adapter",
     "rate-limiter",
+    "sliding-window-counter",
     "prompt-caching",
+    "context-caching",
+    "kv-cache",
+    "cache-prefix-alignment",
     "pii-redaction",
+    "pii-guardrails",
+    "reversible-tokenization",
     "security-guardrails",
+    "prompt-injection-defense",
+    "finops",
+    "budget-guardrails",
+    "hedged-requests",
+    "tail-latency-reduction",
+    "p99-latency",
     "opentelemetry",
     "prometheus",
+    "openmetrics",
     "embeddings",
     "vector-search",
+    "semantic-cache",
+    "context-compressor",
+    "thinking-budget",
+    "reasoning-tokens",
+    "deep-reasoning",
     "openai",
     "anthropic",
+    "claude",
+    "claude-3-7",
     "gemini",
+    "gemini-4",
     "deepseek",
+    "deepseek-r1",
     "ollama",
     "groq",
     "openrouter",
     "xai",
+    "grok",
     "cohere",
     "mistral",
     "edge",
     "cloudflare-workers",
+    "cloudflare-kv",
+    "cloudflare-d1",
+    "redis",
+    "upstash",
+    "valkey",
     "bun",
     "deno",
     "fault-tolerance",
     "in-memory",
-    "control-plane",
+    "zero-dependency",
     "typescript",
     "developer-tools",
     "resilience"
   ],
-  "author": "Roedy Rustam",
-  "license": "MIT",
+  "peerDependencies": {
+    "ai": ">=3.0.0 || >=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    }
+  },
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration",
     "dev": "tsup --watch",

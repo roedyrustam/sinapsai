@@ -33,6 +33,7 @@ Menciptakan "Control Plane" AI in-process berbasis NPM package (TypeScript/Node.
 - **Prototype Pollution Immunity**: Sanitasi atribut berbahaya (`__proto__`, `constructor`, `prototype`) saat kanonikalisasi skema JSON tools di `GeminiAgentBooster`.
 - **FinOps Spend & Token Guardrails (`BudgetGuardrails`)**: Pembatasan batas pengeluaran kumulatif USD (`maxCostUsd`) dan volume token (`maxTotalTokens`) dengan mode pemblokiran keras (`action: 'block'` melempar `BudgetExceededError`) atau peringatan lembut (`action: 'warn'`).
 - **In-Process Dynamic Context Compressor (`ContextCompressor`)**: Estimasi token zero-dependency (~4 chars per token) dan pemotongan cerdas (`sliding-window` & `middle-out`) yang mengamankan pesan sistem dan mempreservasi grup pemanggilan fungsi tool secara atomik.
+- **Universal LLM Optimization Engine (`LlmOptimizer` / LLMO)**: Optimasi prompt minification cerdas ramah blok kode (code-block preserving), deduplikasi instruksi sistem, kanonikalisasi urutan tools dan JSON schema untuk memaksimalkan KV-cache prefix hits, skoring kompleksitas multi-sinyal [0.0, 1.0], dan *adaptive model cascading* 3-tier (`tier1` flash/mini, `tier2` standard, `tier3` deep reasoning) dilengkapi telemetri FinOps token & USD savings (`llmoMetrics`).
 
 ### C. Developer Experience & Ecosystem
 - **Official Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Implementasi resmi spesifikasi `LanguageModelV1` dan `EmbeddingModelV1` murni tanpa dependensi eksternal, mendukung `streamText`, `generateText`, `streamObject`, `embed`, dan `embedMany`.
@@ -52,4 +53,4 @@ Menciptakan "Control Plane" AI in-process berbasis NPM package (TypeScript/Node.
 - **Zero Runtime Dependencies**: Murni memanfaatkan standar runtime web (`fetch`, Web Streams, EventSource SSE).
 - **Edge Runtime Certified**: Kompatibel 100% di Node.js 18+, Bun, Deno, dan Cloudflare Workers.
 - **Type Safety**: TypeScript 100% strict mode dengan isolated declarations dan types definition lengkap.
-- **Verifikasi Kualitas**: 419/419 unit & integration tests lulus di 35 test suites (100% pass rate), 100% Biome clean, dan 30 contoh siap pakai di `examples/`.
+- **Verifikasi Kualitas**: 429/429 unit & integration tests lulus di 36 test suites (100% pass rate), 100% Biome clean, dan 31 contoh siap pakai di `examples/`, serta manifesto standar LLMO (`llms.txt` & `llms-full.txt`).

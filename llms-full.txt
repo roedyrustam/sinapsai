@@ -1,0 +1,446 @@
+# SinapsAI — Comprehensive Technical Specification & Full LLM Reference (llms-full.txt)
+
+> **Version**: 2.12.0  
+> **Author**: Roedy Rustam <roedyrustam.id@gmail.com>  
+> **Copyright**: 2026 Roedy Rustam. All Rights Reserved.  
+> **License**: MIT  
+> **Repository**: https://github.com/roedyrustam/sinapsai  
+> **Package**: `npm install sinapsai`
+
+---
+
+## 1. Executive Summary & Design Invariants
+
+SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Control Plane for TypeScript, Node.js (18+), Bun (1.0+), Deno (2.x), and Edge runtimes (Cloudflare Workers, Vercel Edge).
+
+### Invariants:
+1. **Zero External Runtime Dependencies**: 100% written with native Web Standards (`fetch`, `AbortController`, `EventSource` SSE, Web Streams, Web Crypto).
+2. **Sub-5ms Execution Overhead**: In-memory routing, circuit breaker evaluation, guardrail scanning, and token estimation execute with <5ms overhead (<0.5ms for cache hits).
+3. **100% In-Process Privacy**: No payloads, system prompts, API keys, or telemetry data are ever routed through external third-party telemetry servers.
+4. **Resilience by Default**: Built-in automated failover, hierarchical model-level fallback chains, exponential retries with jitter, and speculative hedged requests to crush P99 tail latencies.
+5. **Universal Standardization**: Connects to 10 major LLM providers using standard OpenAI-compatible Chat Completions, Embeddings, and Function Calling format.
+
+---
+
+## 2. System Architecture
+
+```
+[ Your Application / Agent ]
+             │
+             ▼
+  ┌────────────────────────────────────────────────────────┐
+  │              SinapsClient (Control Plane)              │
+  ├────────────────────────────────────────────────────────┤
+  │ 1. SecurityGuardrails (Injection, Jailbreak, ReDoS)    │
+  │ 2. PIIGuardrails (Reversible Tokenization Vault)       │
+  │ 3. ContextCompressor (Sliding-Window / Middle-Out)     │
+  │ 4. LlmOptimizer (LLMO: Minify, KV-Cache, Cascade)      │
+  │ 5. GatewayRateLimiter (Sliding Window RPM / TPM)       │
+  │ 6. Model Alias Resolver (Virtual Names -> Target ID)   │
+  └──────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+  ┌────────────────────────────────────────────────────────┐
+  │                 Router & Resilience                    │
+  ├────────────────────────────────────────────────────────┤
+  │ • Multi-Strategy Dynamic Routing:                      │
+  │   - 'adaptive' / 'smart-hybrid'                        │
+  │   - 'lowest-cost' (Dual-pricing prompt vs completion)  │
+  │   - 'lowest-latency' (Moving average latency)          │
+  │   - 'load-balance' (Round-robin)                       │
+  │   - 'failover' (Priority order)                        │
+  │ • In-Process CircuitBreaker (CLOSED, OPEN, HALF_OPEN)  │
+  │ • Speculative HedgedExecutor (Delay-based backup calls)│
+  │ • Semantic & Exact Prompt Caches                       │
+  │ • BudgetGuardrails (FinOps USD & Token Caps)           │
+  └──────────────────────────┬─────────────────────────────┘
+                             │
+            ┌────────────────┴────────────────┐
+            ▼                                 ▼
+   [ Native Providers ]              [ Advanced Modules ]
+   - OpenAI                          - McpToolBridge (MCP JSON-RPC)
+   - Anthropic Claude                - AgentSwarm & A2A Handoff
+   - Google Gemini                   - GeminiAgentBooster
+   - DeepSeek                        - sinapsai/ai-sdk Adapter
+   - Groq LPU                        - OpenTelemetry / Prometheus
+   - OpenRouter
+   - Mistral AI
+   - Ollama Local
+   - xAI Grok
+   - Cohere v2
+```
+
+---
+
+## 3. Core API Reference
+
+### 3.1 Initializing `SinapsClient`
+
+```typescript
+import {
+  SinapsClient,
+  OpenAiProvider,
+  AnthropicProvider,
+  GeminiProvider,
+  GroqProvider,
+  DeepSeekProvider,
+  XAiProvider,
+  CohereProvider,
+  MistralProvider,
+  OllamaProvider,
+  OpenRouterProvider,
+  InMemoryStorage,
+  CloudflareKVStorage,
+  D1Storage,
+  RedisStorage,
+} from 'sinapsai';
+
+const client = new SinapsClient({
+  // Routing strategy: 'adaptive' | 'lowest-cost' | 'lowest-latency' | 'failover' | 'load-balance'
+  strategy: 'adaptive',
+
+  // Providers registered in order
+  providers: [
+    new GeminiProvider({
+      apiKey: process.env.GEMINI_API_KEY!,
+      defaultModel: 'gemini-2.5-flash',
+    }),
+    new OpenAiProvider({
+      apiKey: process.env.OPENAI_API_KEY!,
+      defaultModel: 'gpt-4o-mini',
+    }),
+    new AnthropicProvider({
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+      defaultModel: 'claude-3-7-sonnet-20250219',
+      promptCaching: 'auto', // Inject ephemeral cache breakpoints
+    }),
+    new GroqProvider({
+      apiKey: process.env.GROQ_API_KEY!,
+      defaultModel: 'llama-3.3-70b-versatile',
+    }),
+  ],
+
+  // 1. In-Process Circuit Breaker
+  circuitBreaker: {
+    failureThreshold: 3,
+    resetTimeoutMs: 30000,
+    recoverySuccessThreshold: 2,
+  },
+
+  // 2. Speculative Hedging for Tail Latency (P99)
+  hedging: {
+    enabled: true,
+    delayMs: 250, // Fire backup after 250ms
+  },
+
+  // 3. Universal LLM Optimization Engine (LLMO)
+  llmo: {
+    enabled: true,
+    minifyPrompts: true,           // Strip whitespace preserving code blocks
+    deduplicateSystem: true,       // Merge repeated system instructions
+    alignKvCachePrefix: true,      // Canonicalize tool & JSON schemas
+    autoCascadeModel: true,        // Dynamic model escalation based on complexity
+    cascadeTiers: {
+      tier1: 'gemini-2.5-flash-lite',
+      tier2: 'gemini-2.5-flash',
+      tier3: 'gemini-2.5-pro',
+    },
+    dynamicThinking: true,         // Allocate auto thinking budgets
+  },
+
+  // 4. In-Process Security & Prompt Injection Defense
+  securityGuardrails: {
+    enabled: true,
+    action: 'block', // 'block' | 'sanitize' | 'warn'
+  },
+
+  // 5. In-Process PII Guardrails with Reversible Tokenization Vault
+  piiGuardrails: {
+    enabled: true,
+    reversible: true, // Automatically restores real PII in responses
+  },
+
+  // 6. Sliding-Window Gateway Rate Limiting (RPM / TPM)
+  rateLimiting: {
+    defaultRule: {
+      requestsPerMinute: 600,
+      tokensPerMinute: 200000,
+    },
+    modelRules: {
+      'gemini-2.5-pro': { requestsPerMinute: 60 },
+    },
+  },
+
+  // 7. FinOps Spend & Token Limits
+  budget: {
+    maxCostUsd: 50.0,
+    maxTotalTokens: 5000000,
+    action: 'block', // Throws BudgetExceededError
+  },
+
+  // 8. Context Compression
+  contextCompression: {
+    maxPromptTokens: 8192,
+    strategy: 'sliding-window', // 'sliding-window' | 'middle-out'
+  },
+
+  // 9. Model Aliases
+  modelAliases: {
+    fast: 'gemini-2.5-flash-lite',
+    smart: 'claude-3-7-sonnet-20250219',
+    cheap: 'groq/llama-3.3-70b-versatile',
+  },
+});
+```
+
+### 3.2 Chat Completions (Non-Streaming)
+
+```typescript
+const response = await client.chat.completions.create({
+  model: 'auto', // LLMO dynamically selects optimal model tier
+  messages: [
+    { role: 'system', content: 'You are an expert engineer.' },
+    { role: 'user', content: 'What is consensus in distributed computing?' },
+  ],
+  temperature: 0.2,
+  thinkingBudget: 'auto', // Universal reasoning allocation
+});
+
+console.log(response.choices[0].message.content);
+console.log('Provider used:', response.provider);
+console.log('Usage:', response.usage);
+```
+
+### 3.3 Chat Completions (Streaming SSE)
+
+```typescript
+const stream = await client.chat.completions.create({
+  model: 'fast',
+  messages: [{ role: 'user', content: 'Stream an explanation of Paxos.' }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  const delta = chunk.choices[0]?.delta?.content || '';
+  process.stdout.write(delta);
+  if (chunk.choices[0]?.delta?.reasoning_content) {
+    process.stderr.write(`[Thinking]: ${chunk.choices[0].delta.reasoning_content}`);
+  }
+}
+```
+
+---
+
+## 4. Universal LLM Optimization Engine (LLMO)
+
+SinapsAI includes a first-class, zero-dependency LLM Optimization Engine (`LlmOptimizer`) accessible via `client.llmo`, `client.optimizePrompt()`, or configured directly via `options.llmo`.
+
+### 4.1 Features & Capabilities:
+1. **Code-Block Aware Prompt Minification**:
+   - Removes redundant multiple spaces, horizontal tabs, and line-trailing whitespace in prose.
+   - Preserves code blocks (````` ``` ... ``` ````) 100% verbatim, keeping indentation and syntax intact.
+   - Collapses 3+ consecutive newlines to 2, maintaining clear markdown paragraphs.
+   - Two modes: `'lossless'` (zero semantic alteration) and `'aggressive'` (strips conversational fluff like "could you please help me to").
+2. **System Instruction Deduplication**:
+   - Merges multiple system messages across conversational history, stripping redundant rule statements.
+3. **Deterministic KV-Cache Prefix Alignment**:
+   - Lexicographically sorts tool definitions and JSON schema parameter properties recursively.
+   - Guarantees byte-identical prefix serialization across requests, unlocking 75%–90% prompt caching discounts across Anthropic, Gemini, OpenAI, and DeepSeek.
+4. **Adaptive Multi-Signal Model Cascading**:
+   - Analyzes prompt complexity score (0.0 to 1.0) using code/math indicators, reasoning keywords, turn depth, and tool history.
+   - Automatically escalates or downgrades queries to configured model tiers:
+     - `tier1`: Fast/Light (complexity <= 0.35, e.g. `gemini-2.5-flash-lite`, `gpt-4o-mini`)
+     - `tier2`: Standard (0.35 < complexity <= 0.70, e.g. `gemini-2.5-flash`, `gpt-4o`)
+     - `tier3`: Deep Reasoning (complexity > 0.70, e.g. `gemini-2.5-pro`, `claude-3-7-sonnet`, `o3-mini`)
+5. **Dynamic Thinking Budget Allocation**:
+   - Recommends 0 tokens for Tier 1, 2048 for Tier 2, and 8192 for Tier 3.
+6. **FinOps Token & USD Savings Telemetry**:
+   - Accessible via `client.getMetrics().llmoMetrics`:
+     - `totalOptimizedRequests`
+     - `totalTokensSaved`
+     - `totalEstimatedUsdSaved`
+     - `averageCompressionRatio`
+     - `cascadedRequestsCount`
+
+---
+
+## 5. Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
+
+SinapsAI provides an in-process Multi-Agent Swarm orchestrator with zero external dependencies (`client.swarm`).
+
+```typescript
+const swarm = client.swarm({
+  agents: [
+    {
+      id: 'triage',
+      name: 'Triage Agent',
+      role: 'Classify user requests and route to specialists',
+      instructions: 'Analyze request. If coding needed, transfer to coder. If security, transfer to auditor.',
+      handoffTargets: ['coder', 'auditor'],
+      model: 'gemini-2.5-flash',
+    },
+    {
+      id: 'coder',
+      name: 'Senior Developer',
+      role: 'Implements production TypeScript code',
+      instructions: 'Write production-grade code. Consult auditor for security reviews.',
+      handoffTargets: ['auditor'],
+      model: 'claude-3-7-sonnet-20250219',
+    },
+    {
+      id: 'auditor',
+      name: 'Security Auditor',
+      role: 'Audits vulnerabilities and cryptographic budgets',
+      instructions: 'Inspect for security vulnerabilities and verify invariants.',
+      model: 'gemini-2.5-pro',
+    },
+  ],
+  defaultAgentId: 'triage',
+  maxHandoffs: 5, // Prevents ping-pong recursion loops
+});
+
+// Non-streaming execution
+const result = await swarm.run('Review my token generation function');
+console.log('Final Agent:', result.finalAgentId);
+console.log('Result:', result.content);
+console.log('Total Swarm Cost:', result.totalCostUsd);
+
+// Real-time streaming events
+for await (const event of swarm.runStream('Audit this system')) {
+  if (event.type === 'handoff') {
+    console.log(`[Handoff]: ${event.fromAgentId} -> ${event.toAgentId} (Reason: ${event.reason})`);
+  } else if (event.type === 'text-delta') {
+    process.stdout.write(event.delta);
+  }
+}
+
+// Export open A2A Agent Cards (/.well-known/agent.json spec)
+const agentCards = swarm.exportAgentCards();
+console.log(JSON.stringify(agentCards, null, 2));
+```
+
+---
+
+## 6. Model Context Protocol (MCP) Tool Bridge
+
+SinapsAI features a complete in-process MCP v1.x Tool Registry and Autonomous Agent Loop (`client.mcp` and `client.runWithTools`):
+
+```typescript
+// 1. Register a tool
+client.mcp.registerTool({
+  name: 'get_weather',
+  description: 'Retrieves current weather conditions for a city',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      city: { type: 'string', description: 'City name' },
+    },
+    required: ['city'],
+  },
+  handler: async ({ city }) => ({
+    city,
+    temperatureC: 22,
+    condition: 'Sunny',
+  }),
+});
+
+// 2. Autonomous Agent Multi-Step Loop
+const result = await client.runWithTools({
+  model: 'gemini-2.5-flash',
+  messages: [{ role: 'user', content: 'What is the weather in Tokyo?' }],
+  maxSteps: 5,
+  onStep: (step) => {
+    console.log(`Step ${step.stepIndex} executed ${step.toolCalls.length} tools`);
+  },
+});
+console.log(result.finalResponse.choices[0].message.content);
+
+// 3. MCP JSON-RPC 2.0 Dispatcher (for external stdio/SSE workers)
+const rpcResponse = await client.mcp.handleJsonRpc({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'tools/call',
+  params: {
+    name: 'get_weather',
+    arguments: { city: 'Jakarta' },
+  },
+});
+```
+
+---
+
+## 7. Vercel AI SDK Adapter (`sinapsai/ai-sdk`)
+
+SinapsAI can be plugged directly into the Vercel AI SDK (`ai`):
+
+```typescript
+import { createSinaps } from 'sinapsai/ai-sdk';
+import { generateText, streamText } from 'ai';
+
+const sinaps = createSinaps({
+  strategy: 'adaptive',
+  providers: [
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY }),
+  ],
+});
+
+// LanguageModelV1 integration
+const { text } = await generateText({
+  model: sinaps.languageModel('gemini-2.5-flash'),
+  prompt: 'Write a poem about distributed systems',
+});
+
+// EmbeddingModelV1 integration
+const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEmbed({
+  values: ['Semantic search text'],
+});
+```
+
+---
+
+## 8. Catalog of All 31 Examples
+
+| Example File | Description |
+|---|---|
+| `examples/01-basic-chat.ts` | Basic Chat Completions with OpenAI-compatible interface |
+| `examples/02-streaming-chat.ts` | Real-time Server-Sent Events (SSE) streaming via async iterators |
+| `examples/03-multi-provider-failover.ts` | Circuit breaker tripping and automatic provider failover |
+| `examples/04-round-robin-load-balancer.ts` | Multi-key and multi-provider round-robin load balancing |
+| `examples/05-lowest-cost-routing.ts` | Dual-pricing cost optimization per input/output token |
+| `examples/06-tool-calling.ts` | OpenAI-compatible function calling & schema mapping |
+| `examples/07-structured-output.ts` | Strict JSON schema extraction and structured output validation |
+| `examples/08-edge-runtime-cloudflare.ts` | Deployment in Cloudflare Workers and Vercel Edge runtimes |
+| `examples/09-unified-embeddings.ts` | Vector embeddings with multi-provider failover and caching |
+| `examples/10-adaptive-rate-limiting.ts` | Proactive rate-limit throttling from response headers |
+| `examples/11-in-process-telemetry.ts` | Cumulative metrics, latency averages, and USD spend tracking |
+| `examples/12-groq-lightning-fast-reasoning.ts` | Groq LPU execution with deep reasoning extraction |
+| `examples/13-superintelligence-latency-and-reasoning.ts` | Dynamic lowest-latency routing and universal reasoning budget |
+| `examples/14-semantic-caching-and-fallbacks.ts` | Cosine similarity semantic caching and model fallbacks |
+| `examples/15-concurrent-batch-processing.ts` | Fail-soft high-throughput concurrent batch worker pool |
+| `examples/16-vercel-ai-sdk-adapter.ts` | Official Vercel AI SDK (`ai`) integration |
+| `examples/17-distributed-storage-adapters.ts` | Redis, Cloudflare KV, and Cloudflare D1 state synchronization |
+| `examples/18-adaptive-smart-hybrid-routing.ts` | Multi-factor Laplace reliability, latency, and cost routing |
+| `examples/19-reversible-pii-vault.ts` | In-process PII detection and reversible tokenization vault |
+| `examples/20-security-guardrails-prompt-injection.ts` | Prompt injection, jailbreak, and delimiter hijacking defense |
+| `examples/21-virtual-model-aliases.ts` | Dynamic virtual model alias resolution (`fast`, `smart`) |
+| `examples/22-streaming-tool-accumulator.ts` | Reconstruction of streamed SSE chunks into complete objects |
+| `examples/23-context-compression-and-trimming.ts` | Dynamic conversation pruning with atomic tool preservation |
+| `examples/24-finops-budget-guardrails.ts` | Hard USD and token spending caps with blocking errors |
+| `examples/25-speculative-hedged-requests.ts` | Speculative hedging to eliminate P99 tail latencies |
+| `examples/26-gateway-rate-limiting-and-metrics-export.ts` | Sliding-window RPM/TPM and Prometheus/OpenTelemetry export |
+| `examples/27-mcp-tool-bridge-and-agent-loop.ts` | In-process MCP tool bridge and autonomous agent loop |
+| `examples/28-gemini-agent-booster-and-streaming-agent.ts` | Dynamic thinking budget allocation & streaming MCP agent |
+| `examples/29-gemini-context-caching-and-parallel-agents.ts` | Explicit Google context caching API and parallel tool calls |
+| `examples/30-multi-agent-swarm-and-a2a-handoff.ts` | Multi-agent swarm, A2A handoff protocol, and Agent Cards |
+| `examples/31-llm-optimization-llmo.ts` | Universal LLMO: minification, KV-cache prefixing, cascading |
+
+---
+
+## 9. Verification & Quality Metrics
+
+- **Total Test Suites**: 36
+- **Total Unit & Integration Tests**: 429 passing (100% pass rate)
+- **Linter Status**: 100% compliant with Biome v2 (0 errors, 0 warnings)
+- **TypeScript**: Strict mode with declarations emitted
+- **Runtime Dependencies**: `0` (Zero external dependencies)

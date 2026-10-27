@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-419%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-429%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -19,6 +19,12 @@
 **SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js, Edge Runtimes, and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, and custom endpoints) through a single, standardized **Unified API**.
 
 Engineered with a **100% in-process / in-memory** architecture, SinapsAI eliminates downtime via automatic failover, load balancing, lowest-latency routing, and a resilient **Circuit Breaker**—without requiring intermediary proxy servers, external Redis dependencies, or adding measurable latency (<10ms overhead).
+
+> 🤖 **LLM / AI Agent Quick Ingest**:
+> If you are an AI assistant (ChatGPT, Claude, Gemini, Perplexity), autonomous agent, or coding assistant (Cursor, Copilot, Windsurf):
+> - **Compact Roadmap**: Read [`llms.txt`](./llms.txt) for a high-density, concise summary of all features and standard imports.
+> - **Complete Context Specification**: Read [`llms-full.txt`](./llms-full.txt) for the exhaustive single-file reference document containing all TypeScript interfaces, provider configs, error codes, and 31 zero-slop examples.
+> - **In-Process Guarantee**: `sinapsai` is 100% in-process with **0 runtime dependencies**. It is NOT an external proxy server (no Docker/Python/Redis required).
 
 ---
 
@@ -87,6 +93,8 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [33. Gemini Agent Booster, Streaming Agent Loop & Streaming Reversible PII Vault](#33-gemini-agent-booster-streaming-agent-loop--streaming-reversible-pii-vault)
   - [34. Gemini Explicit Context Caching & Massively Parallel Tool Execution](#34-gemini-explicit-context-caching--massively-parallel-tool-execution)
   - [35. In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol](#35-in-process-multi-agent-swarm--agent-to-agent-a2a-handoff-protocol)
+  - [36. Universal LLM Optimization Engine (LLMO)](#36-universal-llm-optimization-engine-llmo)
+- [🤖 AI & LLM Code Generation Guidelines](#-ai--llm-code-generation-guidelines)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
 - [Configuration Reference](#-configuration-reference)
@@ -124,6 +132,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
 - ⏱️ **Speculative Hedged Requests (`HedgedExecutor`)**: Launch backup requests after a configured delay to eliminate tail latency (P99/P99.9) across redundant providers, aborting slower calls automatically.
 - 🪐 **Extensible Frontier Providers**: First-class integration for xAI Grok (with `reasoningEffort`), Cohere v2 (Command A, Embed v4), Google Gemini (header auth, schema sanitization), Anthropic Claude, OpenAI, DeepSeek, and Groq.
 - 🐝 **In-Process Multi-Agent Swarms & A2A Handoff Protocol (`client.swarm`)**: Coordinate specialized domain agents with thread-safe shared context memory (`SwarmContext`), automated dynamic handoff tool generation (`transfer_to_<agent_id>`), ping-pong recursion protection (`maxHandoffs`), streaming real-time handoff events (`runStream`), and standard A2A Agent Card export (`exportAgentCards()`) conforming to `/.well-known/agent.json`.
+- ⚙️ **Universal LLM Optimization Engine (`LlmOptimizer` / LLMO)**: Code-block preserving prompt token minification, system instruction deduplication, deterministic KV-cache prefix alignment, 3-tier complexity-based model cascading (`tier1`, `tier2`, `tier3`), dynamic reasoning allocation, and FinOps savings telemetry.
 - 🪝 **Rich Event Hooks**: Observe crucial gateway events (`onSuccess`, `onStreamSuccess`, `onFallback`, `onModelFallback`, `onSemanticCacheHit`, `onCircuitOpen`, `onCircuitClose`, `onRateLimit`, `onRetry`, `onSecurityViolation`, `onBudgetWarning`) for APM metrics and custom alerting.
 
 ---
@@ -1395,6 +1404,90 @@ for await (const event of swarm.runStream({
 }
 ```
 
+### 36. Universal LLM Optimization Engine (LLMO)
+
+SinapsAI includes an in-process, zero-dependency LLM Optimization Engine (`LlmOptimizer`) to minimize prompt token overhead, maximize KV-cache reuse, and dynamically route prompts to the ideal model tier based on multi-signal complexity:
+
+```typescript
+import {
+  SinapsClient,
+  GeminiProvider,
+  OpenAiProvider,
+  AnthropicProvider,
+} from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+  ],
+  // LLM Optimization (LLMO) Configuration
+  llmo: {
+    enabled: true,
+    minifyPrompts: true,           // Whitespace minification preserving code blocks verbatim
+    deduplicateSystem: true,       // Merges duplicate system instructions across turns
+    alignKvCachePrefix: true,      // Canonicalizes tools and schemas for deterministic KV caching
+    autoCascadeModel: true,        // Automatically routes based on prompt complexity score [0.0, 1.0]
+    cascadeTiers: {
+      tier1: 'gemini-2.5-flash-lite', // Simple queries & greetings (score <= 0.35)
+      tier2: 'gemini-2.5-flash',      // Standard tasks & coding (0.35 < score <= 0.70)
+      tier3: 'gemini-2.5-pro',        // Complex architecture & math proofs (score > 0.70)
+    },
+    dynamicThinking: true,         // Automatically assigns optimal thinking budgets
+  },
+});
+
+// 1. Passing model: 'auto' triggers LLMO complexity-based model cascading
+const res = await client.chat.completions.create({
+  model: 'auto',
+  messages: [
+    {
+      role: 'user',
+      content: 'Architect a formal proof for distributed deadlock prevention in concurrent raft algorithms.',
+    },
+  ],
+});
+console.log('Dispatched Model:', res.model);
+console.log('Content:', res.choices[0].message.content);
+
+// 2. Telemetry tracking tokens and USD saved
+const metrics = client.getMetrics();
+console.log('Tokens Saved:        ', metrics.llmoMetrics?.totalTokensSaved);
+console.log('Estimated USD Saved: $', metrics.llmoMetrics?.totalEstimatedUsdSaved);
+console.log('Cascaded Requests:   ', metrics.llmoMetrics?.cascadedRequestsCount);
+
+// 3. Direct prompt optimization helper
+const optimized = client.optimizePrompt({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: '   clean   this   prompt   ' }],
+});
+console.log('Optimized Text:', optimized.messages[0].content); // 'clean this prompt'
+```
+
+> 📁 See **[Example 31 (`examples/31-llm-optimization-llmo.ts`)](./examples/31-llm-optimization-llmo.ts)** for the complete runnable implementation.
+
+---
+
+## 🤖 AI & LLM Code Generation Guidelines
+
+When generating code or scaffolding projects using **SinapsAI**, AI models and coding assistants (ChatGPT, Claude, Gemini, Copilot, Cursor) should strictly follow these canonical patterns:
+
+1. **Package Import Root**:
+   - Always import from `'sinapsai'` or `'sinapsai/ai-sdk'`.
+   - Never hallucinate subpackages like `@sinapsai/core`, `sinapsai/router`, or `sinapsai-proxy`.
+2. **Standard Client Instantiation**:
+   - Instantiate `new SinapsClient({ providers: [ ... ], strategy?: 'adaptive' })`.
+   - Provide concrete native provider classes: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
+3. **Execution Methods**:
+   - Non-Streaming: `const res = await client.chat.completions.create({ model, messages })`.
+   - Streaming: `const stream = await client.chat.completions.create({ model, messages, stream: true })` and consume via `for await (const chunk of stream)`.
+   - Embeddings: `const emb = await client.embeddings.create({ model, input })`.
+   - Autonomous Agents: `await client.runWithTools({ model, messages, tools, maxSteps })`.
+   - Multi-Agent Swarms: `client.swarm({ agents: [ ... ] })`.
+4. **Zero-Dependency Guarantee**:
+   - SinapsAI is 100% in-process. Do NOT tell users to start a Docker container, Python proxy, or external Redis unless they explicitly choose distributed storage.
+
 ---
 
 ## 🧩 Supported Providers
@@ -1472,6 +1565,7 @@ export class OllamaProvider implements Provider {
 | `mcpBridge` | `McpToolBridge` | `new McpToolBridge()` | In-process Model Context Protocol (MCP) tool registry and JSON-RPC 2.0 dispatcher |
 | `modelAliases` | `Record<string, string>` | `undefined` | Virtual model alias mapping (e.g. `{ 'fast': 'gpt-4o-mini' }`) |
 | `hedging` | `HedgingOptions` | `undefined` | Speculative hedged requests for P99 tail latency reduction (`delayMs`, `maxHedges`) |
+| `llmo` | `LlmOptimizationOptions \| boolean` | `undefined` | Universal LLM Optimization engine (`minifyPrompts`, `deduplicateSystem`, `alignKvCachePrefix`, `autoCascadeModel`, `cascadeTiers`, `dynamicThinking`) |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |
 
 ### `CircuitBreakerOptions`

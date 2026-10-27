@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.12.0] - 2026-10-28
+### Added
+- **Universal LLM Optimization Engine (`LlmOptimizer`, `client.llmo`, `client.optimizePrompt`)**:
+  - **Code-Block Aware Prompt Minification (`minifyProsePreservingCode`)**: Intelligently trims excessive horizontal spacing, tabs, and multi-line breaks while leaving indented markdown code blocks (````` ``` ... ``` ````) 100% untouched. Supports `lossless` and `aggressive` conversational fluff pruning modes.
+  - **System Instruction Deduplication (`deduplicateSystemInstructions`)**: Automatically aggregates and deduplicates repeated rule statements across multiple system messages in conversational history.
+  - **Deterministic KV-Cache Prefix Alignment (`canonicalizeTools`)**: Lexicographically sorts tool definitions and JSON schema parameters recursively across all providers, guaranteeing byte-identical prefix token hashes for maximum KV-cache hit affinity.
+  - **Adaptive Multi-Signal Complexity Analysis & Model Cascading (`analyzeComplexity`, `autoCascadeModel`)**:
+    - Analyzes math/code blocks, deep reasoning keywords, turn depth, and tool history to compute a normalized complexity score [0.0, 1.0].
+    - Automatically routes incoming prompts to the optimal tier: `tier1` (Fast/Light e.g. `gemini-2.5-flash-lite`), `tier2` (Standard e.g. `gemini-2.5-flash`), or `tier3` (Deep Reasoning e.g. `gemini-2.5-pro`, `claude-3-7-sonnet`).
+  - **Dynamic Thinking Budget Allocation**: Computes optimal reasoning token budgets (0, 2048, 8192) based on prompt complexity signals.
+  - **FinOps Savings Telemetry (`llmoMetrics`)**: Emits `totalOptimizedRequests`, `totalTokensSaved`, `totalEstimatedUsdSaved`, `averageCompressionRatio`, and `cascadedRequestsCount` via `client.getMetrics().llmoMetrics`.
+- **Standard LLMO & GEO Manifests (`llms.txt` & `llms-full.txt`)**:
+  - Published concise and exhaustive markdown specifications conforming to the open `llms.txt` standard for instantaneous, zero-hallucination ingestion by AI search engines, Perplexity, Cursor, Windsurf, Claude, and Gemini.
+- **Runnable Example 31 (`examples/31-llm-optimization-llmo.ts`)**:
+  - End-to-end demonstration of standalone and client-integrated prompt minification, 3-tier model cascading, KV-cache alignment, and FinOps telemetry reporting.
+- **Comprehensive Unit Testing (`src/core/LlmOptimizer.test.ts`)**:
+  - 10 new comprehensive unit tests; total 429/429 tests passing across 36 test suites with 100% pass rate.
+
 ## [2.11.0] - 2026-10-27
 ### Added
 - **In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol (`AgentSwarm`, `client.swarm`)**:

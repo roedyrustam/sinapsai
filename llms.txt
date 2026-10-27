@@ -1,0 +1,106 @@
+# SinapsAI (In-Process AI Gateway & Control Plane)
+
+> Zero-dependency in-process AI Gateway and Control Plane for TypeScript, Node.js 18+, Bun, Deno, and Edge runtimes (Cloudflare Workers, Vercel Edge). Connects to 10 top LLM providers through a unified OpenAI-compatible API with in-memory circuit breakers, multi-strategy dynamic routing, speculative hedged requests, PII/security guardrails, KV-cache tracking, MCP tool bridge, and multi-agent swarm with A2A handoff.
+
+- **Author**: Roedy Rustam <roedyrustam.id@gmail.com>
+- **License**: MIT
+- **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
+- **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits
+- **Test Suite**: 429 unit & integration tests passing across 36 test suites (100% pass rate)
+- **Quality**: 100% Biome Clean, TypeScript strict mode
+
+## Core Capabilities
+
+- **10 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **6 Dynamic Routing Strategies**: `adaptive` (smart-hybrid multi-factor reliability/latency/cost), `lowest-cost` (dual-pricing prompt vs completion tokens), `lowest-latency` (moving average latency with auto-probing), `failover` (strict priority), `load-balance` (round-robin).
+- **In-Process Circuit Breaker**: Anti-cascading fault isolation (`CLOSED` -> `OPEN` -> `HALF_OPEN`) with anti-thundering-herd strict single canary probing.
+- **In-Process Gateway Rate Limiter**: Zero-dependency sliding-window counter enforcing RPM and TPM globally, per-user, per-model, and per-provider with post-response token adjustment across streaming & non-streaming.
+- **Speculative Hedged Requests (`HedgedExecutor`)**: Fires backup requests after `delayMs` to eliminate P99 tail latencies on redundant providers.
+- **In-Process Guardrails**:
+  - `PIIGuardrails`: Zero-dependency detection & redaction (emails, phones, Luhn-verified credit cards, SSN, IP, IBAN, passports, JWT, URLs) with Reversible Tokenization Vault in both non-streaming and streaming.
+  - `SecurityGuardrails`: Heuristic defense against prompt injection, jailbreaks, delimiter hijacking, and system role tampering (ReDoS safe).
+  - `BudgetGuardrails`: FinOps spend tracking enforcing hard USD caps (`maxCostUsd`) and token limits (`maxTotalTokens`).
+- **Context Compression (`ContextCompressor`)**: Intelligent trimming (`sliding-window`, `middle-out`) preserving system instructions and atomic tool groups.
+- **Universal LLM Optimization Engine (LLMO)**:
+  - Code-block-aware prompt minification (lossless & aggressive whitespace pruning).
+  - System instruction deduplication.
+  - Deterministic KV-cache prefix alignment & tool schema canonicalization.
+  - Multi-signal complexity analysis & 3-tier model cascading (`tier1: fast/cheap`, `tier2: standard`, `tier3: deep reasoning`).
+  - Dynamic thinking budget allocation & FinOps savings telemetry (`client.getMetrics().llmoMetrics`).
+- **MCP Tool Bridge (`McpToolBridge`)**: In-process Model Context Protocol tool registry, JSON Schema bi-directional conversion, JSON-RPC 2.0 dispatcher (`tools/list`, `tools/call`, `ping`), and multi-step autonomous agent loops (`runWithTools`, `runWithToolsStream`).
+- **Multi-Agent Swarm (`client.swarm`)**: Role-based specialist agents, automatic A2A handoff tool synthesis (`transfer_to_<agent>`), thread-safe shared context memory (`SwarmContext`), ping-pong cycle protection (`maxHandoffs`), and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
+- **Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Official `LanguageModelV1` and `EmbeddingModelV1` implementations supporting `streamText`, `generateText`, and `embed`.
+- **Telemetry Exporters**: Native Prometheus / OpenMetrics (`exportPrometheusMetrics`) and OpenTelemetry OTLP JSON (`exportOtelMetrics`).
+
+## Installation
+
+```bash
+npm install sinapsai
+```
+
+## Quickstart
+
+```typescript
+import {
+  SinapsClient,
+  OpenAiProvider,
+  AnthropicProvider,
+  GeminiProvider,
+  GroqProvider,
+} from 'sinapsai';
+
+const client = new SinapsClient({
+  strategy: 'adaptive', // multi-factor reliability, latency, cost scoring
+  providers: [
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY }),
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY }),
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY }),
+    new GroqProvider({ apiKey: process.env.GROQ_API_KEY }),
+  ],
+  circuitBreaker: {
+    failureThreshold: 3,
+    resetTimeoutMs: 30000,
+  },
+  hedging: {
+    enabled: true,
+    delayMs: 250, // Cut P99 tail latencies
+  },
+  llmo: {
+    enabled: true,
+    minifyPrompts: true,
+    autoCascadeModel: true, // Route simple to flash-lite, complex to pro/reasoning
+  },
+  piiGuardrails: {
+    enabled: true,
+    reversible: true, // Restore original PII in response
+  },
+});
+
+// 1. OpenAI-compatible chat completion
+const res = await client.chat.completions.create({
+  model: 'auto', // LLMO dynamically selects optimal tier model
+  messages: [{ role: 'user', content: 'Explain distributed consensus in Raft' }],
+});
+console.log(res.choices[0].message.content);
+
+// 2. Real-time streaming
+const stream = await client.chat.completions.create({
+  model: 'gemini-2.5-flash',
+  messages: [{ role: 'user', content: 'Stream this response' }],
+  stream: true,
+});
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content || '');
+}
+```
+
+## Key Documentation & References
+
+- Complete Context & API Reference: [llms-full.txt](llms-full.txt)
+- Architecture Blueprint: [BLUEPRINT.md](BLUEPRINT.md)
+- Product Requirements Document: [PRD.md](PRD.md)
+- Full Indonesian Documentation: [DOKUMENTASI.md](DOKUMENTASI.md)
+- Complete English README: [README.md](README.md)
+- Complete Indonesian README: [README.id.md](README.id.md)
+- Version Roadmap: [ROADMAP.md](ROADMAP.md)
+- 31 Executable Examples: [examples/](examples/)
