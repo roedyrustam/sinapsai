@@ -23,10 +23,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22.x
-          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install Dependencies
         run: npm ci
@@ -39,12 +36,13 @@ jobs:
 
       - name: Publish to NPM & Create GitHub Release if Version Bumped
         run: |
-          if [ -n "$NODE_AUTH_TOKEN" ]; then
-            echo "[Auth] Using NPM Token authentication..."
-            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          else
-            echo "[Auth] Using NPM Trusted Publishing (OIDC / Provenance)..."
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "[Notice] NPM_TOKEN secret is not configured in repository secrets. Skipping NPM publish step."
+            exit 0
           fi
+
+          echo "[Auth] Configuring NPM Token authentication..."
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
 
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PUBLISHED_VERSION=$(npm view sinapsai version 2>/dev/null || echo "0.0.0")
