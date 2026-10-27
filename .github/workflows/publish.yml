@@ -1,8 +1,6 @@
 name: Auto Publish to NPM
 
 on:
-  push:
-    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -36,13 +34,12 @@ jobs:
 
       - name: Publish to NPM & Create GitHub Release if Version Bumped
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "[Notice] NPM_TOKEN secret is not configured in repository secrets. Skipping NPM publish step."
-            exit 0
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            echo "[Auth] Configuring NPM Token authentication..."
+            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          else
+            echo "[Auth] Using NPM Trusted Publishing (OIDC / Provenance)..."
           fi
-
-          echo "[Auth] Configuring NPM Token authentication..."
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
 
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PUBLISHED_VERSION=$(npm view sinapsai version 2>/dev/null || echo "0.0.0")
