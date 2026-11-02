@@ -48,7 +48,7 @@ jobs:
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
             echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
-            npm publish --access public --provenance
+            if [ -n "$NODE_AUTH_TOKEN" ]; then npm publish --access public --provenance; else echo "[Skip] NPM_TOKEN not configured; skipping npm registry publish."; fi
             echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM!"
 
             if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
