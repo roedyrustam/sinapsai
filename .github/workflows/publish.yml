@@ -1,6 +1,9 @@
 name: Auto Publish to NPM
 
 on:
+  push:
+    branches:
+      - main
   release:
     types: [published]
   workflow_dispatch:
@@ -15,13 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js 22.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 22.x
           cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install Dependencies
         run: npm ci
@@ -32,15 +36,8 @@ jobs:
       - name: Build Distribution Bundle
         run: npm run build
 
-      - name: Publish to NPM & Create GitHub Release if Version Bumped
+      - name: Check Version & Publish to NPM
         run: |
-          if [ -n "$NODE_AUTH_TOKEN" ]; then
-            echo "[Auth] Configuring NPM Token authentication..."
-            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          else
-            echo "[Auth] Using NPM Trusted Publishing (OIDC / Provenance)..."
-          fi
-
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PUBLISHED_VERSION=$(npm view sinapsai version 2>/dev/null || echo "0.0.0")
           echo "Current package.json version: $CURRENT_VERSION"
@@ -48,15 +45,27 @@ jobs:
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
             echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
-            if [ -n "$NODE_AUTH_TOKEN" ]; then npm publish --access public --provenance; else echo "[Skip] NPM_TOKEN not configured; skipping npm registry publish."; fi
+            
+            # Setup npm authentication (Supports both NPM_TOKEN secret and NPM Trusted Publishing OIDC)
+            if [ -n "$NODE_AUTH_TOKEN" ]; then
+              echo "[Auth] Using NODE_AUTH_TOKEN secret..."
+              echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+            else
+              echo "[Auth] Using NPM OIDC Trusted Publishing..."
+            fi
+
+            # Publish with provenance
+            npm publish --access public --provenance
+
             echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM!"
 
+            # Create GitHub Release if not already created
             if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
               echo "[Release] Creating GitHub Release v$CURRENT_VERSION..."
               gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
             fi
           else
-            echo "[Skip] Version $CURRENT_VERSION is already published on NPM. Skipping publish."
+            echo "[Skip] Version $CURRENT_VERSION is already published on NPM ($PUBLISHED_VERSION). Nothing to publish."
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
