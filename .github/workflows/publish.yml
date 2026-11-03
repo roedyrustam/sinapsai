@@ -44,17 +44,12 @@ jobs:
           echo "Published npm registry version: $PUBLISHED_VERSION"
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM..."
+            echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM via Trusted Publishing (OIDC)..."
             
-            # Setup npm authentication (Supports both NPM_TOKEN secret and NPM Trusted Publishing OIDC)
-            if [ -n "$NODE_AUTH_TOKEN" ]; then
-              echo "[Auth] Using NODE_AUTH_TOKEN secret..."
-              echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-            else
-              echo "[Auth] Using NPM OIDC Trusted Publishing..."
-            fi
+            # Remove any static auth tokens so npm CLI requests OIDC token from GitHub
+            sed -i '/_authToken/d' ~/.npmrc 2>/dev/null || true
 
-            # Publish with provenance
+            # Publish using GitHub Actions OIDC Trusted Publishing & Provenance
             npm publish --access public --provenance
 
             echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM!"
@@ -68,5 +63,4 @@ jobs:
             echo "[Skip] Version $CURRENT_VERSION is already published on NPM ($PUBLISHED_VERSION). Nothing to publish."
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
