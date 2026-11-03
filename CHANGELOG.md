@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.12.1] - 2026-11-03
+### Changed
+- Automated CI/CD workflow for automated npm release publishing on push to main with provenance attestation and version detection.
+
 ## [2.12.0] - 2026-10-28
 ### Added
 - **Speculative Multi-Draft Consensus & AI Arbitration (`ConsensusEngine`, `client.consensus`)**:
