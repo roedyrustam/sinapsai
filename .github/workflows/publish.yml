@@ -27,6 +27,11 @@ jobs:
           cache: 'npm'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Upgrade npm to latest for OIDC Trusted Publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Install Dependencies
         run: npm ci
 
@@ -44,9 +49,9 @@ jobs:
           echo "Published npm registry version: $PUBLISHED_VERSION"
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "[Publish] New version detected ($CURRENT_VERSION != $PUBLISHED_VERSION). Publishing to NPM via Trusted Publishing (OIDC)..."
+            echo "[Publish] Publishing sinapsai@$CURRENT_VERSION to NPM via Trusted Publishing (OIDC)..."
             
-            # Remove any static auth tokens so npm CLI requests OIDC token from GitHub
+            # Ensure no legacy auth token overrides OIDC Trusted Publishing
             sed -i '/_authToken/d' ~/.npmrc 2>/dev/null || true
 
             # Publish using GitHub Actions OIDC Trusted Publishing & Provenance
