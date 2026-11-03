@@ -1,0 +1,22 @@
+# Source & Config
+src/
+examples/
+migrations/
+.github/
+.vscode/
+.idea/
+coverage/
+*.tsbuildinfo
+*.log
+
+# Tooling configs
+biome.json
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+
+# OS & Environment
+.env*
+*.pem
+.DS_Store
+Thumbs.db
