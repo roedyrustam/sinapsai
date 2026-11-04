@@ -137,6 +137,10 @@ export class Router {
     return [...this.providers];
   }
 
+  public getStrategy(): RouterStrategy {
+    return this.strategy;
+  }
+
   /**
    * Returns the primary candidate provider ID according to the configured routing strategy.
    */

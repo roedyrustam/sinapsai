@@ -44,6 +44,7 @@ export declare class Router {
     constructor(providers: Provider[], circuitBreaker: CircuitBreaker, options?: RouterOptions);
     getProviderById(id: string): Provider | undefined;
     getProviders(): Provider[];
+    getStrategy(): RouterStrategy;
     /**
      * Returns the primary candidate provider ID according to the configured routing strategy.
      */

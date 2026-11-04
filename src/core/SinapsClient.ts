@@ -67,6 +67,10 @@ import {
   ContextCompressor,
 } from './ContextCompressor.js';
 import {
+  DurableWorkflowEngine,
+  type DurableWorkflowOptions,
+} from './DurableWorkflow.js';
+import {
   EpisodicMemory,
   type EpisodicMemoryOptions,
 } from './EpisodicMemory.js';
@@ -74,6 +78,11 @@ import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
 import { InMemoryStorage } from './InMemoryStorage.js';
+import {
+  KnowledgeGraph,
+  type KnowledgeGraphOptions,
+} from './KnowledgeGraph.js';
+import { LlmEvals, type LlmEvalsOptions } from './LlmEvals.js';
 import {
   type LlmOptimizationOptions,
   type LlmOptimizationResult,
@@ -167,6 +176,18 @@ export interface SinapsClientOptions {
    * Optional in-process hybrid RAG configuration.
    */
   rag?: HybridRagOptions;
+  /**
+   * Optional in-process Knowledge Graph & GraphRAG configuration.
+   */
+  graph?: KnowledgeGraphOptions;
+  /**
+   * Optional durable agent workflows configuration.
+   */
+  workflows?: DurableWorkflowOptions;
+  /**
+   * Optional in-process LLM evals configuration.
+   */
+  evals?: LlmEvalsOptions;
 }
 
 export class SinapsClient {
@@ -181,6 +202,9 @@ export class SinapsClient {
   public readonly mcp: McpToolBridge;
   public readonly memory: EpisodicMemory;
   public readonly rag: HybridRagEngine;
+  public readonly graph: KnowledgeGraph;
+  public readonly workflows: DurableWorkflowEngine;
+  public readonly evals: LlmEvals;
   public readonly realtime = new RealtimeClient();
   public readonly consensus: {
     create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -188,6 +212,14 @@ export class SinapsClient {
   private isReversiblePII = false;
   private modelAliases = new Map<string, string>();
   private hooks?: SinapsEventHooks;
+
+  public get strategy(): RouterStrategy {
+    return this.router.getStrategy();
+  }
+
+  public getStrategy(): RouterStrategy {
+    return this.router.getStrategy();
+  }
 
   constructor(options: SinapsClientOptions) {
     this.storage = options.storage || new InMemoryStorage();
@@ -259,6 +291,18 @@ export class SinapsClient {
 
     // Initialize In-Process Hybrid RAG Engine
     this.rag = new HybridRagEngine(options.rag);
+
+    // Initialize In-Process Knowledge Graph & GraphRAG
+    this.graph = new KnowledgeGraph(options.graph);
+
+    // Initialize Durable Workflows Engine
+    this.workflows = new DurableWorkflowEngine({
+      storage: this.storage,
+      ...options.workflows,
+    });
+
+    // Initialize In-Process LLM Evals
+    this.evals = new LlmEvals(options.evals);
 
     // Initialize Speculative Multi-Draft Consensus
     this.consensus = {

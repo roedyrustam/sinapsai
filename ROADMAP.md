@@ -164,7 +164,17 @@
 - [x] **Standard LLMO & GEO Manifests (`llms.txt` & `llms-full.txt`)**: Standar industri modern untuk penemuan dan konsumsi kontekstual oleh LLM frontier (ChatGPT, Claude, Gemini, Perplexity, Cursor, Copilot).
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 31 (`examples/31-llm-optimization-llmo.ts`); total 429/429 tes lulus di 36 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.12.0.
 
-## Phase 20: Real-Time Multimodal Voice & WebSockets (Upcoming / v3.0.0)
-- [ ] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
+## Phase 20: Real-Time Multimodal Voice & WebSockets (v2.12.0) - *Completed*
+- [x] **Real-Time Bidirectional Voice & WebSockets (`client.realtime`)**: Abstraksi terpadu untuk koneksi WebSocket/WebRTC berlatensi ultra-rendah (<300ms) ke OpenAI Realtime API dan Gemini Multimodal Live API.
+- [x] **WebRTC SDP Negotiation Engine (`client.realtime.negotiateWebRtc`)**: Negosiasi REST SDP offer/answer untuk streaming audio WebRTC langsung dari browser.
+
+## Phase 21: CLI Gateway, Standalone MCP, Type-Safe Schemas, GraphRAG & Durable Swarms (v2.13.0) - *Completed*
+- [x] **Zero-Dependency Type-Safe Schema Builder (`s`, `client.s`)**: Builder skema deklaratif fluent bergaya Zod (`s.object`, `s.string`, `s.number`, `s.boolean`, `s.array`, `s.enum`) dengan validasi runtime dan kompilasi otomatis ke OpenAI ToolDefinition dan MCP InputSchema.
+- [x] **In-Process Knowledge Graph & GraphRAG (`KnowledgeGraph`, `client.graph`)**: Representasi graf in-memory adjacency list, ekstraksi triples (Subjek-Predikat-Objek), multi-hop BFS traversal dengan decay scoring, dan sintesis subgraph ke context prompt.
+- [x] **Durable Agent Workflows & State Checkpoint Engine (`DurableWorkflowEngine`, `client.workflows`)**: Checkpoint state per langkah agen, rekaman mutasi konteks bersama, dan fungsi `resume` pemulihan pasca restart/crash tanpa duplikasi tool runs.
+- [x] **In-Process LLM Evals & Faithfulness Guardrail (`LlmEvals`, `client.evals`)**: Evaluasi groundedness klaim terhadap konteks RAG, skor relevansi terhadap prompt, dan audit keamanan konten/toksisitas zero-dependency.
+- [x] **Standalone CLI & OpenAI-Compatible Gateway (`sinapsai serve`)**: Server HTTP native tanpa dependensi eksternal mengekspos `/v1/chat/completions` (streaming & non-streaming), `/v1/models`, `/health`, dan `/metrics`.
+- [x] **Standalone MCP Stdio Server (`sinapsai mcp`)**: Protokol JSON-RPC 2.0 native over stdin/stdout untuk integrasi langsung ke Claude Desktop, Cursor, Antigravity, dan Windsurf.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 36–39; total 486/486 tes lulus di 46 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.13.0.
 
 

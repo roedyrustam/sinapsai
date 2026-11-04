@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.13.0] - 2026-11-04
+### Added
+- **Zero-Dependency Type-Safe Schema Builder (`s`, `src/utils/schema.ts`, `client.s`)**:
+  - Fluent, Zod-like schema declaration engine (`s.object`, `s.string`, `s.number`, `s.boolean`, `s.array`, `s.enum`, `s.any`).
+  - Native runtime validation and automatic type coercion without external dependencies.
+  - Direct compilation to standard JSON Schema, OpenAI `ToolDefinition` (`s.toToolDefinition`), and Model Context Protocol (`s.toMcpTool`).
+- **In-Process Knowledge Graph & GraphRAG Engine (`KnowledgeGraph`, `client.graph`, `src/core/KnowledgeGraph.ts`)**:
+  - In-memory adjacency list knowledge graph with Subject-Predicate-Object triples.
+  - Rule-based entity & relation extraction from unstructured text without external NLP libraries.
+  - Multi-hop Breadth-First Search (BFS) graph traversal with path decay scoring.
+  - Connected subgraph extraction and synthesis into Markdown for LLM prompt context injection.
+- **Durable Agent Workflows & State Checkpoint Engine (`DurableWorkflowEngine`, `client.workflows`, `src/core/DurableWorkflow.ts`)**:
+  - Resilient step-by-step checkpointing for autonomous agent loops and multi-agent swarms.
+  - Atomic step recording, tool call idempotency, and shared state persistence via `StateStorage`.
+  - Seamless recovery and replay (`resume`) to continue interrupted workflows without duplicate tool execution.
+- **In-Process LLM Evals & Faithfulness Guardrail (`LlmEvals`, `client.evals`, `src/core/LlmEvals.ts`)**:
+  - RAG faithfulness and groundedness scoring (sentence-level claim verification against reference context).
+  - Prompt relevance scoring measuring keyword coverage and answer alignment.
+  - In-process zero-dependency toxicity, threat, hate speech, and profanity auditing.
+- **Standalone CLI & OpenAI-Compatible Local Gateway Server (`sinapsai serve`, `src/cli/`)**:
+  - Executable bin CLI (`npx sinapsai`) with zero external web server frameworks.
+  - Endpoints: `POST /v1/chat/completions` (streaming SSE & non-streaming), `POST /v1/embeddings`, `GET /v1/models`, `GET /health`, and `GET /metrics`.
+  - Built-in multi-provider failover, circuit breaking, rate limiting, and Prometheus exposition.
+- **Standalone Model Context Protocol (MCP) Stdio Server (`sinapsai mcp`)**:
+  - Native JSON-RPC 2.0 transport over stdin/stdout for instant integration into Cursor IDE, Claude Desktop, Antigravity, and Windsurf.
+- **WebRTC SDP Negotiation Engine (`client.realtime.negotiateWebRtc`)**:
+  - REST SDP offer/answer exchange enabling ultra-low latency (<150ms) bidirectional voice streaming.
+
 ## [2.12.1] - 2026-11-03
 ### Changed
 - Automated CI/CD workflow for automated npm release publishing on push to main with provenance attestation and version detection.

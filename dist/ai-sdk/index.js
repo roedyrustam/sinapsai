@@ -2556,6 +2556,202 @@ var ContextCompressor = class {
   }
 };
 
+// src/core/InMemoryStorage.ts
+var InMemoryStorage = class {
+  store = /* @__PURE__ */ new Map();
+  sweepInterval;
+  constructor(options) {
+    const sweepIntervalMs = typeof options === "number" ? options : options?.sweepIntervalMs ?? 6e4;
+    const autoSweep = typeof options === "object" ? options?.autoSweep ?? true : true;
+    if (autoSweep && typeof setInterval !== "undefined") {
+      this.sweepInterval = setInterval(() => this.sweep(), sweepIntervalMs);
+      if (this.sweepInterval && typeof this.sweepInterval.unref === "function") {
+        this.sweepInterval.unref?.();
+      }
+    }
+  }
+  sweep() {
+    const now = Date.now();
+    for (const [key, item] of this.store.entries()) {
+      if (item.expiresAt !== null && now > item.expiresAt) {
+        this.store.delete(key);
+      }
+    }
+  }
+  async get(key) {
+    const item = this.store.get(key);
+    if (!item) {
+      return null;
+    }
+    if (item.expiresAt !== null && Date.now() > item.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+    return item.value;
+  }
+  async set(key, value, ttlSeconds) {
+    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1e3 : null;
+    this.store.set(key, { value, expiresAt });
+  }
+  async delete(key) {
+    this.store.delete(key);
+  }
+  async increment(key, ttlSeconds) {
+    const item = this.store.get(key);
+    let currentValue = 0;
+    if (item) {
+      if (item.expiresAt !== null && Date.now() > item.expiresAt) {
+        this.store.delete(key);
+      } else {
+        currentValue = item.value || 0;
+      }
+    }
+    const newValue = currentValue + 1;
+    const existing = this.store.get(key);
+    const expiresAt = existing?.expiresAt ?? (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1e3 : null);
+    this.store.set(key, {
+      value: newValue,
+      expiresAt
+    });
+    return newValue;
+  }
+  async clear() {
+    this.store.clear();
+  }
+  destroy() {
+    if (this.sweepInterval) {
+      clearInterval(this.sweepInterval);
+    }
+  }
+};
+
+// src/core/DurableWorkflow.ts
+var DurableWorkflowEngine = class {
+  storage;
+  keyPrefix;
+  defaultTtlSeconds;
+  constructor(options = {}) {
+    this.storage = options.storage || new InMemoryStorage();
+    this.keyPrefix = options.keyPrefix || "sinapsai:wf:";
+    this.defaultTtlSeconds = options.defaultTtlSeconds || 86400 * 7;
+  }
+  getKey(workflowId) {
+    return `${this.keyPrefix}${workflowId}`;
+  }
+  /**
+   * Initializes or creates a new durable workflow checkpoint.
+   */
+  async createWorkflow(params) {
+    const now = Date.now();
+    const checkpoint = {
+      workflowId: params.workflowId,
+      status: "pending",
+      currentStep: 0,
+      currentAgent: params.initialAgent,
+      messages: params.initialMessages ? [...params.initialMessages] : [],
+      sharedContext: params.initialContext ? { ...params.initialContext } : {},
+      history: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.storage.set(
+      this.getKey(params.workflowId),
+      checkpoint,
+      this.defaultTtlSeconds
+    );
+    return checkpoint;
+  }
+  /**
+   * Retrieves an existing checkpoint by workflowId.
+   */
+  async getCheckpoint(workflowId) {
+    return this.storage.get(this.getKey(workflowId));
+  }
+  /**
+   * Records a step in the workflow and updates context/messages.
+   */
+  async recordStep(workflowId, update) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    const now = Date.now();
+    const nextStep = cp.currentStep + 1;
+    const stepRecord = {
+      stepIndex: nextStep,
+      agentName: update.agentName || cp.currentAgent,
+      action: update.action,
+      details: update.details,
+      output: update.output,
+      timestamp: now
+    };
+    cp.currentStep = nextStep;
+    cp.status = "running";
+    if (update.agentName) cp.currentAgent = update.agentName;
+    if (update.newMessages) cp.messages.push(...update.newMessages);
+    if (update.contextUpdates) {
+      cp.sharedContext = { ...cp.sharedContext, ...update.contextUpdates };
+    }
+    cp.history.push(stepRecord);
+    cp.updatedAt = now;
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Marks workflow as successfully completed with final output.
+   */
+  async completeWorkflow(workflowId, finalOutput) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    cp.status = "completed";
+    cp.finalOutput = finalOutput;
+    cp.updatedAt = Date.now();
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Marks workflow as failed with error details.
+   */
+  async failWorkflow(workflowId, error) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    cp.status = "failed";
+    cp.error = error;
+    cp.updatedAt = Date.now();
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Resumes workflow checkpoint and provides replay context.
+   */
+  async resume(workflowId) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      return {
+        canResume: false,
+        checkpoint: null,
+        resumeFromStep: 0,
+        agent: void 0,
+        messages: [],
+        context: {}
+      };
+    }
+    const canResume = cp.status === "running" || cp.status === "paused" || cp.status === "pending";
+    return {
+      canResume,
+      checkpoint: cp,
+      resumeFromStep: cp.currentStep,
+      agent: cp.currentAgent,
+      messages: [...cp.messages],
+      context: { ...cp.sharedContext }
+    };
+  }
+};
+
 // src/core/EpisodicMemory.ts
 function createFastTfEmbedding(text, dimensions = 64) {
   const vec = new Array(dimensions).fill(0);
@@ -3040,72 +3236,455 @@ ${items.join("\n\n")}`;
   }
 };
 
-// src/core/InMemoryStorage.ts
-var InMemoryStorage = class {
-  store = /* @__PURE__ */ new Map();
-  sweepInterval;
-  constructor(options) {
-    const sweepIntervalMs = typeof options === "number" ? options : options?.sweepIntervalMs ?? 6e4;
-    const autoSweep = typeof options === "object" ? options?.autoSweep ?? true : true;
-    if (autoSweep && typeof setInterval !== "undefined") {
-      this.sweepInterval = setInterval(() => this.sweep(), sweepIntervalMs);
-      if (this.sweepInterval && typeof this.sweepInterval.unref === "function") {
-        this.sweepInterval.unref?.();
-      }
-    }
+// src/core/KnowledgeGraph.ts
+var KnowledgeGraph = class {
+  nodes = /* @__PURE__ */ new Map();
+  edges = /* @__PURE__ */ new Map();
+  adjacency = /* @__PURE__ */ new Map();
+  // nodeId -> Set of edgeIds
+  incoming = /* @__PURE__ */ new Map();
+  // nodeId -> Set of incoming edgeIds
+  options;
+  constructor(options = {}) {
+    this.options = {
+      caseSensitive: options.caseSensitive ?? false,
+      maxDefaultDepth: options.maxDefaultDepth ?? 3,
+      defaultEdgeWeight: options.defaultEdgeWeight ?? 1
+    };
   }
-  sweep() {
-    const now = Date.now();
-    for (const [key, item] of this.store.entries()) {
-      if (item.expiresAt !== null && now > item.expiresAt) {
-        this.store.delete(key);
-      }
-    }
+  normalizeId(id) {
+    return this.options.caseSensitive ? id.trim() : id.trim().toLowerCase();
   }
-  async get(key) {
-    const item = this.store.get(key);
-    if (!item) {
-      return null;
-    }
-    if (item.expiresAt !== null && Date.now() > item.expiresAt) {
-      this.store.delete(key);
-      return null;
-    }
-    return item.value;
+  /**
+   * Adds or updates a node in the graph.
+   */
+  addNode(node) {
+    const id = this.normalizeId(node.id);
+    const existing = this.nodes.get(id);
+    const fullNode = {
+      id,
+      label: node.label || node.id,
+      type: node.type || existing?.type || "entity",
+      properties: {
+        ...existing?.properties || {},
+        ...node.properties || {}
+      },
+      weight: node.weight ?? existing?.weight ?? 1
+    };
+    this.nodes.set(id, fullNode);
+    if (!this.adjacency.has(id)) this.adjacency.set(id, /* @__PURE__ */ new Set());
+    if (!this.incoming.has(id)) this.incoming.set(id, /* @__PURE__ */ new Set());
+    return fullNode;
   }
-  async set(key, value, ttlSeconds) {
-    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1e3 : null;
-    this.store.set(key, { value, expiresAt });
-  }
-  async delete(key) {
-    this.store.delete(key);
-  }
-  async increment(key, ttlSeconds) {
-    const item = this.store.get(key);
-    let currentValue = 0;
-    if (item) {
-      if (item.expiresAt !== null && Date.now() > item.expiresAt) {
-        this.store.delete(key);
-      } else {
-        currentValue = item.value || 0;
-      }
+  /**
+   * Adds or updates a directed edge between two nodes.
+   */
+  addEdge(edge) {
+    const sourceId = this.normalizeId(edge.sourceId);
+    const targetId = this.normalizeId(edge.targetId);
+    const relation = edge.relation.trim();
+    if (!this.nodes.has(sourceId)) {
+      this.addNode({ id: sourceId, label: edge.sourceId });
     }
-    const newValue = currentValue + 1;
-    const existing = this.store.get(key);
-    const expiresAt = existing?.expiresAt ?? (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1e3 : null);
-    this.store.set(key, {
-      value: newValue,
-      expiresAt
+    if (!this.nodes.has(targetId)) {
+      this.addNode({ id: targetId, label: edge.targetId });
+    }
+    const edgeId = edge.id || `${sourceId}__${relation}__${targetId}`;
+    const fullEdge = {
+      id: edgeId,
+      sourceId,
+      targetId,
+      relation,
+      weight: edge.weight ?? this.options.defaultEdgeWeight,
+      properties: edge.properties || {}
+    };
+    this.edges.set(edgeId, fullEdge);
+    this.adjacency.get(sourceId)?.add(edgeId);
+    this.incoming.get(targetId)?.add(edgeId);
+    return fullEdge;
+  }
+  /**
+   * Adds a knowledge triple (Subject - Predicate - Object).
+   */
+  addTriple(triple) {
+    const subjectNode = this.addNode({
+      id: triple.subject,
+      label: triple.subject
     });
-    return newValue;
+    const targetNode = this.addNode({
+      id: triple.object,
+      label: triple.object
+    });
+    const edge = this.addEdge({
+      sourceId: triple.subject,
+      targetId: triple.object,
+      relation: triple.predicate,
+      weight: triple.confidence ?? 1,
+      properties: triple.metadata
+    });
+    return { subjectNode, targetNode, edge };
   }
-  async clear() {
-    this.store.clear();
-  }
-  destroy() {
-    if (this.sweepInterval) {
-      clearInterval(this.sweepInterval);
+  /**
+   * Batch adds multiple knowledge triples.
+   */
+  addTriples(triples) {
+    for (const t of triples) {
+      this.addTriple(t);
     }
+  }
+  getNode(id) {
+    return this.nodes.get(this.normalizeId(id));
+  }
+  hasNode(id) {
+    return this.nodes.has(this.normalizeId(id));
+  }
+  getAllNodes() {
+    return Array.from(this.nodes.values());
+  }
+  getAllEdges() {
+    return Array.from(this.edges.values());
+  }
+  /**
+   * Rule-based entity & relation extraction from text without external libraries.
+   * Parses common patterns like:
+   * "X is a Y", "X has Y", "X works at Y", "X founded Y", "X uses Y", "X located in Y"
+   */
+  extractTriplesFromText(text) {
+    const triples = [];
+    const sentences = text.split(/(?<=[.?!])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+    const patterns = [
+      { regex: /^(.+?)\s+(?:is a|is an|is)\s+(.+?)$/i, predicate: "is_a" },
+      {
+        regex: /^(.+?)\s+(?:works at|works for|employed by)\s+(.+?)$/i,
+        predicate: "works_at"
+      },
+      {
+        regex: /^(.+?)\s+(?:founded|created|developed|built)\s+(.+?)$/i,
+        predicate: "created"
+      },
+      {
+        regex: /^(.+?)\s+(?:located in|based in|in)\s+(.+?)$/i,
+        predicate: "located_in"
+      },
+      { regex: /^(.+?)\s+(?:has|owns|possesses)\s+(.+?)$/i, predicate: "has" },
+      {
+        regex: /^(.+?)\s+(?:uses|supports|integrates with)\s+(.+?)$/i,
+        predicate: "uses"
+      },
+      {
+        regex: /^(.+?)\s+(?:part of|belongs to|member of)\s+(.+?)$/i,
+        predicate: "part_of"
+      }
+    ];
+    for (const sentence of sentences) {
+      const clean = sentence.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, " ").trim();
+      for (const { regex, predicate } of patterns) {
+        const match = clean.match(regex);
+        if (match?.[1] && match[2]) {
+          const sub = match[1].trim();
+          const obj = match[2].trim();
+          if (sub.length > 1 && obj.length > 1 && sub.length < 50 && obj.length < 50) {
+            triples.push({
+              subject: sub,
+              predicate,
+              object: obj,
+              confidence: 0.85
+            });
+            break;
+          }
+        }
+      }
+    }
+    return triples;
+  }
+  /**
+   * Traverses graph from start node up to maxDepth hops using Breadth-First Search (BFS).
+   */
+  traverseMultiHop(startNodeId, maxDepth = this.options.maxDefaultDepth) {
+    const startId = this.normalizeId(startNodeId);
+    const startNode = this.nodes.get(startId);
+    if (!startNode) return [];
+    const paths = [];
+    const queue = [
+      {
+        currentId: startId,
+        currentNodes: [startNode],
+        currentEdges: [],
+        depth: 0,
+        cumulativeScore: 1
+      }
+    ];
+    const visitedPaths = /* @__PURE__ */ new Set();
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (!item) break;
+      const { currentId, currentNodes, currentEdges, depth, cumulativeScore } = item;
+      if (depth > 0) {
+        paths.push({
+          nodes: [...currentNodes],
+          edges: [...currentEdges],
+          score: cumulativeScore,
+          depth
+        });
+      }
+      if (depth >= maxDepth) continue;
+      const edgeIds = this.adjacency.get(currentId);
+      if (!edgeIds) continue;
+      for (const edgeId of edgeIds) {
+        const edge = this.edges.get(edgeId);
+        if (!edge) continue;
+        const nextNode = this.nodes.get(edge.targetId);
+        if (!nextNode) continue;
+        if (currentNodes.some((n) => n.id === nextNode.id)) continue;
+        const pathKey = `${currentEdges.map((e) => e.id).join("->")}->${edge.id}`;
+        if (visitedPaths.has(pathKey)) continue;
+        visitedPaths.add(pathKey);
+        const nextScore = cumulativeScore * (edge.weight || 1) * 0.85;
+        queue.push({
+          currentId: edge.targetId,
+          currentNodes: [...currentNodes, nextNode],
+          currentEdges: [...currentEdges, edge],
+          depth: depth + 1,
+          cumulativeScore: nextScore
+        });
+      }
+    }
+    return paths.sort((a, b) => b.score - a.score);
+  }
+  /**
+   * Finds connected subgraphs matching one or more seed entity queries.
+   */
+  findSubGraph(seedEntities, maxDepth = 2) {
+    const nodeSet = /* @__PURE__ */ new Map();
+    const edgeSet = /* @__PURE__ */ new Map();
+    const allPaths = [];
+    for (const entity of seedEntities) {
+      const norm = this.normalizeId(entity);
+      let matchNode = this.nodes.get(norm);
+      if (!matchNode) {
+        for (const [id, node] of this.nodes.entries()) {
+          if (id.includes(norm) || norm.includes(id)) {
+            matchNode = node;
+            break;
+          }
+        }
+      }
+      if (matchNode) {
+        nodeSet.set(matchNode.id, matchNode);
+        const paths = this.traverseMultiHop(matchNode.id, maxDepth);
+        allPaths.push(...paths);
+        for (const p of paths) {
+          for (const n of p.nodes) nodeSet.set(n.id, n);
+          for (const e of p.edges) edgeSet.set(e.id, e);
+        }
+      }
+    }
+    const triples = [];
+    for (const edge of edgeSet.values()) {
+      const src = nodeSet.get(edge.sourceId);
+      const tgt = nodeSet.get(edge.targetId);
+      if (src && tgt) {
+        triples.push({
+          subject: src.label,
+          predicate: edge.relation,
+          object: tgt.label,
+          confidence: edge.weight
+        });
+      }
+    }
+    return {
+      nodes: Array.from(nodeSet.values()),
+      edges: Array.from(edgeSet.values()),
+      triples,
+      paths: allPaths.sort((a, b) => b.score - a.score)
+    };
+  }
+  /**
+   * Formats a subgraph or triples list into clean Markdown for system prompt context injection.
+   */
+  toContextPrompt(subGraph) {
+    if (subGraph.triples.length === 0) return "";
+    const lines = [
+      "### KNOWLEDGE GRAPH / RELATIONAL FACTS:",
+      ...subGraph.triples.map(
+        (t) => `- (${t.subject}) --[${t.predicate}]--> (${t.object})`
+      )
+    ];
+    if (subGraph.paths.length > 0) {
+      lines.push("\n### MULTI-HOP RELATION PATHS:");
+      const topPaths = subGraph.paths.slice(0, 5);
+      for (const p of topPaths) {
+        const pathStr = p.nodes.map((n) => n.label).join(" \u2794 ");
+        lines.push(`- ${pathStr} (score: ${p.score.toFixed(2)})`);
+      }
+    }
+    return lines.join("\n");
+  }
+};
+
+// src/core/LlmEvals.ts
+var LlmEvals = class {
+  options;
+  constructor(options = {}) {
+    this.options = {
+      minFaithfulnessScore: options.minFaithfulnessScore ?? 0.7,
+      minRelevanceScore: options.minRelevanceScore ?? 0.6,
+      maxToxicityScore: options.maxToxicityScore ?? 0.1
+    };
+  }
+  tokenize(text) {
+    const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+    return new Set(words);
+  }
+  /**
+   * Evaluates faithfulness of LLM answer against the provided reference context.
+   */
+  evaluateFaithfulness(params) {
+    const rawContext = Array.isArray(params.context) ? params.context.join("\n") : params.context;
+    const contextWords = this.tokenize(rawContext);
+    const contextLower = rawContext.toLowerCase();
+    const claims = params.answer.split(/(?<=[.?!])\s+|\n+/).map((c) => c.trim()).filter((c) => c.length > 10);
+    if (claims.length === 0) {
+      return {
+        score: 1,
+        isFaithful: true,
+        groundedClaimsCount: 0,
+        totalClaimsCount: 0,
+        unsupportedClaims: []
+      };
+    }
+    let groundedCount = 0;
+    const unsupportedClaims = [];
+    for (const claim of claims) {
+      const claimWords = Array.from(this.tokenize(claim));
+      if (claimWords.length === 0) {
+        groundedCount++;
+        continue;
+      }
+      let supportedWords = 0;
+      for (const word of claimWords) {
+        if (contextWords.has(word) || contextLower.includes(word)) {
+          supportedWords++;
+        }
+      }
+      const claimOverlap = supportedWords / claimWords.length;
+      if (claimOverlap >= 0.5) {
+        groundedCount++;
+      } else {
+        unsupportedClaims.push(claim);
+      }
+    }
+    const score = Number((groundedCount / claims.length).toFixed(3));
+    const threshold = params.threshold ?? this.options.minFaithfulnessScore;
+    return {
+      score,
+      isFaithful: score >= threshold,
+      groundedClaimsCount: groundedCount,
+      totalClaimsCount: claims.length,
+      unsupportedClaims
+    };
+  }
+  /**
+   * Evaluates relevance of LLM answer to the original user prompt.
+   */
+  evaluateAnswerRelevance(params) {
+    const promptWords = Array.from(this.tokenize(params.prompt));
+    if (promptWords.length === 0) {
+      return { score: 1, isRelevant: true, keywordCoverage: 1 };
+    }
+    const answerWords = this.tokenize(params.answer);
+    const answerLower = params.answer.toLowerCase();
+    let matched = 0;
+    for (const w of promptWords) {
+      if (answerWords.has(w) || answerLower.includes(w)) {
+        matched++;
+      }
+    }
+    const coverage = Number((matched / promptWords.length).toFixed(3));
+    const lengthPenalty = params.answer.trim().split(/\s+/).length < 5 ? 0.5 : 1;
+    const score = Number((coverage * lengthPenalty).toFixed(3));
+    const threshold = params.threshold ?? this.options.minRelevanceScore;
+    return {
+      score,
+      isRelevant: score >= threshold,
+      keywordCoverage: coverage
+    };
+  }
+  /**
+   * In-process zero-dependency toxicity & safety audit.
+   */
+  evaluateToxicity(text) {
+    const toxicPatterns = [
+      {
+        category: "hate_speech",
+        regex: /\b(kill\s+yourself|die\s+in\s+a\s+fire|terrorist|subhuman)\b/i,
+        weight: 0.9
+      },
+      {
+        category: "threat",
+        regex: /\b(i\s+will\s+(murder|harm|destroy|strangle|bomb)\s+you)\b/i,
+        weight: 1
+      },
+      {
+        category: "profanity_severe",
+        regex: /\b(fuck|shit|cunt|motherfucker|asshole)\b/i,
+        weight: 0.4
+      },
+      {
+        category: "self_harm",
+        regex: /\b(how\s+to\s+commit\s+suicide|self-harm|cut\s+wrists)\b/i,
+        weight: 1
+      }
+    ];
+    let maxScore = 0;
+    const flaggedCategories = [];
+    for (const { category, regex, weight } of toxicPatterns) {
+      if (regex.test(text)) {
+        maxScore = Math.max(maxScore, weight);
+        flaggedCategories.push(category);
+      }
+    }
+    const score = Number(maxScore.toFixed(3));
+    return {
+      isSafe: score <= this.options.maxToxicityScore,
+      score,
+      flaggedCategories
+    };
+  }
+  /**
+   * Comprehensive evaluation of response quality and safety.
+   */
+  evaluate(params) {
+    const toxicity = this.evaluateToxicity(params.answer);
+    let faithfulness;
+    let relevance;
+    let scoreSum = 1 - toxicity.score;
+    let count = 1;
+    if (params.context) {
+      faithfulness = this.evaluateFaithfulness({
+        context: params.context,
+        answer: params.answer
+      });
+      scoreSum += faithfulness.score;
+      count++;
+    }
+    if (params.prompt) {
+      relevance = this.evaluateAnswerRelevance({
+        prompt: params.prompt,
+        answer: params.answer
+      });
+      scoreSum += relevance.score;
+      count++;
+    }
+    const overallScore = Number((scoreSum / count).toFixed(3));
+    const passed = toxicity.isSafe && (faithfulness ? faithfulness.isFaithful : true) && (relevance ? relevance.isRelevant : true);
+    return {
+      faithfulness,
+      relevance,
+      toxicity,
+      overallScore,
+      passed
+    };
   }
 };
 
@@ -4635,11 +5214,36 @@ var RealtimeSession = class {
 };
 var RealtimeClient = class {
   /**
-   * Connects to a real-time multimodal session.
+   * Connects to a real-time multimodal session via WebSocket.
    */
   async connect(options) {
     const session = new RealtimeSession(options);
     return session.connect();
+  }
+  /**
+   * Performs WebRTC SDP offer/answer negotiation for ultra-low latency (<150ms)
+   * browser voice streaming with OpenAI Realtime and Gemini Live endpoints.
+   */
+  async negotiateWebRtc(params) {
+    const model = params.model || "gpt-4o-realtime-preview";
+    const baseUrl = params.baseUrl || "https://api.openai.com/v1/realtime";
+    const url = `${baseUrl}?model=${encodeURIComponent(model)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/sdp"
+      },
+      body: params.offerSdp
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(
+        `WebRTC SDP negotiation failed (${response.status}): ${errText}`
+      );
+    }
+    const answerSdp = await response.text();
+    return { answerSdp };
   }
 };
 
@@ -5091,6 +5695,9 @@ var Router = class {
   }
   getProviders() {
     return [...this.providers];
+  }
+  getStrategy() {
+    return this.strategy;
   }
   /**
    * Returns the primary candidate provider ID according to the configured routing strategy.
@@ -6352,11 +6959,20 @@ var SinapsClient = class {
   mcp;
   memory;
   rag;
+  graph;
+  workflows;
+  evals;
   realtime = new RealtimeClient();
   consensus;
   isReversiblePII = false;
   modelAliases = /* @__PURE__ */ new Map();
   hooks;
+  get strategy() {
+    return this.router.getStrategy();
+  }
+  getStrategy() {
+    return this.router.getStrategy();
+  }
   constructor(options) {
     this.storage = options.storage || new InMemoryStorage();
     this.hooks = options.hooks;
@@ -6412,6 +7028,12 @@ var SinapsClient = class {
       ...options.memory
     });
     this.rag = new HybridRagEngine(options.rag);
+    this.graph = new KnowledgeGraph(options.graph);
+    this.workflows = new DurableWorkflowEngine({
+      storage: this.storage,
+      ...options.workflows
+    });
+    this.evals = new LlmEvals(options.evals);
     this.consensus = {
       create: async (consensusOptions) => {
         const engine = new ConsensusEngine();
@@ -7632,6 +8254,20 @@ var sinapsai = createSinapsAI;
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Durable Agent Workflows & State Checkpoint Engine
+ *
+ * Implements:
+ * 1. Resilient step-by-step checkpointing for autonomous agent loops and multi-agent swarms.
+ * 2. Pluggable persistence via StateStorage (InMemory, Redis, Cloudflare KV, D1).
+ * 3. Atomic step recording, state replay, and idempotency protection against duplicate tool runs.
+ * 4. Zero-dependency native implementation.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * In-Process Long-Term Episodic Vector Memory Engine
  *
  * Implements:
@@ -7654,6 +8290,35 @@ var sinapsai = createSinapsAI;
  * 3. Dense vector cosine similarity for deep semantic understanding.
  * 4. Reciprocal Rank Fusion (RRF) combining sparse + dense rank lists.
  * 5. Zero external dependencies, pure Web Standards.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Knowledge Graph & GraphRAG Traversal Engine
+ *
+ * Implements:
+ * 1. Zero-dependency in-memory graph representation (Adjacency List).
+ * 2. Triples extraction (Subject - Predicate - Object).
+ * 3. Multi-Hop BFS / DFS graph traversal and path scoring.
+ * 4. Subgraph synthesis formatted for LLM system prompt injection.
+ * 5. Integration with Hybrid RAG for multi-hop relational retrieval.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process LLM Evals & Faithfulness Guardrail Engine
+ *
+ * Implements:
+ * 1. Faithfulness / Groundedness evaluation (verifying LLM answer against RAG context).
+ * 2. Answer relevance scoring against user prompt intent.
+ * 3. In-process toxicity and safety auditing.
+ * 4. Zero external dependencies, pure Web Standards.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

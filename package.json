@@ -1,11 +1,14 @@
 {
   "name": "sinapsai",
-  "version": "2.12.1",
+  "version": "2.13.0",
   "description": "Zero-dependency in-process AI Gateway & Control Plane with Universal LLM Optimization (LLMO), Multi-Agent Swarm, A2A Handoff Protocol, MCP Tool Bridge, Autonomous Agent Loop, Circuit Breaker, Rate Limiting, PII/Security Guardrails, KV-Cache Tracking, and Unified LLM API for Node.js, Edge & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "sinapsai": "./dist/cli/index.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

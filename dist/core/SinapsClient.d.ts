@@ -12,9 +12,12 @@ import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
+import { DurableWorkflowEngine, type DurableWorkflowOptions } from './DurableWorkflow.js';
 import { EpisodicMemory, type EpisodicMemoryOptions } from './EpisodicMemory.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
+import { KnowledgeGraph, type KnowledgeGraphOptions } from './KnowledgeGraph.js';
+import { LlmEvals, type LlmEvalsOptions } from './LlmEvals.js';
 import { type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions } from './LlmOptimizer.js';
 import { McpToolBridge } from './McpBridge.js';
 import { PIIGuardrails, type PIIGuardrailsOptions } from './PIIGuardrails.js';
@@ -98,6 +101,18 @@ export interface SinapsClientOptions {
      * Optional in-process hybrid RAG configuration.
      */
     rag?: HybridRagOptions;
+    /**
+     * Optional in-process Knowledge Graph & GraphRAG configuration.
+     */
+    graph?: KnowledgeGraphOptions;
+    /**
+     * Optional durable agent workflows configuration.
+     */
+    workflows?: DurableWorkflowOptions;
+    /**
+     * Optional in-process LLM evals configuration.
+     */
+    evals?: LlmEvalsOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -111,6 +126,9 @@ export declare class SinapsClient {
     readonly mcp: McpToolBridge;
     readonly memory: EpisodicMemory;
     readonly rag: HybridRagEngine;
+    readonly graph: KnowledgeGraph;
+    readonly workflows: DurableWorkflowEngine;
+    readonly evals: LlmEvals;
     readonly realtime: RealtimeClient;
     readonly consensus: {
         create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -118,6 +136,8 @@ export declare class SinapsClient {
     private isReversiblePII;
     private modelAliases;
     private hooks?;
+    get strategy(): RouterStrategy;
+    getStrategy(): RouterStrategy;
     constructor(options: SinapsClientOptions);
     readonly chat: {
         completions: {
