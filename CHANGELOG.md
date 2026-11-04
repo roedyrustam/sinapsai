@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.13.3] - 2026-11-05
+### Fixed
+- **GitHub Packages Publication Scripts**: Bypassed prepublish scripts with `--ignore-scripts` during scoped package upload to GitHub Packages (`npm.pkg.github.com`), preventing inter-package dependency resolution conflicts.
+
 ## [2.13.2] - 2026-11-05
 ### Added
 - **Dual Registry Publication (GitHub Packages)**: Automated publication of `@roedyrustam/sinapsai` to GitHub Packages (`npm.pkg.github.com`) alongside official NPM registry release, linking the package directly to the GitHub repository Packages sidebar.

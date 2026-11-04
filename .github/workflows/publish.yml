@@ -75,6 +75,7 @@ jobs:
             pkg.name = '@roedyrustam/sinapsai';
             pkg.repository = { type: 'git', url: 'https://github.com/roedyrustam/sinapsai.git' };
             pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            if (pkg.scripts) delete pkg.scripts.prepublishOnly;
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
 
@@ -82,8 +83,8 @@ jobs:
           echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           echo "@roedyrustam:registry=https://npm.pkg.github.com" >> ~/.npmrc
 
-          # Publish to GitHub Packages (linked directly to this repo)
-          npm publish || echo "[Warning] GitHub Packages publish completed or version already exists."
+          # Publish to GitHub Packages without re-running prepublish scripts
+          npm publish --ignore-scripts --access public || echo "[Warning] GitHub Packages publish completed or version already exists."
 
           # Restore original package.json
           git checkout package.json
