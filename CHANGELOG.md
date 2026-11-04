@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.13.1] - 2026-11-04
+### Fixed
+- **CLI Cross-Platform Entry Point**: Normalized Windows path separators (`\`) when invoking `sinapsai` via `npx` or `node dist/cli/index.js`.
+- **CLI Test Matcher**: Dynamic version pattern matching in CLI test suite.
+
 ## [2.13.0] - 2026-11-04
 ### Added
 - **Zero-Dependency Type-Safe Schema Builder (`s`, `src/utils/schema.ts`, `client.s`)**:

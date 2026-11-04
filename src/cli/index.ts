@@ -94,7 +94,7 @@ Options:
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {
-    process.stdout.write('sinapsai v2.13.0\n');
+    process.stdout.write('sinapsai v2.13.1\n');
     return;
   }
 
@@ -144,11 +144,13 @@ Options:
 }
 
 // Auto-run if executed as main CLI entry point
+const normalizedArgv1 = process.argv[1]?.replace(/\\/g, '/');
 if (
-  process.argv[1] &&
-  (process.argv[1].endsWith('cli/index.js') ||
-    process.argv[1].endsWith('cli/index.ts') ||
-    process.argv[1].endsWith('bin/sinapsai'))
+  normalizedArgv1 &&
+  (normalizedArgv1.endsWith('cli/index.js') ||
+    normalizedArgv1.endsWith('cli/index.ts') ||
+    normalizedArgv1.endsWith('bin/sinapsai') ||
+    normalizedArgv1.endsWith('/sinapsai'))
 ) {
   runCli();
 }
