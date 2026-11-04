@@ -41,3 +41,4 @@ console.log(parsed);
 const toolDef = s.toToolDefinition('processShippingOrder', 'Process a new customer shipping order', orderParams);
 console.log('\n--- OpenAI / Unified API Tool Definition ---');
 console.log(JSON.stringify(toolDef, null, 2));
+

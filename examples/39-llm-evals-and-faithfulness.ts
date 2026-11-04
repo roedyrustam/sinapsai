@@ -33,3 +33,4 @@ console.log(`Overall Score: ${report.overallScore}`);
 console.log(`Faithfulness Score: ${report.faithfulness?.score} (isFaithful: ${report.faithfulness?.isFaithful})`);
 console.log(`Relevance Score: ${report.relevance?.score} (isRelevant: ${report.relevance?.isRelevant})`);
 console.log(`Toxicity Score: ${report.toxicity.score} (isSafe: ${report.toxicity.isSafe})`);
+

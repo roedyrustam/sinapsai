@@ -3,9 +3,7 @@ import { buildClientFromEnv, runCli } from './index.js';
 
 describe('SinapsAI CLI runner', () => {
   it('should display help message', async () => {
-    const writeSpy = vi
-      .spyOn(process.stdout, 'write')
-      .mockImplementation(() => true);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     await runCli(['--help']);
     expect(writeSpy).toHaveBeenCalled();
     const output = writeSpy.mock.calls.map((c) => c[0]).join('');
@@ -16,13 +14,11 @@ describe('SinapsAI CLI runner', () => {
   });
 
   it('should display version', async () => {
-    const writeSpy = vi
-      .spyOn(process.stdout, 'write')
-      .mockImplementation(() => true);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     await runCli(['--version']);
     expect(writeSpy).toHaveBeenCalled();
     const output = writeSpy.mock.calls.map((c) => c[0]).join('');
-    expect(output).toMatch(/sinapsai v2\.\d+\.\d+/);
+    expect(output).toContain('sinapsai v2.13.0');
     writeSpy.mockRestore();
   });
 
@@ -32,3 +28,4 @@ describe('SinapsAI CLI runner', () => {
     expect(client.strategy).toBe('adaptive');
   });
 });
+

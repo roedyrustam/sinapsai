@@ -32,3 +32,4 @@ for (const path of paths) {
 const subGraph = kg.findSubGraph(['SinapsAI'], 2);
 console.log('\n--- Synthesized GraphRAG Context for LLM Prompt ---');
 console.log(kg.toContextPrompt(subGraph));
+
