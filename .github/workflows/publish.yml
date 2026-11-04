@@ -79,14 +79,19 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
 
-          # Configure authentication for npm.pkg.github.com using GitHub Token
-          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          echo "@roedyrustam:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          # Configure authentication for npm.pkg.github.com using GitHub Token in both userconfig and local .npmrc
+          if [ -n "$NPM_CONFIG_USERCONFIG" ]; then
+            echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> "$NPM_CONFIG_USERCONFIG"
+            echo "@roedyrustam:registry=https://npm.pkg.github.com/" >> "$NPM_CONFIG_USERCONFIG"
+          fi
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          echo "@roedyrustam:registry=https://npm.pkg.github.com/" >> .npmrc
 
           # Publish to GitHub Packages without re-running prepublish scripts
-          npm publish --ignore-scripts --access public || echo "[Warning] GitHub Packages publish completed or version already exists."
+          npm publish --registry=https://npm.pkg.github.com/ --ignore-scripts --access public || echo "[Warning] GitHub Packages publish completed or version already exists."
 
-          # Restore original package.json
+          # Clean up local .npmrc and restore original package.json
+          rm -f .npmrc
           git checkout package.json
           echo "[Success] GitHub Packages publication process complete!"
         env:

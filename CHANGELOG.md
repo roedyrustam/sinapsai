@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.13.4] - 2026-11-05
+### Fixed
+- **GitHub Packages Userconfig Authentication**: Injected `_authToken` into both `$NPM_CONFIG_USERCONFIG` runner path and project `.npmrc` to satisfy `npm 11+` strict auth resolution for `npm.pkg.github.com`.
+
 ## [2.13.3] - 2026-11-05
 ### Fixed
 - **GitHub Packages Publication Scripts**: Bypassed prepublish scripts with `--ignore-scripts` during scoped package upload to GitHub Packages (`npm.pkg.github.com`), preventing inter-package dependency resolution conflicts.

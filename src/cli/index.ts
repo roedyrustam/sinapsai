@@ -94,7 +94,7 @@ Options:
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {
-    process.stdout.write('sinapsai v2.13.3\n');
+    process.stdout.write('sinapsai v2.13.4\n');
     return;
   }
 
