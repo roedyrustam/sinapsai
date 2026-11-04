@@ -36,19 +36,27 @@ export function buildClientFromEnv(): SinapsClient {
     providers.push(new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY }));
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    providers.push(new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY }));
+    providers.push(
+      new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY }),
+    );
   }
   if (process.env.GROQ_API_KEY) {
     providers.push(new GroqProvider({ apiKey: process.env.GROQ_API_KEY }));
   }
   if (process.env.DEEPSEEK_API_KEY) {
-    providers.push(new DeepSeekProvider({ apiKey: process.env.DEEPSEEK_API_KEY }));
+    providers.push(
+      new DeepSeekProvider({ apiKey: process.env.DEEPSEEK_API_KEY }),
+    );
   }
   if (process.env.MISTRAL_API_KEY) {
-    providers.push(new MistralProvider({ apiKey: process.env.MISTRAL_API_KEY }));
+    providers.push(
+      new MistralProvider({ apiKey: process.env.MISTRAL_API_KEY }),
+    );
   }
   if (process.env.OPENROUTER_API_KEY) {
-    providers.push(new OpenRouterProvider({ apiKey: process.env.OPENROUTER_API_KEY }));
+    providers.push(
+      new OpenRouterProvider({ apiKey: process.env.OPENROUTER_API_KEY }),
+    );
   }
 
   // Fallback to local Ollama if no cloud keys configured
@@ -62,7 +70,9 @@ export function buildClientFromEnv(): SinapsClient {
   });
 }
 
-export async function runCli(args: string[] = process.argv.slice(2)): Promise<void> {
+export async function runCli(
+  args: string[] = process.argv.slice(2),
+): Promise<void> {
   const command = args[0] || 'serve';
 
   if (command === '--help' || command === '-h' || command === 'help') {
@@ -84,7 +94,7 @@ Options:
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {
-    process.stdout.write('sinapsai v2.13.0\n');
+    process.stdout.write('sinapsai v2.13.2\n');
     return;
   }
 
@@ -134,7 +144,13 @@ Options:
 }
 
 // Auto-run if executed as main CLI entry point
-if (process.argv[1] && (process.argv[1].endsWith('cli/index.js') || process.argv[1].endsWith('cli/index.ts') || process.argv[1].endsWith('bin/sinapsai'))) {
+const normalizedArgv1 = process.argv[1]?.replace(/\\/g, '/');
+if (
+  normalizedArgv1 &&
+  (normalizedArgv1.endsWith('cli/index.js') ||
+    normalizedArgv1.endsWith('cli/index.ts') ||
+    normalizedArgv1.endsWith('bin/sinapsai') ||
+    normalizedArgv1.endsWith('/sinapsai'))
+) {
   runCli();
 }
-

@@ -1,4 +1,4 @@
-name: Auto Publish to NPM
+name: Auto Publish to NPM & GitHub Packages
 
 on:
   push:
@@ -11,10 +11,11 @@ on:
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 jobs:
   publish:
-    name: Check & Publish to NPM
+    name: Check & Publish to Registries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -41,7 +42,7 @@ jobs:
       - name: Build Distribution Bundle
         run: npm run build
 
-      - name: Check Version & Publish to NPM
+      - name: Publish to NPM Registry
         run: |
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PUBLISHED_VERSION=$(npm view sinapsai version 2>/dev/null || echo "0.0.0")
@@ -49,7 +50,7 @@ jobs:
           echo "Published npm registry version: $PUBLISHED_VERSION"
 
           if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "[Publish] Publishing sinapsai@$CURRENT_VERSION to NPM via Trusted Publishing (OIDC)..."
+            echo "[NPM] Publishing sinapsai@$CURRENT_VERSION to NPM Registry via Trusted Publishing (OIDC)..."
             
             # Ensure no legacy auth token overrides OIDC Trusted Publishing
             sed -i '/_authToken/d' ~/.npmrc 2>/dev/null || true
@@ -57,15 +58,47 @@ jobs:
             # Publish using GitHub Actions OIDC Trusted Publishing & Provenance
             npm publish --access public --provenance
 
-            echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM!"
-
-            # Create GitHub Release if not already created
-            if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
-              echo "[Release] Creating GitHub Release v$CURRENT_VERSION..."
-              gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
-            fi
+            echo "[Success] Successfully published sinapsai@$CURRENT_VERSION to NPM Registry!"
           else
-            echo "[Skip] Version $CURRENT_VERSION is already published on NPM ($PUBLISHED_VERSION). Nothing to publish."
+            echo "[Skip] Version $CURRENT_VERSION is already published on NPM Registry ($PUBLISHED_VERSION)."
+          fi
+
+      - name: Publish to GitHub Packages
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "[GitHub Packages] Preparing @roedyrustam/sinapsai@$CURRENT_VERSION for GitHub Packages..."
+
+          # Scoped package name required by GitHub Packages
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = '@roedyrustam/sinapsai';
+            pkg.repository = { type: 'git', url: 'https://github.com/roedyrustam/sinapsai.git' };
+            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+
+          # Configure authentication for npm.pkg.github.com using GitHub Token
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          echo "@roedyrustam:registry=https://npm.pkg.github.com" >> ~/.npmrc
+
+          # Publish to GitHub Packages (linked directly to this repo)
+          npm publish || echo "[Warning] GitHub Packages publish completed or version already exists."
+
+          # Restore original package.json
+          git checkout package.json
+          echo "[Success] GitHub Packages publication process complete!"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if ! gh release view "v$CURRENT_VERSION" >/dev/null 2>&1; then
+            echo "[Release] Creating GitHub Release v$CURRENT_VERSION..."
+            gh release create "v$CURRENT_VERSION" --title "v$CURRENT_VERSION" --generate-notes || true
+          else
+            echo "[Release] GitHub Release v$CURRENT_VERSION already exists."
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
