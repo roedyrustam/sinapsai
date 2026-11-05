@@ -9,10 +9,146 @@
 import { describe, expect, it } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
 import { parseDurationMs, parseRateLimitHeaders } from '../utils/rateLimit.js';
-import { GroqProvider } from './GroqProvider.js';
+import {
+  GROQ_MODELS,
+  GROQ_REASONING_MODELS,
+  GroqProvider,
+} from './GroqProvider.js';
 
 describe('GroqProvider', () => {
   const provider = new GroqProvider({ apiKey: 'test-key' });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // GROQ_MODELS metadata
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('GROQ_MODELS metadata', () => {
+    it('should export all known production and preview models', () => {
+      const expectedIds = [
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+        'mistral-saba-24b',
+        'llama-3.2-1b-preview',
+        'llama-3.2-3b-preview',
+        'qwen/qwen3.8-27b',
+        'llama-guard-3-8b',
+        'whisper-large-v3',
+        'whisper-large-v3-turbo',
+      ];
+
+      for (const id of expectedIds) {
+        expect(GROQ_MODELS[id]).toBeDefined();
+        expect(GROQ_MODELS[id].id).toBe(id);
+      }
+    });
+
+    it('should have correct context window for llama-3.3-70b-versatile (128K)', () => {
+      const meta = GROQ_MODELS['llama-3.3-70b-versatile'];
+      expect(meta.contextWindow).toBe(131_072);
+      expect(meta.maxCompletionTokens).toBe(32_768);
+    });
+
+    it('should have correct context window for llama-3.1-8b-instant (128K full generation)', () => {
+      const meta = GROQ_MODELS['llama-3.1-8b-instant'];
+      expect(meta.contextWindow).toBe(131_072);
+      expect(meta.maxCompletionTokens).toBe(131_072);
+    });
+
+    it('should mark reasoning models with capabilities.reasoning = true', () => {
+      expect(GROQ_MODELS['openai/gpt-oss-120b'].capabilities.reasoning).toBe(
+        true,
+      );
+      expect(GROQ_MODELS['openai/gpt-oss-20b'].capabilities.reasoning).toBe(
+        true,
+      );
+      expect(GROQ_MODELS['qwen/qwen3.8-27b'].capabilities.reasoning).toBe(true);
+    });
+
+    it('should mark non-reasoning models with capabilities.reasoning = false', () => {
+      expect(
+        GROQ_MODELS['llama-3.3-70b-versatile'].capabilities.reasoning,
+      ).toBe(false);
+      expect(GROQ_MODELS['llama-3.1-8b-instant'].capabilities.reasoning).toBe(
+        false,
+      );
+      expect(GROQ_MODELS['mistral-saba-24b'].capabilities.reasoning).toBe(
+        false,
+      );
+    });
+
+    it('should mark audio models with capabilities.audio = true', () => {
+      expect(GROQ_MODELS['whisper-large-v3'].capabilities.audio).toBe(true);
+      expect(GROQ_MODELS['whisper-large-v3-turbo'].capabilities.audio).toBe(
+        true,
+      );
+    });
+
+    it('should have tools capability on chat models but not on guard/audio models', () => {
+      expect(GROQ_MODELS['llama-3.3-70b-versatile'].capabilities.tools).toBe(
+        true,
+      );
+      expect(GROQ_MODELS['llama-guard-3-8b'].capabilities.tools).toBe(false);
+      expect(GROQ_MODELS['whisper-large-v3'].capabilities.tools).toBe(false);
+    });
+
+    it('should have 32K context window for mistral-saba-24b', () => {
+      expect(GROQ_MODELS['mistral-saba-24b'].contextWindow).toBe(32_768);
+    });
+
+    it('should have 8K context window for llama-guard-3-8b', () => {
+      expect(GROQ_MODELS['llama-guard-3-8b'].contextWindow).toBe(8_192);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // GROQ_REASONING_MODELS set
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('GROQ_REASONING_MODELS', () => {
+    it('should contain known reasoning model IDs', () => {
+      expect(GROQ_REASONING_MODELS.has('openai/gpt-oss-120b')).toBe(true);
+      expect(GROQ_REASONING_MODELS.has('openai/gpt-oss-20b')).toBe(true);
+      expect(GROQ_REASONING_MODELS.has('qwen/qwen3.8-27b')).toBe(true);
+    });
+
+    it('should NOT contain non-reasoning model IDs', () => {
+      expect(GROQ_REASONING_MODELS.has('llama-3.3-70b-versatile')).toBe(false);
+      expect(GROQ_REASONING_MODELS.has('llama-3.1-8b-instant')).toBe(false);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // getModelMeta / isReasoningModel
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('getModelMeta', () => {
+    it('should return metadata for known models', () => {
+      const meta = provider.getModelMeta('llama-3.3-70b-versatile');
+      expect(meta).toBeDefined();
+      expect(meta?.name).toBe('Llama 3.3 70B Versatile');
+    });
+
+    it('should return undefined for unknown models', () => {
+      expect(provider.getModelMeta('unknown-model-xyz')).toBeUndefined();
+    });
+  });
+
+  describe('isReasoningModel', () => {
+    it('should return true for reasoning models', () => {
+      expect(provider.isReasoningModel('openai/gpt-oss-120b')).toBe(true);
+      expect(provider.isReasoningModel('qwen/qwen3.8-27b')).toBe(true);
+    });
+
+    it('should return false for non-reasoning models', () => {
+      expect(provider.isReasoningModel('llama-3.3-70b-versatile')).toBe(false);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // resolveModel
+  // ─────────────────────────────────────────────────────────────────────
 
   describe('resolveModel', () => {
     it('should resolve default model to llama-3.3-70b-versatile when no defaultModel is configured', () => {
@@ -40,6 +176,10 @@ describe('GroqProvider', () => {
       );
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // formatRequest
+  // ─────────────────────────────────────────────────────────────────────
 
   describe('formatRequest', () => {
     it('should correctly format request with temperature and max_tokens', () => {
@@ -108,6 +248,81 @@ describe('GroqProvider', () => {
       expect(result.reasoning_format).toBe('parsed');
     });
 
+    it('should auto-set reasoning_format=parsed when reasoning model uses tools', () => {
+      const request: UnifiedApiRequest = {
+        model: 'openai/gpt-oss-120b',
+        messages: [{ role: 'user', content: 'Get weather' }],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather', description: 'Get weather data' },
+          },
+        ],
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.reasoning_format).toBe('parsed');
+    });
+
+    it('should auto-set reasoning_format=parsed when reasoning model uses responseFormat', () => {
+      const request: UnifiedApiRequest = {
+        model: 'qwen/qwen3.8-27b',
+        messages: [{ role: 'user', content: 'Return JSON' }],
+        responseFormat: { type: 'json_object' },
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.reasoning_format).toBe('parsed');
+    });
+
+    it('should NOT auto-set reasoning_format for non-reasoning models with tools', () => {
+      const request: UnifiedApiRequest = {
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: 'Get weather' }],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather', description: 'Get weather data' },
+          },
+        ],
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.reasoning_format).toBeUndefined();
+    });
+
+    it('should NOT auto-set reasoning_format for reasoning model without tools/json', () => {
+      const request: UnifiedApiRequest = {
+        model: 'openai/gpt-oss-120b',
+        messages: [{ role: 'user', content: 'Hello' }],
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.reasoning_format).toBeUndefined();
+    });
+
+    it('should auto-fill max_completion_tokens from model metadata when maxTokens is omitted', () => {
+      const request: UnifiedApiRequest = {
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: 'Hello' }],
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.max_completion_tokens).toBe(32_768);
+      expect(result.max_tokens).toBeUndefined();
+    });
+
+    it('should pass reasoning_effort through to payload', () => {
+      const request: UnifiedApiRequest = {
+        model: 'openai/gpt-oss-20b',
+        messages: [{ role: 'user', content: 'Analyze' }],
+        reasoningEffort: 'high',
+      };
+
+      const result = provider.formatRequest(request);
+      expect(result.reasoning_effort).toBe('high');
+    });
+
     it('should format tools, toolChoice, and json_schema structured outputs', () => {
       const request: UnifiedApiRequest = {
         model: 'llama-3.3-70b-versatile',
@@ -165,6 +380,10 @@ describe('GroqProvider', () => {
       expect(result.messages[2].name).toBeUndefined();
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // formatResponse
+  // ─────────────────────────────────────────────────────────────────────
 
   describe('formatResponse', () => {
     it('should correctly parse the groq response', () => {
@@ -296,6 +515,31 @@ describe('GroqProvider', () => {
       expect(result.usage).toBeUndefined();
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // listModels (unit-level shape test)
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('listModels', () => {
+    it('should have the listModels method', () => {
+      expect(typeof provider.listModels).toBe('function');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // transcribeAudio / translateAudio (unit-level shape test)
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('audio API methods', () => {
+    it('should expose transcribeAudio and translateAudio methods', () => {
+      expect(typeof provider.transcribeAudio).toBe('function');
+      expect(typeof provider.translateAudio).toBe('function');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Groq rate limits parsing
+  // ─────────────────────────────────────────────────────────────────────
 
   describe('Groq rate limits parsing', () => {
     it('should parse Groq duration format headers correctly (7.66s, 2m59.56s, 120ms)', () => {

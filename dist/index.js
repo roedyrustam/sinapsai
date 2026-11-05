@@ -9585,6 +9585,185 @@ var DeepSeekProvider = class {
 };
 
 // src/providers/GroqProvider.ts
+var GROQ_MODELS = {
+  // ── Production Chat Models ──────────────────────────────────────────
+  "llama-3.3-70b-versatile": {
+    id: "llama-3.3-70b-versatile",
+    name: "Llama 3.3 70B Versatile",
+    contextWindow: 131072,
+    maxCompletionTokens: 32768,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0.59,
+    outputPricePer1M: 0.79
+  },
+  "llama-3.1-8b-instant": {
+    id: "llama-3.1-8b-instant",
+    name: "Llama 3.1 8B Instant",
+    contextWindow: 131072,
+    maxCompletionTokens: 131072,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0.05,
+    outputPricePer1M: 0.08
+  },
+  // ── OpenAI Open-Source Models (via Groq) ────────────────────────────
+  "openai/gpt-oss-120b": {
+    id: "openai/gpt-oss-120b",
+    name: "OpenAI GPT-OSS 120B",
+    contextWindow: 131072,
+    maxCompletionTokens: 65536,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0,
+    outputPricePer1M: 0
+  },
+  "openai/gpt-oss-20b": {
+    id: "openai/gpt-oss-20b",
+    name: "OpenAI GPT-OSS 20B",
+    contextWindow: 131072,
+    maxCompletionTokens: 65536,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0,
+    outputPricePer1M: 0
+  },
+  // ── Mistral ─────────────────────────────────────────────────────────
+  "mistral-saba-24b": {
+    id: "mistral-saba-24b",
+    name: "Mistral Saba 24B",
+    contextWindow: 32768,
+    maxCompletionTokens: 32768,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0.79,
+    outputPricePer1M: 0.79
+  },
+  // ── Preview / Lightweight Models ────────────────────────────────────
+  "llama-3.2-1b-preview": {
+    id: "llama-3.2-1b-preview",
+    name: "Llama 3.2 1B Preview",
+    contextWindow: 128e3,
+    maxCompletionTokens: 8192,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0.04,
+    outputPricePer1M: 0.04
+  },
+  "llama-3.2-3b-preview": {
+    id: "llama-3.2-3b-preview",
+    name: "Llama 3.2 3B Preview",
+    contextWindow: 128e3,
+    maxCompletionTokens: 8192,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0.06,
+    outputPricePer1M: 0.06
+  },
+  // ── Qwen Reasoning Models ──────────────────────────────────────────
+  "qwen/qwen3.8-27b": {
+    id: "qwen/qwen3.8-27b",
+    name: "Qwen 3.8 27B",
+    contextWindow: 131072,
+    maxCompletionTokens: 131072,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0,
+    outputPricePer1M: 0
+  },
+  // ── Safety / Moderation ─────────────────────────────────────────────
+  "llama-guard-3-8b": {
+    id: "llama-guard-3-8b",
+    name: "Llama Guard 3 8B",
+    contextWindow: 8192,
+    maxCompletionTokens: 8192,
+    capabilities: {
+      tools: false,
+      jsonMode: false,
+      reasoning: false,
+      vision: false,
+      audio: false
+    },
+    inputPricePer1M: 0.2,
+    outputPricePer1M: 0.2
+  },
+  // ── Audio / Whisper Models ──────────────────────────────────────────
+  "whisper-large-v3": {
+    id: "whisper-large-v3",
+    name: "Whisper Large V3",
+    contextWindow: 0,
+    maxCompletionTokens: 0,
+    capabilities: {
+      tools: false,
+      jsonMode: false,
+      reasoning: false,
+      vision: false,
+      audio: true
+    },
+    inputPricePer1M: 0,
+    outputPricePer1M: 0
+  },
+  "whisper-large-v3-turbo": {
+    id: "whisper-large-v3-turbo",
+    name: "Whisper Large V3 Turbo",
+    contextWindow: 0,
+    maxCompletionTokens: 0,
+    capabilities: {
+      tools: false,
+      jsonMode: false,
+      reasoning: false,
+      vision: false,
+      audio: true
+    },
+    inputPricePer1M: 0,
+    outputPricePer1M: 0
+  }
+};
+var GROQ_REASONING_MODELS = /* @__PURE__ */ new Set([
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "qwen/qwen3.8-27b"
+]);
 var GroqProvider = class {
   id;
   name = "Groq";
@@ -9614,6 +9793,12 @@ var GroqProvider = class {
   get defaultModel() {
     return this.config.defaultModel;
   }
+  /**
+   * Get the base URL for the Groq API.
+   */
+  get baseUrl() {
+    return this.config.baseUrl || "https://api.groq.com/openai/v1";
+  }
   resolveModel(model) {
     if (this.config.modelMap?.[model]) {
       return this.config.modelMap[model];
@@ -9625,6 +9810,18 @@ var GroqProvider = class {
       return "llama-3.3-70b-versatile";
     }
     return model;
+  }
+  /**
+   * Look up static model metadata. Returns `undefined` for unknown models.
+   */
+  getModelMeta(modelId) {
+    return GROQ_MODELS[modelId];
+  }
+  /**
+   * Check whether a model ID is a known reasoning model.
+   */
+  isReasoningModel(modelId) {
+    return GROQ_REASONING_MODELS.has(modelId);
   }
   formatRequest(request) {
     const messages = request.messages.map((m) => {
@@ -9639,8 +9836,9 @@ var GroqProvider = class {
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
       return msg;
     });
+    const resolvedModel = this.resolveModel(request.model);
     const payload = {
-      model: this.resolveModel(request.model),
+      model: resolvedModel,
       messages
     };
     if (request.temperature !== void 0) {
@@ -9649,8 +9847,17 @@ var GroqProvider = class {
     if (request.maxTokens !== void 0) {
       payload.max_tokens = request.maxTokens;
       payload.max_completion_tokens = request.maxTokens;
+    } else {
+      const meta = this.getModelMeta(resolvedModel);
+      if (meta && meta.maxCompletionTokens > 0) {
+        payload.max_completion_tokens = meta.maxCompletionTokens;
+      }
     }
+    const isReasoning = this.isReasoningModel(resolvedModel);
+    const hasToolsOrJson = !!(request.tools || request.responseFormat);
     if (request.thinkingBudget !== void 0) {
+      payload.reasoning_format = "parsed";
+    } else if (isReasoning && hasToolsOrJson) {
       payload.reasoning_format = "parsed";
     }
     if (request.reasoningEffort !== void 0) {
@@ -9705,10 +9912,107 @@ var GroqProvider = class {
       } : void 0
     };
   }
+  // ─────────────────────────────────────────────────────────────────────
+  // List Models API
+  // ─────────────────────────────────────────────────────────────────────
+  /**
+   * Fetch the list of currently available models from the Groq API.
+   *
+   * Calls `GET <baseUrl>/models` (OpenAI-compatible endpoint).
+   */
+  async listModels(signal) {
+    const url = `${this.baseUrl}/models`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${this.config.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Groq API Error (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    const json = await response.json();
+    return json.data ?? [];
+  }
+  // ─────────────────────────────────────────────────────────────────────
+  // Audio Transcription & Translation API
+  // ─────────────────────────────────────────────────────────────────────
+  /**
+   * Transcribe audio using Groq's Whisper endpoint.
+   *
+   * Calls `POST <baseUrl>/audio/transcriptions` with `multipart/form-data`.
+   *
+   * @param file  Audio file as `Blob`, `Buffer`, or `Uint8Array`.
+   * @param options  Transcription options.
+   */
+  async transcribeAudio(file, options) {
+    return this.audioRequest("transcriptions", file, options);
+  }
+  /**
+   * Translate audio to English using Groq's Whisper endpoint.
+   *
+   * Calls `POST <baseUrl>/audio/translations` with `multipart/form-data`.
+   *
+   * @param file  Audio file as `Blob`, `Buffer`, or `Uint8Array`.
+   * @param options  Translation options.
+   */
+  async translateAudio(file, options) {
+    return this.audioRequest("translations", file, options);
+  }
+  /**
+   * Internal helper for audio transcription / translation requests.
+   */
+  async audioRequest(endpoint, file, options) {
+    const url = `${this.baseUrl}/audio/${endpoint}`;
+    const formData = new FormData();
+    let fileBlob;
+    if (file instanceof Blob) {
+      fileBlob = file;
+    } else {
+      const buf = file.buffer.slice(
+        file.byteOffset,
+        file.byteOffset + file.byteLength
+      );
+      fileBlob = new Blob([buf], { type: "audio/mpeg" });
+    }
+    formData.append("file", fileBlob, "audio.mp3");
+    formData.append("model", options?.model ?? "whisper-large-v3-turbo");
+    if (options?.language) formData.append("language", options.language);
+    if (options?.prompt) formData.append("prompt", options.prompt);
+    if (options?.temperature !== void 0)
+      formData.append("temperature", String(options.temperature));
+    if (options?.responseFormat)
+      formData.append("response_format", options.responseFormat);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.config.apiKey}`
+      },
+      body: formData
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      const err = new Error(
+        `Groq Audio API Error (${response.status}): ${errorText}`
+      );
+      err.status = response.status;
+      throw err;
+    }
+    return await response.json();
+  }
+  // ─────────────────────────────────────────────────────────────────────
+  // Chat Completions
+  // ─────────────────────────────────────────────────────────────────────
   async generateContent(request) {
     const payload = this.formatRequest(request);
-    const baseUrl = this.config.baseUrl || "https://api.groq.com/openai/v1";
-    const url = `${baseUrl}/chat/completions`;
+    const url = `${this.baseUrl}/chat/completions`;
     const controller = new AbortController();
     let timeoutId;
     if (this.config.timeoutMs) {
@@ -11797,6 +12101,6 @@ var s = {
  * @license MIT
  */
 
-export { AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CircuitBreaker, CloudflareKVStorage, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEFAULT_CASCADE_TIERS, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, LlmEvals, LlmOptimizer, McpToolBridge, MistralProvider, NumberSchemaNode, OPENROUTER_FREE_MODELS, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RealtimeClient, RealtimeSession, RedisStorage, Router, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, StringSchemaNode, SwarmContext, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, deduplicateSystemInstructions, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, isOpenRouterFreeModel, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sinapsai, tryExtractJson };
+export { AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CircuitBreaker, CloudflareKVStorage, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEFAULT_CASCADE_TIERS, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, LlmEvals, LlmOptimizer, McpToolBridge, MistralProvider, NumberSchemaNode, OPENROUTER_FREE_MODELS, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RealtimeClient, RealtimeSession, RedisStorage, Router, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, StringSchemaNode, SwarmContext, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, deduplicateSystemInstructions, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, isOpenRouterFreeModel, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sinapsai, tryExtractJson };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
