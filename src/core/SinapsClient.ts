@@ -44,6 +44,11 @@ import type {
   UnifiedApiStreamChunk,
 } from '../types/index.js';
 import {
+  jsonSchema,
+  SchemaValidationError,
+  validateSchema,
+} from '../utils/schema.js';
+import {
   accumulateStream,
   type StreamAccumulatorOptions,
 } from '../utils/streamAccumulator.js';
@@ -53,6 +58,7 @@ import {
 } from '../utils/structuredOutput.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { executeBatch } from './BatchExecutor.js';
+import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
 import {
   CircuitBreaker,
   type CircuitBreakerOptions,
@@ -188,6 +194,12 @@ export interface SinapsClientOptions {
    * Optional in-process LLM evals configuration.
    */
   evals?: LlmEvalsOptions;
+  /**
+   * Optional active canary health probing configuration.
+   * Periodically runs non-blocking background probes to detect outages early,
+   * opening the circuit breaker before user requests arrive and eliminating P99 tail latency.
+   */
+  canary?: CanaryProberOptions | boolean;
 }
 
 export class SinapsClient {
@@ -198,6 +210,7 @@ export class SinapsClient {
   public readonly contextCompressor?: ContextCompressor;
   public readonly hedgedExecutor?: HedgedExecutor;
   public readonly rateLimiter?: GatewayRateLimiter;
+  public readonly canary?: CanaryProber;
   public readonly llmo?: LlmOptimizer;
   public readonly mcp: McpToolBridge;
   public readonly memory: EpisodicMemory;
@@ -340,6 +353,19 @@ export class SinapsClient {
       hedging: options.hedging,
     });
     this.hedgedExecutor = this.router.getHedgedExecutor();
+
+    // Initialize Active Canary Probing if configured
+    if (options.canary) {
+      const canaryOpts =
+        typeof options.canary === 'object' ? options.canary : {};
+      this.canary = new CanaryProber(
+        cb,
+        options.providers,
+        this.storage,
+        canaryOpts,
+      );
+      this.canary.start();
+    }
   }
 
   public readonly chat = {
@@ -572,8 +598,57 @@ export class SinapsClient {
         const text = textOrResponse.choices?.[0]?.message?.content || '';
         return tryExtractJson<T>(text);
       },
+
+      /**
+       * Creates a non-streaming chat completion and validates the output against any schema
+       * (Standard Schema v1, Zod, SinapsAI SchemaNode, or JSON Schema) with strict type-safety.
+       */
+      createStructured: async <T = unknown>(
+        request: Omit<
+          CreateChatCompletionRequestNonStreaming,
+          'responseFormat'
+        > & {
+          schema: unknown;
+          schemaName?: string;
+          schemaDescription?: string;
+          strict?: boolean;
+        },
+      ): Promise<{ data: T; response: UnifiedApiResponse }> => {
+        const schemaName = request.schemaName || 'structured_output';
+        const format = jsonSchema(schemaName, request.schema, {
+          description: request.schemaDescription,
+          strict: request.strict,
+        });
+
+        const res = (await this.chat.completions.create({
+          ...request,
+          stream: false,
+          responseFormat: format,
+        })) as UnifiedApiResponse;
+
+        const content = res.choices?.[0]?.message?.content || '{}';
+        const parsed = tryExtractJson<unknown>(content) ?? {};
+
+        const validation = await validateSchema<T>(request.schema, parsed);
+        if (!validation.success) {
+          throw new SchemaValidationError(
+            `Structured output validation failed: ${validation.errors.join('; ')}`,
+            '',
+            parsed,
+          );
+        }
+
+        return { data: validation.data, response: res };
+      },
     },
   };
+
+  /**
+   * Stop all active background processes (canary prober, timers) on the client.
+   */
+  public stop(): void {
+    this.canary?.stop();
+  }
 
   /**
    * Helper to accumulate streaming chunks into a single UnifiedApiResponse.

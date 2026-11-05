@@ -9,6 +9,7 @@ import type { Provider } from '../providers/Provider.js';
 import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CachedContentInfo, CircuitBreakerStatus, ContextCacheEligibility, CreateCachedContentOptions, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
+import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
@@ -113,6 +114,12 @@ export interface SinapsClientOptions {
      * Optional in-process LLM evals configuration.
      */
     evals?: LlmEvalsOptions;
+    /**
+     * Optional active canary health probing configuration.
+     * Periodically runs non-blocking background probes to detect outages early,
+     * opening the circuit breaker before user requests arrive and eliminating P99 tail latency.
+     */
+    canary?: CanaryProberOptions | boolean;
 }
 export declare class SinapsClient {
     private router;
@@ -122,6 +129,7 @@ export declare class SinapsClient {
     readonly contextCompressor?: ContextCompressor;
     readonly hedgedExecutor?: HedgedExecutor;
     readonly rateLimiter?: GatewayRateLimiter;
+    readonly canary?: CanaryProber;
     readonly llmo?: LlmOptimizer;
     readonly mcp: McpToolBridge;
     readonly memory: EpisodicMemory;
@@ -158,8 +166,25 @@ export declare class SinapsClient {
              * Safely attempts to extract and parse JSON data, returning null if invalid.
              */
             tryExtractJson: <T = unknown>(textOrResponse: string | UnifiedApiResponse) => T | null;
+            /**
+             * Creates a non-streaming chat completion and validates the output against any schema
+             * (Standard Schema v1, Zod, SinapsAI SchemaNode, or JSON Schema) with strict type-safety.
+             */
+            createStructured: <T = unknown>(request: Omit<CreateChatCompletionRequestNonStreaming, 'responseFormat'> & {
+                schema: unknown;
+                schemaName?: string;
+                schemaDescription?: string;
+                strict?: boolean;
+            }) => Promise<{
+                data: T;
+                response: UnifiedApiResponse;
+            }>;
         };
     };
+    /**
+     * Stop all active background processes (canary prober, timers) on the client.
+     */
+    stop(): void;
     /**
      * Helper to accumulate streaming chunks into a single UnifiedApiResponse.
      */

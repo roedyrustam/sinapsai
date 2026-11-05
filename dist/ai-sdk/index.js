@@ -1193,6 +1193,252 @@ ${part.codeExecutionResult.output || ""}
   }
 };
 
+// src/utils/schema.ts
+var SchemaValidationError = class extends Error {
+  path;
+  received;
+  constructor(message, path = "", received = void 0) {
+    super(
+      path ? `Validation error at "${path}": ${message}` : `Validation error: ${message}`
+    );
+    this.name = "SchemaValidationError";
+    this.path = path;
+    this.received = received;
+  }
+};
+function isStandardSchema(value) {
+  return typeof value === "object" && value !== null && "~standard" in value && typeof value["~standard"] === "object" && value["~standard"] !== null && typeof value["~standard"].validate === "function";
+}
+function isSinapsSchema(value) {
+  return typeof value === "object" && value !== null && typeof value.toJsonSchema === "function" && typeof value.parse === "function";
+}
+function isZodSchema(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const anyVal = value;
+  return typeof anyVal.safeParse === "function" && typeof anyVal._def === "object" && anyVal._def !== null && typeof anyVal._def.typeName === "string";
+}
+function zodDefToJsonSchema(def) {
+  if (!def?.typeName) return { type: "object" };
+  switch (def.typeName) {
+    case "ZodString": {
+      const schema = { type: "string" };
+      if (def.description) schema.description = def.description;
+      if (Array.isArray(def.checks)) {
+        for (const check of def.checks) {
+          if (check.kind === "min") schema.minLength = check.value;
+          if (check.kind === "max") schema.maxLength = check.value;
+        }
+      }
+      return schema;
+    }
+    case "ZodNumber": {
+      const isInteger = Array.isArray(def.checks) && def.checks.some((c) => c.kind === "int");
+      const schema = {
+        type: isInteger ? "integer" : "number"
+      };
+      if (def.description) schema.description = def.description;
+      if (Array.isArray(def.checks)) {
+        for (const check of def.checks) {
+          if (check.kind === "min") schema.minimum = check.value;
+          if (check.kind === "max") schema.maximum = check.value;
+        }
+      }
+      return schema;
+    }
+    case "ZodBoolean":
+      return { type: "boolean", description: def.description };
+    case "ZodArray": {
+      const inner = def.type?._def ? zodDefToJsonSchema(def.type._def) : { type: "string" };
+      const schema = {
+        type: "array",
+        items: inner
+      };
+      if (def.description) schema.description = def.description;
+      if (def.exactLength?.value !== void 0) {
+        schema.minItems = def.exactLength.value;
+        schema.maxItems = def.exactLength.value;
+      }
+      if (def.minLength?.value !== void 0)
+        schema.minItems = def.minLength.value;
+      if (def.maxLength?.value !== void 0)
+        schema.maxItems = def.maxLength.value;
+      return schema;
+    }
+    case "ZodObject": {
+      const properties = {};
+      const required = [];
+      const shape = typeof def.shape === "function" ? def.shape() : def.shape;
+      if (shape && typeof shape === "object") {
+        for (const [key, prop] of Object.entries(shape)) {
+          const propDef = prop?._def;
+          if (propDef) {
+            properties[key] = zodDefToJsonSchema(propDef);
+            const isOptional = propDef.typeName === "ZodOptional" || propDef.typeName === "ZodDefault";
+            if (!isOptional) {
+              required.push(key);
+            }
+          }
+        }
+      }
+      const schema = {
+        type: "object",
+        properties,
+        additionalProperties: false
+      };
+      if (required.length > 0) schema.required = required;
+      if (def.description) schema.description = def.description;
+      return schema;
+    }
+    case "ZodEnum": {
+      const values = Array.isArray(def.values) ? [...def.values] : [];
+      return {
+        type: "string",
+        enum: values,
+        description: def.description
+      };
+    }
+    case "ZodOptional": {
+      const inner = def.innerType?._def ? zodDefToJsonSchema(def.innerType._def) : {};
+      return inner;
+    }
+    case "ZodNullable": {
+      const inner = def.innerType?._def ? zodDefToJsonSchema(def.innerType._def) : {};
+      return inner;
+    }
+    case "ZodDefault": {
+      const inner = def.innerType?._def ? zodDefToJsonSchema(def.innerType._def) : {};
+      inner.default = typeof def.defaultValue === "function" ? def.defaultValue() : def.defaultValue;
+      return inner;
+    }
+    case "ZodLiteral": {
+      return {
+        type: typeof def.value,
+        enum: [def.value],
+        description: def.description
+      };
+    }
+    case "ZodUnion": {
+      const options = Array.isArray(def.options) ? (
+        // biome-ignore lint/suspicious/noExplicitAny: union options
+        def.options.map(
+          (opt) => opt?._def ? zodDefToJsonSchema(opt._def) : {}
+        )
+      ) : [];
+      return {
+        anyOf: options,
+        description: def.description
+      };
+    }
+    default:
+      return { type: "object", description: def.description };
+  }
+}
+function toStandardJsonSchema(schema, options) {
+  if (schema == null) {
+    return { type: "object" };
+  }
+  if (isSinapsSchema(schema)) {
+    return schema.toJsonSchema();
+  }
+  if (typeof schema.toJsonSchema === "function") {
+    return schema.toJsonSchema();
+  }
+  if (isZodSchema(schema)) {
+    const def = schema._def;
+    const res = zodDefToJsonSchema(def);
+    if (options?.description && !res.description) {
+      res.description = options.description;
+    }
+    return res;
+  }
+  const anySchema = schema;
+  if (isStandardSchema(schema)) {
+    if (typeof anySchema.jsonSchema === "object" && anySchema.jsonSchema !== null) {
+      return anySchema.jsonSchema;
+    }
+    if (anySchema._def) {
+      return zodDefToJsonSchema(anySchema._def);
+    }
+  }
+  if (typeof schema === "object" && schema !== null && ("type" in schema || "properties" in schema || "enum" in schema)) {
+    const raw = schema;
+    if (options?.description && !raw.description) {
+      return { ...raw, description: options.description };
+    }
+    return raw;
+  }
+  if (typeof schema === "object" && schema !== null) {
+    const properties = {};
+    const required = [];
+    for (const [key, val] of Object.entries(schema)) {
+      if (isSinapsSchema(val)) {
+        properties[key] = val.toJsonSchema();
+        if (!val.isOptional) required.push(key);
+      } else {
+        properties[key] = toStandardJsonSchema(val);
+        required.push(key);
+      }
+    }
+    const res = {
+      type: "object",
+      properties,
+      additionalProperties: false
+    };
+    if (required.length > 0) res.required = required;
+    if (options?.description) res.description = options.description;
+    return res;
+  }
+  return { type: "object" };
+}
+async function validateSchema(schema, value) {
+  if (schema == null) {
+    return { success: true, data: value };
+  }
+  if (isStandardSchema(schema)) {
+    const res = await schema["~standard"].validate(value);
+    if ("issues" in res && res.issues && res.issues.length > 0) {
+      return {
+        success: false,
+        errors: res.issues.map((i) => i.message)
+      };
+    }
+    if ("value" in res) {
+      return { success: true, data: res.value };
+    }
+    return { success: true, data: value };
+  }
+  const anySchema = schema;
+  if (typeof anySchema.safeParse === "function") {
+    const res = anySchema.safeParse(value);
+    if (res.success) {
+      return { success: true, data: res.data };
+    }
+    const errMsg = res.error instanceof Error ? res.error.message : res.error ? String(res.error) : "Validation failed";
+    return { success: false, errors: [errMsg] };
+  }
+  if (typeof anySchema.parse === "function") {
+    try {
+      const data = anySchema.parse(value);
+      return { success: true, data };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, errors: [errMsg] };
+    }
+  }
+  return { success: true, data: value };
+}
+function jsonSchema(name, schema, options) {
+  return {
+    type: "json_schema",
+    json_schema: {
+      name,
+      description: options?.description,
+      schema: toStandardJsonSchema(schema, options),
+      strict: options?.strict ?? true
+    }
+  };
+}
+
 // src/utils/streamAccumulator.ts
 async function accumulateStream(stream, options) {
   let id = "";
@@ -2009,6 +2255,222 @@ async function executeBatch(items, handler, options) {
     durationMs
   };
 }
+
+// src/core/CanaryProber.ts
+var CanaryProber = class {
+  circuitBreaker;
+  providers = /* @__PURE__ */ new Map();
+  storage;
+  options;
+  timer;
+  inFlightProbes = /* @__PURE__ */ new Map();
+  healthCache = /* @__PURE__ */ new Map();
+  isRunning = false;
+  constructor(circuitBreaker, providers, storage, options = {}) {
+    this.circuitBreaker = circuitBreaker;
+    this.storage = storage;
+    for (const p of providers) {
+      this.providers.set(p.id, p);
+      this.healthCache.set(p.id, {
+        providerId: p.id,
+        status: "HEALTHY",
+        consecutiveFailures: 0
+      });
+    }
+    this.options = {
+      intervalMs: options.intervalMs ?? 3e4,
+      timeoutMs: options.timeoutMs ?? 5e3,
+      mode: options.mode ?? "on_degraded",
+      failureThreshold: options.failureThreshold ?? 2,
+      probeRequest: options.probeRequest,
+      onHealthChange: options.onHealthChange
+    };
+  }
+  /**
+   * Register or update a provider in the prober.
+   */
+  registerProvider(provider) {
+    this.providers.set(provider.id, provider);
+    if (!this.healthCache.has(provider.id)) {
+      this.healthCache.set(provider.id, {
+        providerId: provider.id,
+        status: "HEALTHY",
+        consecutiveFailures: 0
+      });
+    }
+  }
+  /**
+   * Start the background canary probing timer.
+   */
+  start() {
+    if (this.isRunning) return this;
+    this.isRunning = true;
+    Promise.resolve().then(() => this.probeAll().catch(() => {
+    }));
+    this.timer = setInterval(() => {
+      this.probeAll().catch(() => {
+      });
+    }, this.options.intervalMs);
+    if (this.timer && typeof this.timer === "object" && "unref" in this.timer && typeof this.timer.unref === "function") {
+      this.timer.unref();
+    }
+    return this;
+  }
+  /**
+   * Stop the background canary probing timer and cancel pending probes.
+   */
+  stop() {
+    this.isRunning = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = void 0;
+    }
+    for (const controller of this.inFlightProbes.values()) {
+      controller.abort();
+    }
+    this.inFlightProbes.clear();
+    return this;
+  }
+  /**
+   * Check if the prober is currently running in the background.
+   */
+  isActive() {
+    return this.isRunning;
+  }
+  /**
+   * Get the current proactive health telemetry for a specific provider.
+   */
+  getHealth(providerId) {
+    return this.healthCache.get(providerId);
+  }
+  /**
+   * Get proactive health telemetry for all registered providers.
+   */
+  getAllHealth() {
+    const result = {};
+    for (const [id, health] of this.healthCache.entries()) {
+      result[id] = { ...health };
+    }
+    return result;
+  }
+  /**
+   * Manually trigger a proactive canary probe against a specific provider.
+   */
+  async probeProvider(provider) {
+    const providerId = provider.id;
+    const existing = this.inFlightProbes.get(providerId);
+    if (existing) {
+      existing.abort();
+    }
+    const controller = new AbortController();
+    this.inFlightProbes.set(providerId, controller);
+    let timeoutId;
+    if (this.options.timeoutMs > 0) {
+      timeoutId = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    }
+    const startTime = Date.now();
+    try {
+      let req;
+      if (typeof this.options.probeRequest === "function") {
+        req = this.options.probeRequest(provider);
+      } else if (this.options.probeRequest) {
+        req = { ...this.options.probeRequest };
+      } else {
+        const defaultModel = provider.defaultModel || (provider.resolveModel ? provider.resolveModel("default") : "default");
+        req = {
+          model: defaultModel,
+          messages: [{ role: "user", content: "ping" }],
+          maxTokens: 1
+        };
+      }
+      req.signal = controller.signal;
+      const res = await provider.generateContent(req);
+      if (res != null && typeof res === "object" && Symbol.asyncIterator in res) {
+        const iterator = res[Symbol.asyncIterator]();
+        await iterator.next();
+      }
+      const latencyMs = Date.now() - startTime;
+      await this.recordProbeSuccess(providerId, latencyMs);
+      return { ok: true, latencyMs };
+    } catch (err) {
+      const latencyMs = Date.now() - startTime;
+      const error = err instanceof Error ? err : new Error(String(err));
+      await this.recordProbeFailure(providerId, error, latencyMs);
+      return { ok: false, latencyMs, error };
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      this.inFlightProbes.delete(providerId);
+    }
+  }
+  /**
+   * Run canary probes across all eligible providers concurrently.
+   */
+  async probeAll() {
+    const results = {};
+    const probePromises = [];
+    for (const [id, provider] of this.providers.entries()) {
+      if (this.options.mode === "on_degraded") {
+        const isAvailable = await this.circuitBreaker.isAvailable(id);
+        const health = this.healthCache.get(id);
+        if (isAvailable && health?.status === "HEALTHY") {
+          continue;
+        }
+      }
+      probePromises.push(
+        this.probeProvider(provider).then((res) => {
+          results[id] = {
+            ok: res.ok,
+            latencyMs: res.latencyMs,
+            error: res.error?.message
+          };
+        })
+      );
+    }
+    await Promise.allSettled(probePromises);
+    return results;
+  }
+  async recordProbeSuccess(providerId, latencyMs) {
+    const current = this.healthCache.get(providerId) ?? {
+      providerId,
+      status: "HEALTHY",
+      consecutiveFailures: 0
+    };
+    const previousStatus = current.status;
+    current.status = "HEALTHY";
+    current.consecutiveFailures = 0;
+    current.lastProbeTime = Date.now();
+    current.latencyMs = latencyMs;
+    current.lastError = void 0;
+    this.healthCache.set(providerId, current);
+    await this.circuitBreaker.recordSuccess(providerId);
+    if (previousStatus !== "HEALTHY") {
+      this.options.onHealthChange?.(providerId, "HEALTHY", latencyMs);
+    }
+  }
+  async recordProbeFailure(providerId, error, latencyMs) {
+    const current = this.healthCache.get(providerId) ?? {
+      providerId,
+      status: "HEALTHY",
+      consecutiveFailures: 0
+    };
+    current.consecutiveFailures += 1;
+    current.lastProbeTime = Date.now();
+    current.latencyMs = latencyMs;
+    current.lastError = error.message;
+    await this.circuitBreaker.recordFailure(providerId);
+    const isAvailable = await this.circuitBreaker.isAvailable(providerId);
+    const previousStatus = current.status;
+    if (!isAvailable || current.consecutiveFailures >= this.options.failureThreshold) {
+      current.status = "DOWN";
+    } else {
+      current.status = "DEGRADED";
+    }
+    this.healthCache.set(providerId, current);
+    if (previousStatus !== current.status) {
+      this.options.onHealthChange?.(providerId, current.status, latencyMs);
+    }
+  }
+};
 
 // src/core/CircuitBreaker.ts
 var CircuitBreaker = class {
@@ -6955,6 +7417,7 @@ var SinapsClient = class {
   contextCompressor;
   hedgedExecutor;
   rateLimiter;
+  canary;
   llmo;
   mcp;
   memory;
@@ -7067,6 +7530,16 @@ var SinapsClient = class {
       hedging: options.hedging
     });
     this.hedgedExecutor = this.router.getHedgedExecutor();
+    if (options.canary) {
+      const canaryOpts = typeof options.canary === "object" ? options.canary : {};
+      this.canary = new CanaryProber(
+        cb,
+        options.providers,
+        this.storage,
+        canaryOpts
+      );
+      this.canary.start();
+    }
   }
   chat = {
     completions: {
@@ -7242,9 +7715,42 @@ var SinapsClient = class {
         }
         const text = textOrResponse.choices?.[0]?.message?.content || "";
         return tryExtractJson(text);
+      },
+      /**
+       * Creates a non-streaming chat completion and validates the output against any schema
+       * (Standard Schema v1, Zod, SinapsAI SchemaNode, or JSON Schema) with strict type-safety.
+       */
+      createStructured: async (request) => {
+        const schemaName = request.schemaName || "structured_output";
+        const format = jsonSchema(schemaName, request.schema, {
+          description: request.schemaDescription,
+          strict: request.strict
+        });
+        const res = await this.chat.completions.create({
+          ...request,
+          stream: false,
+          responseFormat: format
+        });
+        const content = res.choices?.[0]?.message?.content || "{}";
+        const parsed = tryExtractJson(content) ?? {};
+        const validation = await validateSchema(request.schema, parsed);
+        if (!validation.success) {
+          throw new SchemaValidationError(
+            `Structured output validation failed: ${validation.errors.join("; ")}`,
+            "",
+            parsed
+          );
+        }
+        return { data: validation.data, response: res };
       }
     }
   };
+  /**
+   * Stop all active background processes (canary prober, timers) on the client.
+   */
+  stop() {
+    this.canary?.stop();
+  }
   /**
    * Helper to accumulate streaming chunks into a single UnifiedApiResponse.
    */
@@ -8224,6 +8730,18 @@ var sinapsai = createSinapsAI;
  * @license MIT
  */
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Zero-Dependency Type-Safe Schema Builder
+ *
+ * Provides a lightweight, Zod-like fluent schema declaration engine
+ * that compiles directly to standard JSON Schema (OpenAI / MCP compatible)
+ * with built-in runtime validation and inference without external dependencies.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
  * SinapsAI - In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
  *
  * Implements an in-memory, zero-dependency multi-agent orchestrator featuring:
@@ -8233,6 +8751,18 @@ var sinapsai = createSinapsAI;
  * - Standard A2A Agent Card exporter conforming to /.well-known/agent.json spec
  * - Both synchronous (run) and real-time streaming (runStream) execution modes
  * - Concurrency and PII / Security guardrail compatibility
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Active Canary Health Probing & Proactive Circuit Breaker
+ *
+ * Runs non-blocking background canary probes to detect provider outages
+ * and degradations proactively. Opens the circuit breaker *before* user
+ * traffic arrives, eliminating P99 timeout spikes and achieving zero tail-latency failover.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

@@ -10,6 +10,7 @@ export * from './ai-sdk/index.js';
 export * from './core/AgentSwarm.js';
 export * from './core/BatchExecutor.js';
 export * from './core/BudgetGuardrails.js';
+export * from './core/CanaryProber.js';
 export * from './core/CircuitBreaker.js';
 export * from './core/CloudflareKVStorage.js';
 export * from './core/ConsensusEngine.js';
