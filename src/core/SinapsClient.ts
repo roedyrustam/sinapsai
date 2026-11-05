@@ -73,6 +73,10 @@ import {
   ContextCompressor,
 } from './ContextCompressor.js';
 import {
+  DashboardServer,
+  type DashboardServerOptions,
+} from './DashboardServer.js';
+import {
   DurableWorkflowEngine,
   type DurableWorkflowOptions,
 } from './DurableWorkflow.js';
@@ -80,6 +84,12 @@ import {
   EpisodicMemory,
   type EpisodicMemoryOptions,
 } from './EpisodicMemory.js';
+import {
+  FaithfulnessSentinel,
+  type FaithfulnessSentinelOptions,
+  type GroundingVerificationResult,
+  type GroundingVerifiedRequest,
+} from './FaithfulnessSentinel.js';
 import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
@@ -200,6 +210,16 @@ export interface SinapsClientOptions {
    * opening the circuit breaker before user requests arrive and eliminating P99 tail latency.
    */
   canary?: CanaryProberOptions | boolean;
+  /**
+   * Optional in-process Web UI metrics & telemetry dashboard configuration.
+   * Serves an embedded, zero-dependency dashboard on http://localhost:3140 by default.
+   */
+  dashboard?: DashboardServerOptions | boolean;
+  /**
+   * Optional Hallucination & Faithfulness Sentinel configuration.
+   * Verifies RAG outputs against context references and guards against hallucinations.
+   */
+  sentinel?: FaithfulnessSentinelOptions;
 }
 
 export class SinapsClient {
@@ -211,6 +231,8 @@ export class SinapsClient {
   public readonly hedgedExecutor?: HedgedExecutor;
   public readonly rateLimiter?: GatewayRateLimiter;
   public readonly canary?: CanaryProber;
+  public readonly sentinel: FaithfulnessSentinel;
+  public dashboard?: DashboardServer;
   public readonly llmo?: LlmOptimizer;
   public readonly mcp: McpToolBridge;
   public readonly memory: EpisodicMemory;
@@ -365,6 +387,23 @@ export class SinapsClient {
         canaryOpts,
       );
       this.canary.start();
+    }
+
+    // Initialize Faithfulness Sentinel
+    this.sentinel = new FaithfulnessSentinel({
+      ...options.sentinel,
+      client: this,
+    });
+
+    // Initialize Dashboard Server if configured
+    if (options.dashboard) {
+      const dashOpts =
+        typeof options.dashboard === 'object' ? options.dashboard : {};
+      this.dashboard = new DashboardServer({
+        client: this,
+        ...dashOpts,
+      });
+      void this.dashboard.start();
     }
   }
 
@@ -544,10 +583,49 @@ export class SinapsClient {
           piiVault.size > 0 &&
           'choices' in (res as UnifiedApiResponse)
         ) {
-          return this.guardrails.restoreResponse(
+          const restored = this.guardrails.restoreResponse(
             res as UnifiedApiResponse,
             piiVault,
           );
+          if (this.dashboard && !request.stream) {
+            const rAny = restored as unknown as Record<string, unknown>;
+            this.dashboard.recordRequest({
+              id: restored.id || `req_${Date.now()}`,
+              timestamp: Date.now(),
+              model: restored.model || fullReq.model,
+              provider: restored.provider || candidateProviderId || 'unknown',
+              latencyMs: Number(rAny.latencyMs ?? 0),
+              promptTokens: restored.usage?.promptTokens || 0,
+              completionTokens: restored.usage?.completionTokens || 0,
+              totalTokens: restored.usage?.totalTokens || 0,
+              cached: Boolean(rAny.cached),
+              costUsd: Number(rAny.estimatedCostUsd ?? 0),
+              status: 'success',
+            });
+          }
+          return restored;
+        }
+
+        if (
+          this.dashboard &&
+          !request.stream &&
+          'choices' in (res as UnifiedApiResponse)
+        ) {
+          const resp = res as UnifiedApiResponse;
+          const rAny = resp as unknown as Record<string, unknown>;
+          this.dashboard.recordRequest({
+            id: resp.id || `req_${Date.now()}`,
+            timestamp: Date.now(),
+            model: resp.model || fullReq.model,
+            provider: resp.provider || candidateProviderId || 'unknown',
+            latencyMs: Number(rAny.latencyMs ?? 0),
+            promptTokens: resp.usage?.promptTokens || 0,
+            completionTokens: resp.usage?.completionTokens || 0,
+            totalTokens: resp.usage?.totalTokens || 0,
+            cached: Boolean(rAny.cached),
+            costUsd: Number(rAny.estimatedCostUsd ?? 0),
+            status: 'success',
+          });
         }
 
         return res;
@@ -640,14 +718,62 @@ export class SinapsClient {
 
         return { data: validation.data, response: res };
       },
+
+      /**
+       * Creates a chat completion and verifies groundedness against context documents,
+       * guarding against hallucinations with optional auto-retry / escalation.
+       */
+      createGroundingVerified: async (
+        request: GroundingVerifiedRequest,
+      ): Promise<{
+        response: UnifiedApiResponse;
+        grounding: GroundingVerificationResult;
+      }> => {
+        const result = await this.sentinel.executeVerifiedCompletion(
+          request,
+          this,
+        );
+        return {
+          response: result.completion,
+          grounding: result.grounding,
+        };
+      },
     },
   };
 
   /**
-   * Stop all active background processes (canary prober, timers) on the client.
+   * Starts the embedded local web metrics dashboard.
+   */
+  public async startDashboard(
+    options?: Partial<DashboardServerOptions>,
+  ): Promise<DashboardServer> {
+    if (!this.dashboard) {
+      this.dashboard = new DashboardServer({
+        client: this,
+        ...options,
+      });
+    }
+    if (!this.dashboard.isRunning) {
+      await this.dashboard.start();
+    }
+    return this.dashboard;
+  }
+
+  /**
+   * Stops the embedded local web metrics dashboard.
+   */
+  public async stopDashboard(): Promise<void> {
+    if (this.dashboard) {
+      await this.dashboard.stop();
+    }
+  }
+
+  /**
+   * Stop all active background processes (canary prober, dashboard, timers) on the client.
    */
   public stop(): void {
     this.canary?.stop();
+    void this.dashboard?.stop();
   }
 
   /**

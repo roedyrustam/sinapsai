@@ -11,6 +11,7 @@ describe('SinapsAI CLI runner', () => {
     const output = writeSpy.mock.calls.map((c) => c[0]).join('');
     expect(output).toContain('SinapsAI CLI');
     expect(output).toContain('serve');
+    expect(output).toContain('dashboard');
     expect(output).toContain('mcp');
     writeSpy.mockRestore();
   });

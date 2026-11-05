@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-529%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-542%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -96,6 +96,10 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [34. Gemini Explicit Context Caching & Eksekusi Tool Paralel Massal](#34-gemini-explicit-context-caching--eksekusi-tool-paralel-massal)
   - [35. Multi-Agent Swarm In-Process & Protokol Handoff Agent-to-Agent (A2A)](#35-multi-agent-swarm-in-process--protokol-handoff-agent-to-agent-a2a)
   - [36. Mesin Optimasi LLM Universal (LLMO)](#36-mesin-optimasi-llm-universal-llmo)
+  - [37. Active Canary Health Probing (Pencegahan Latensi Ekor & Outage Evasion)](#37-active-canary-health-probing-pencegahan-latensi-ekor--outage-evasion)
+  - [38. Standard Schema v1 & Zod Direct Resolver (createStructured)](#38-standard-schema-v1--zod-direct-resolver-createstructured)
+  - [39. Embedded Local Web UI & Telemetry Dashboard (sinapsai dashboard)](#39-embedded-local-web-ui--telemetry-dashboard-sinapsai-dashboard)
+  - [40. Hallucination & Faithfulness Sentinel (createGroundingVerified)](#40-hallucination--faithfulness-sentinel-creategroundingverified)
 - [🤖 Panduan Pembuatan Kode untuk Model AI & Copilot](#-panduan-pembuatan-kode-untuk-model-ai--copilot)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
@@ -1478,6 +1482,113 @@ console.log('Teks Teroptimasi:', optimized.messages[0].content); // 'bersihkan p
 ```
 
 > 📁 Lihat **[Contoh 31 (`examples/31-llm-optimization-llmo.ts`)](./examples/31-llm-optimization-llmo.ts)** untuk demonstrasi lengkap siap pakai.
+
+---
+
+### 37. Active Canary Health Probing (Pencegahan Latensi Ekor & Outage Evasion)
+
+Mendeteksi degradasi performa penyedia atau gangguan jaringan secara proaktif di latar belakang sebelum memengaruhi request pengguna nyata, otomatis mengaktifkan Circuit Breaker:
+
+```typescript
+import { SinapsClient, GroqProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new GroqProvider(), new OpenAiProvider()],
+  canary: {
+    intervalMs: 30_000,          // Probe berkala tiap 30 detik di latar belakang
+    failureThreshold: 2,         // Buka circuit breaker setelah 2 kegagalan berturut-turut
+    timeoutMs: 3_000,            // Timeout probe cepat 3 detik
+    mode: 'always',              // 'always' atau 'on_degraded'
+  },
+});
+
+// Periksa status kesehatan seluruh provider secara real-time
+const health = client.canary?.getAllHealth();
+// { 'groq': { status: 'HEALTHY', latencyMs: 142, consecutiveFailures: 0 } }
+```
+
+### 38. Standard Schema v1 & Zod Direct Resolver (`createStructured`)
+
+Mendukung definisi skema structured output menggunakan [Standard Schema](https://standardschema.dev/) atau Zod secara langsung tanpa dependensi runtime eksternal:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+import { z } from 'zod';
+
+const client = new SinapsClient({ providers: [new OpenAiProvider()] });
+
+const UserSchema = z.object({
+  name: z.string(),
+  age: z.number(),
+  role: z.enum(['admin', 'user']),
+});
+
+// SinapsAI mengonversi Zod/StandardSchema langsung ke format JSON Schema OpenAI/Gemini
+const { data, response } = await client.chat.completions.createStructured({
+  model: 'gpt-4o-mini',
+  messages: [{ role: 'user', content: 'Buat profil pengguna untuk Budi' }],
+  schema: UserSchema,
+  strict: true,
+});
+
+console.log(data.name); // Type-safe: Budi
+```
+
+### 39. Embedded Local Web UI & Telemetry Dashboard (`sinapsai dashboard`)
+
+Jalankan dashboard telemetri web lokal in-process zero-dependency di `http://localhost:3140`:
+
+```bash
+# Jalankan dashboard via CLI
+npx sinapsai dashboard --port 3140
+```
+
+Atau jalankan secara terprogram dari aplikasi Node.js:
+
+```typescript
+import { SinapsClient, GeminiProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new GeminiProvider(), new OpenAiProvider()],
+  dashboard: {
+    port: 3140,                  // default: 3140
+    authKey: 'rahasia-opsional', // perlindungan token opsional
+  },
+});
+
+// Buka dashboard UI di http://localhost:3140
+// Endpoint REST langsung: /api/summary, /api/metrics, /api/health, /api/prometheus
+```
+
+### 40. Hallucination & Faithfulness Sentinel (`createGroundingVerified`)
+
+Memverifikasi akurasi jawaban RAG terhadap dokumen rujukan secara in-process dengan ekstraksi klaim atomik, penskoran kesetiaan (*faithfulness*), dan eskalasi otomatis saat terdeteksi halusinasi:
+
+```typescript
+import { SinapsClient, OpenAiProvider, AnthropicProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider(), new AnthropicProvider()],
+});
+
+const context = [
+  'SinapsAI adalah AI gateway dan control plane in-process zero-dependency dalam bahasa TypeScript.',
+  'SinapsAI meminimalisir downtime dengan failover otomatis dan canary health probing aktif.',
+];
+
+const { response, grounding } = await client.chat.completions.createGroundingVerified({
+  model: 'gpt-4o-mini',
+  messages: [{ role: 'user', content: 'Apa itu SinapsAI?' }],
+  context,
+  minFaithfulness: 0.8,
+  autoRetryOnHallucination: true,
+  escalationModel: 'claude-3-7-sonnet', // Otomatis eskalasi jika model pertama berhalusinasi
+});
+
+console.log('Skor kesetiaan:', grounding.score);      // contoh: 0.95
+console.log('Lulus grounding:', grounding.passed);     // true
+console.log('Tereskalasi:', grounding.escalated);       // false jika berhasil di percobaan pertama
+```
 
 ---
 

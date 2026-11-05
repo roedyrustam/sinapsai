@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-529%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-542%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -94,6 +94,10 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [34. Gemini Explicit Context Caching & Massively Parallel Tool Execution](#34-gemini-explicit-context-caching--massively-parallel-tool-execution)
   - [35. In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol](#35-in-process-multi-agent-swarm--agent-to-agent-a2a-handoff-protocol)
   - [36. Universal LLM Optimization Engine (LLMO)](#36-universal-llm-optimization-engine-llmo)
+  - [37. Active Canary Health Probing (Zero Tail-Latency Outage Evasion)](#37-active-canary-health-probing-zero-tail-latency-outage-evasion)
+  - [38. Standard Schema v1 & Zod Direct Resolver (createStructured)](#38-standard-schema-v1--zod-direct-resolver-createstructured)
+  - [39. Embedded Local Web UI & Telemetry Dashboard (sinapsai dashboard)](#39-embedded-local-web-ui--telemetry-dashboard-sinapsai-dashboard)
+  - [40. Hallucination & Faithfulness Sentinel (createGroundingVerified)](#40-hallucination--faithfulness-sentinel-creategroundingverified)
 - [🤖 AI & LLM Code Generation Guidelines](#-ai--llm-code-generation-guidelines)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
@@ -1474,6 +1478,113 @@ console.log('Optimized Text:', optimized.messages[0].content); // 'clean this pr
 ```
 
 > 📁 See **[Example 31 (`examples/31-llm-optimization-llmo.ts`)](./examples/31-llm-optimization-llmo.ts)** for the complete runnable implementation.
+
+---
+
+### 37. Active Canary Health Probing (Zero Tail-Latency Outage Evasion)
+
+Proactively detects provider degradation or regional internet outages before user traffic hits, automatically tripping the Circuit Breaker:
+
+```typescript
+import { SinapsClient, GroqProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new GroqProvider(), new OpenAiProvider()],
+  canary: {
+    intervalMs: 30_000,          // Probe every 30s in background
+    failureThreshold: 2,         // Trip circuit breaker after 2 consecutive failures
+    timeoutMs: 3_000,            // Fast 3s probe timeout
+    mode: 'always',              // 'always' or 'on_degraded'
+  },
+});
+
+// Inspect real-time health across all providers
+const health = client.canary?.getAllHealth();
+// { 'groq': { status: 'HEALTHY', latencyMs: 142, consecutiveFailures: 0 } }
+```
+
+### 38. Standard Schema v1 & Zod Direct Resolver (`createStructured`)
+
+Define structured output schemas with [Standard Schema](https://standardschema.dev/) or Zod directly with zero runtime dependencies:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+import { z } from 'zod';
+
+const client = new SinapsClient({ providers: [new OpenAiProvider()] });
+
+const UserSchema = z.object({
+  name: z.string(),
+  age: z.number(),
+  role: z.enum(['admin', 'user']),
+});
+
+// SinapsAI converts Zod/StandardSchema directly to OpenAI/Gemini JSON Schema format
+const { data, response } = await client.chat.completions.createStructured({
+  model: 'gpt-4o-mini',
+  messages: [{ role: 'user', content: 'Generate user profile for Alice' }],
+  schema: UserSchema,
+  strict: true,
+});
+
+console.log(data.name); // Type-safe: Alice
+```
+
+### 39. Embedded Local Web UI & Telemetry Dashboard (`sinapsai dashboard`)
+
+Serve an in-process, zero-dependency real-time telemetry dashboard on `http://localhost:3140`:
+
+```bash
+# Start standalone dashboard via CLI
+npx sinapsai dashboard --port 3140
+```
+
+Or start programmatically from your Node.js application:
+
+```typescript
+import { SinapsClient, GeminiProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new GeminiProvider(), new OpenAiProvider()],
+  dashboard: {
+    port: 3140,                  // default: 3140
+    authKey: 'optional-secret',  // optional auth protection
+  },
+});
+
+// Access metrics UI at http://localhost:3140
+// Direct REST endpoints: /api/summary, /api/metrics, /api/health, /api/prometheus
+```
+
+### 40. Hallucination & Faithfulness Sentinel (`createGroundingVerified`)
+
+Verifies RAG outputs against context references with in-process atomic claim extraction, scoring, and automatic escalation:
+
+```typescript
+import { SinapsClient, OpenAiProvider, AnthropicProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider(), new AnthropicProvider()],
+});
+
+const context = [
+  'SinapsAI is a zero-dependency in-process AI gateway and control plane built in TypeScript.',
+  'It eliminates downtime via automatic failover and proactive canary health probing.',
+];
+
+const { response, grounding } = await client.chat.completions.createGroundingVerified({
+  model: 'gpt-4o-mini',
+  messages: [{ role: 'user', content: 'What is SinapsAI?' }],
+  context,
+  minFaithfulness: 0.8,
+  autoRetryOnHallucination: true,
+  escalationModel: 'claude-3-7-sonnet', // Automatically escalates if first model hallucinates
+});
+
+console.log('Faithfulness score:', grounding.score);      // e.g. 0.95
+console.log('Grounding passed:', grounding.passed);        // true
+console.log('Escalated:', grounding.escalated);            // false if passed on first try
+```
 
 ---
 

@@ -6,12 +6,16 @@
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
 - **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits
-- **Test Suite**: 461 unit & integration tests passing across 40 test suites (100% pass rate)
+- **Test Suite**: 542 unit & integration tests passing across 49 test suites (100% pass rate)
 - **Quality**: 100% Biome Clean, TypeScript strict mode
 
 ## Core Capabilities
 
 - **10 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **Embedded Web UI & Telemetry Dashboard (`client.dashboard` / `sinapsai dashboard`)**: Zero-dependency in-process HTTP dashboard on port 3140 with real-time KPI metrics, provider status, canary prober states, rolling request history, and REST API.
+- **Hallucination & Faithfulness Sentinel (`createGroundingVerified` / `client.sentinel`)**: In-process atomic claim extraction, RAG grounding verification gate, faithfulness scoring (0.0 to 1.0), and automatic escalation to stronger models.
+- **Active Canary Health Probing (`client.canary`)**: Background heartbeat probes preventing tail latency spikes by tripping circuit breakers before user traffic arrives.
+- **Standard Schema v1 & Zod Direct Resolver (`createStructured`)**: Direct validation using Standard Schema v1, Zod, or JSON Schema with zero runtime dependencies.
 - **Speculative Multi-Draft Consensus & AI Arbitration (`client.consensus.create`)**: Parallel speculative drafting across diverse models, in-process pairwise cosine similarity, and automatic escalation to a Supreme AI Judge Model upon divergence.
 - **In-Process Episodic Vector Memory (`client.memory`)**: Long-term fact store with multi-tenant user isolation, subword n-gram cosine matching, and dynamic prompt injection (`injectIntoMessages`).
 - **In-Process Hybrid RAG (`client.rag`)**: Okapi BM25 keyword precision + dense vector cosine similarity combined via Reciprocal Rank Fusion (RRF) with semantic paragraph chunking.

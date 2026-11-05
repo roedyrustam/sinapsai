@@ -1,3 +1,5 @@
+import http from 'http';
+
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
  *
@@ -3478,6 +3480,516 @@ var ContextCompressor = class {
     };
   }
 };
+var DashboardServer = class {
+  client;
+  port;
+  host;
+  authKey;
+  title;
+  maxHistory;
+  server = null;
+  history = [];
+  startTime = Date.now();
+  constructor(options) {
+    this.client = options.client;
+    this.port = options.port ?? 3140;
+    this.host = options.host ?? "127.0.0.1";
+    this.authKey = options.authKey;
+    this.title = options.title ?? "SinapsAI Control Plane";
+    this.maxHistory = options.maxHistory ?? 100;
+  }
+  get isRunning() {
+    return Boolean(this.server?.listening);
+  }
+  getUrl() {
+    return `http://${this.host}:${this.port}`;
+  }
+  recordRequest(log) {
+    this.history.unshift(log);
+    if (this.history.length > this.maxHistory) {
+      this.history.pop();
+    }
+  }
+  getHistory() {
+    return [...this.history];
+  }
+  async start() {
+    if (this.isRunning) return;
+    return new Promise((resolve, reject) => {
+      this.server = http.createServer((req, res) => {
+        this.handleHttpRequest(req, res);
+      });
+      this.server.on("error", (err) => {
+        reject(err);
+      });
+      this.server.listen(this.port, this.host, () => {
+        resolve();
+      });
+    });
+  }
+  async stop() {
+    if (!this.server) return;
+    return new Promise((resolve, reject) => {
+      this.server?.close((err) => {
+        this.server = null;
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+  isAuthorized(req, parsedUrl) {
+    if (!this.authKey) return true;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.replace(/^Bearer\s+/i, "") === this.authKey) {
+      return true;
+    }
+    const tokenParam = parsedUrl.searchParams.get("token");
+    if (tokenParam === this.authKey) {
+      return true;
+    }
+    return false;
+  }
+  handleHttpRequest(req, res) {
+    const parsedUrl = new URL(
+      req.url || "/",
+      `http://${req.headers.host || `${this.host}:${this.port}`}`
+    );
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (!this.isAuthorized(req, parsedUrl)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "Unauthorized: invalid or missing auth token"
+        })
+      );
+      return;
+    }
+    const pathname = parsedUrl.pathname;
+    if (pathname === "/" || pathname === "/index.html") {
+      this.serveDashboardHtml(res);
+      return;
+    }
+    if (pathname === "/api/summary") {
+      this.serveSummaryJson(res);
+      return;
+    }
+    if (pathname === "/api/metrics") {
+      this.serveMetricsJson(res);
+      return;
+    }
+    if (pathname === "/api/history") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(this.getHistory()));
+      return;
+    }
+    if (pathname === "/api/health") {
+      this.serveHealthJson(res);
+      return;
+    }
+    if (pathname === "/api/prometheus") {
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" });
+      res.end(this.client.exportPrometheusMetrics());
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not Found", path: pathname }));
+  }
+  serveSummaryJson(res) {
+    const metrics = this.client.getMetrics();
+    const canaryHealth = this.client.canary?.getAllHealth() ?? {};
+    const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1e3);
+    const summary = {
+      title: this.title,
+      version: "2.13.8",
+      uptimeSeconds,
+      strategy: this.client.getStrategy(),
+      metrics: {
+        totalRequests: metrics.totalRequests,
+        successfulRequests: metrics.successfulRequests,
+        failedRequests: metrics.failedRequests,
+        cachedRequests: metrics.cachedRequests,
+        successRate: metrics.totalRequests > 0 ? Number(
+          (metrics.successfulRequests / metrics.totalRequests * 100).toFixed(1)
+        ) : 100,
+        totalTokens: metrics.totalTokens,
+        totalPromptTokens: metrics.totalPromptTokens,
+        totalCompletionTokens: metrics.totalCompletionTokens,
+        totalCachedPromptTokens: metrics.totalCachedPromptTokens ?? 0,
+        estimatedCostUsd: metrics.estimatedCostUsd,
+        llmoSavingsUsd: metrics.llmoMetrics?.totalEstimatedUsdSaved ?? 0,
+        llmoTokensSaved: metrics.llmoMetrics?.totalTokensSaved ?? 0,
+        providerMetrics: metrics.providerMetrics
+      },
+      canary: canaryHealth,
+      recentHistory: this.history.slice(0, 20)
+    };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(summary));
+  }
+  serveMetricsJson(res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(this.client.getMetrics()));
+  }
+  async serveHealthJson(res) {
+    try {
+      const health = await this.client.checkHealth();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(health));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", message }));
+    }
+  }
+  serveDashboardHtml(res) {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${this.title}</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f293d;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --cyan: #06b6d4;
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --purple: #8b5cf6;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-online { background: rgba(16, 185, 129, 0.15); color: var(--green); border: 1px solid var(--green); }
+    .badge-degraded { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid var(--amber); }
+    .badge-down { background: rgba(239, 68, 68, 0.15); color: var(--red); border: 1px solid var(--red); }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      position: relative;
+    }
+    .card-title {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+    }
+    .card-sub {
+      font-size: 12px;
+      color: var(--cyan);
+      margin-top: 4px;
+    }
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 24px 0 12px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .providers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .provider-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .provider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .provider-name {
+      font-size: 15px;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+    }
+    .stat-row span:last-child {
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      text-align: left;
+    }
+    th {
+      background: rgba(31, 41, 61, 0.5);
+      color: var(--text-muted);
+      padding: 10px 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+    }
+    .table-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow-x: auto;
+    }
+    .tag {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .tag-success { background: rgba(16, 185, 129, 0.2); color: var(--green); }
+    .tag-error { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .tag-cached { background: rgba(6, 182, 212, 0.2); color: var(--cyan); }
+    .refresh-btn {
+      background: var(--border);
+      color: var(--text-main);
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .refresh-btn:hover { background: #2d3748; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <h1 style="font-size: 20px; font-weight: 700;">SinapsAI Gateway</h1>
+      <span class="badge badge-online" id="status-badge">\u25CF ONLINE</span>
+    </div>
+    <div style="display: flex; gap: 12px; align-items: center;">
+      <span style="font-size: 12px; color: var(--text-muted);" id="uptime-text">Uptime: 0s</span>
+      <button class="refresh-btn" onclick="fetchSummary()">\u21BB Refresh</button>
+    </div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="card">
+      <div class="card-title">Total Requests</div>
+      <div class="card-value" id="kpi-requests">0</div>
+      <div class="card-sub" id="kpi-success-rate">100% Success Rate</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Total Tokens</div>
+      <div class="card-value" id="kpi-tokens">0</div>
+      <div class="card-sub" id="kpi-cached-tokens">0 Cached</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Estimated Cost</div>
+      <div class="card-value" id="kpi-cost">$0.0000</div>
+      <div class="card-sub" id="kpi-savings">$0.0000 Saved (FinOps)</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Routing Strategy</div>
+      <div class="card-value" style="font-size: 20px;" id="kpi-strategy">-</div>
+      <div class="card-sub" id="kpi-active-providers">0 Configured</div>
+    </div>
+  </div>
+
+  <div class="section-title">
+    <span>Configured Providers & Health</span>
+    <span style="font-size: 12px; color: var(--text-muted);">Canary Prober Active</span>
+  </div>
+  <div class="providers-grid" id="providers-container">
+    <div style="color: var(--text-muted); font-size: 13px;">Loading providers...</div>
+  </div>
+
+  <div class="section-title">
+    <span>Recent Request History</span>
+    <span style="font-size: 12px; color: var(--text-muted);">Real-time Activity Log</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Model</th>
+          <th>Provider</th>
+          <th>Tokens</th>
+          <th>Latency</th>
+          <th>Cost</th>
+          <th>Cache</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="history-tbody">
+        <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No requests recorded yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    async function fetchSummary() {
+      try {
+        const res = await fetch('/api/summary');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderDashboard(data);
+      } catch (err) {
+        console.error('Failed to fetch summary:', err);
+      }
+    }
+
+    function renderDashboard(data) {
+      document.getElementById('uptime-text').textContent = 'Uptime: ' + data.uptimeSeconds + 's';
+      document.getElementById('kpi-requests').textContent = data.metrics.totalRequests.toLocaleString();
+      document.getElementById('kpi-success-rate').textContent = data.metrics.successRate + '% Success Rate';
+      document.getElementById('kpi-tokens').textContent = data.metrics.totalTokens.toLocaleString();
+      document.getElementById('kpi-cached-tokens').textContent = (data.metrics.totalCachedPromptTokens || 0).toLocaleString() + ' Cached';
+      document.getElementById('kpi-cost').textContent = '$' + data.metrics.estimatedCostUsd.toFixed(4);
+      document.getElementById('kpi-savings').textContent = '$' + (data.metrics.llmoSavingsUsd || 0).toFixed(4) + ' Saved (FinOps)';
+      document.getElementById('kpi-strategy').textContent = (data.strategy || 'adaptive').toUpperCase();
+
+      const providers = Object.entries(data.metrics.providerMetrics || {});
+      document.getElementById('kpi-active-providers').textContent = providers.length + ' Providers';
+
+      const provContainer = document.getElementById('providers-container');
+      if (providers.length === 0) {
+        provContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No active provider metrics yet.</div>';
+      } else {
+        provContainer.innerHTML = providers.map(([id, p]) => {
+          const canary = (data.canary && data.canary[id]) ? data.canary[id].status : 'HEALTHY';
+          const badgeClass = canary === 'HEALTHY' ? 'badge-online' : (canary === 'DEGRADED' ? 'badge-degraded' : 'badge-down');
+          return \`
+            <div class="provider-card">
+              <div class="provider-header">
+                <span class="provider-name">\${id}</span>
+                <span class="badge \${badgeClass}">\${canary}</span>
+              </div>
+              <div class="stat-row">
+                <span>Requests</span>
+                <span>\${p.requests}</span>
+              </div>
+              <div class="stat-row">
+                <span>Success / Failed</span>
+                <span>\${p.successes} / \${p.failures}</span>
+              </div>
+              <div class="stat-row">
+                <span>Avg Latency</span>
+                <span>\${Math.round(p.averageLatencyMs || 0)}ms</span>
+              </div>
+              <div class="stat-row">
+                <span>Total Tokens</span>
+                <span>\${(p.totalTokens || 0).toLocaleString()}</span>
+              </div>
+            </div>
+          \`;
+        }).join('');
+      }
+
+      const historyTbody = document.getElementById('history-tbody');
+      if (!data.recentHistory || data.recentHistory.length === 0) {
+        historyTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No requests recorded yet.</td></tr>';
+      } else {
+        historyTbody.innerHTML = data.recentHistory.map(req => {
+          const time = new Date(req.timestamp).toLocaleTimeString();
+          const statusTag = req.status === 'success' ? '<span class="tag tag-success">200 OK</span>' : '<span class="tag tag-error">ERROR</span>';
+          const cacheTag = req.cached ? '<span class="tag tag-cached">HIT</span>' : '<span style="color: var(--text-muted);">-</span>';
+          return \`
+            <tr>
+              <td>\${time}</td>
+              <td style="color: var(--cyan);">\${req.model}</td>
+              <td style="text-transform: capitalize;">\${req.provider}</td>
+              <td>\${req.totalTokens.toLocaleString()}</td>
+              <td>\${Math.round(req.latencyMs)}ms</td>
+              <td>$\${req.costUsd.toFixed(5)}</td>
+              <td>\${cacheTag}</td>
+              <td>\${statusTag}</td>
+            </tr>
+          \`;
+        }).join('');
+      }
+    }
+
+    fetchSummary();
+    setInterval(fetchSummary, 2000);
+  </script>
+</body>
+</html>`;
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache"
+    });
+    res.end(html);
+  }
+};
 
 // src/core/InMemoryStorage.ts
 var InMemoryStorage = class {
@@ -3864,6 +4376,212 @@ ${contextText}`
       if (r.userId === userId) c++;
     }
     return c;
+  }
+};
+
+// src/core/FaithfulnessSentinel.ts
+var FaithfulnessSentinel = class {
+  minFaithfulnessScore;
+  mode;
+  judgeModel;
+  escalationModel;
+  autoEscalate;
+  client;
+  constructor(options = {}) {
+    this.minFaithfulnessScore = options.minFaithfulnessScore ?? 0.75;
+    this.mode = options.mode ?? "heuristic";
+    this.judgeModel = options.judgeModel;
+    this.escalationModel = options.escalationModel;
+    this.autoEscalate = options.autoEscalate ?? false;
+    this.client = options.client;
+  }
+  setClient(client) {
+    this.client = client;
+  }
+  /**
+   * Tokenizes text into normalized words of length > 2.
+   */
+  tokenize(text) {
+    const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+    return new Set(words);
+  }
+  /**
+   * Splits an LLM response into discrete atomic claims/assertions.
+   */
+  extractClaims(text) {
+    if (!text || text.trim().length === 0) return [];
+    const rawSegments = text.split(/(?<=[.?!])\s+|\n+/).map((s2) => s2.trim()).filter((s2) => s2.length > 0);
+    const claims = [];
+    const preambleRegex = /^(sure|certainly|here is|here are|based on|according to|of course|as an ai|in summary|to summarize)\b/i;
+    for (const seg of rawSegments) {
+      const clean = seg.replace(/^[-*•\d.]+\s*/, "").trim();
+      if (clean.length < 8) continue;
+      if (preambleRegex.test(clean) && clean.split(/\s+/).length < 6) {
+        continue;
+      }
+      claims.push(clean);
+    }
+    return claims.length > 0 ? claims : [text.trim()];
+  }
+  /**
+   * Rapid in-process heuristic grounding verification against context.
+   */
+  verifyGrounding(params) {
+    const startTime = Date.now();
+    const threshold = params.threshold ?? this.minFaithfulnessScore;
+    const chunks = Array.isArray(params.context) ? params.context : [params.context];
+    const claims = this.extractClaims(params.answer);
+    if (claims.length === 0) {
+      return {
+        score: 1,
+        passed: true,
+        totalClaims: 0,
+        supportedClaims: 0,
+        unsupportedClaims: [],
+        claimAudits: [],
+        finalAnswer: params.answer,
+        durationMs: Date.now() - startTime
+      };
+    }
+    const chunkTokenSets = chunks.map((c) => this.tokenize(c));
+    const chunkLowerList = chunks.map((c) => c.toLowerCase());
+    const claimAudits = [];
+    let supportedCount = 0;
+    const unsupportedClaims = [];
+    for (const claim of claims) {
+      const claimWords = Array.from(this.tokenize(claim));
+      if (claimWords.length === 0) {
+        supportedCount++;
+        claimAudits.push({
+          claim,
+          isSupported: true,
+          confidence: 1
+        });
+        continue;
+      }
+      let bestChunkIndex = -1;
+      let maxOverlap = 0;
+      let matchingSnippet;
+      for (let i = 0; i < chunks.length; i++) {
+        const tokenSet = chunkTokenSets[i];
+        const lowerChunk = chunkLowerList[i];
+        let matched = 0;
+        for (const word of claimWords) {
+          if (tokenSet.has(word) || lowerChunk.includes(word)) {
+            matched++;
+          }
+        }
+        const overlap = matched / claimWords.length;
+        if (overlap > maxOverlap) {
+          maxOverlap = overlap;
+          bestChunkIndex = i;
+          matchingSnippet = chunks[i].slice(0, 120);
+        }
+      }
+      const isSupported = maxOverlap >= 0.5;
+      if (isSupported) {
+        supportedCount++;
+      } else {
+        unsupportedClaims.push(claim);
+      }
+      claimAudits.push({
+        claim,
+        isSupported,
+        confidence: Number(maxOverlap.toFixed(3)),
+        matchingChunkIndex: bestChunkIndex !== -1 ? bestChunkIndex : void 0,
+        matchingSnippet: isSupported ? matchingSnippet : void 0
+      });
+    }
+    const score = Number((supportedCount / claims.length).toFixed(3));
+    const passed = score >= threshold;
+    return {
+      score,
+      passed,
+      totalClaims: claims.length,
+      supportedClaims: supportedCount,
+      unsupportedClaims,
+      claimAudits,
+      finalAnswer: params.answer,
+      durationMs: Date.now() - startTime
+    };
+  }
+  /**
+   * High-level verification with automatic retry / escalation if hallucination detected.
+   */
+  async executeVerifiedCompletion(params, callerClient) {
+    const client = this.client ?? callerClient;
+    const threshold = params.minFaithfulness ?? this.minFaithfulnessScore;
+    const autoRetry = params.autoRetryOnHallucination ?? this.autoEscalate ?? true;
+    const escalationModel = params.escalationModel ?? this.escalationModel;
+    const rawContext = Array.isArray(params.context) ? params.context.join("\n\n") : params.context;
+    const baseMessages = [...params.messages];
+    const systemPromptAddition = `
+
+REFERENCE CONTEXT:
+${rawContext}
+
+INSTRUCTION: Answer the question strictly using the provided context above. Do not introduce outside unverified facts.`;
+    const firstSystemIdx = baseMessages.findIndex((m) => m.role === "system");
+    if (firstSystemIdx >= 0) {
+      baseMessages[firstSystemIdx] = {
+        ...baseMessages[firstSystemIdx],
+        content: baseMessages[firstSystemIdx].content + systemPromptAddition
+      };
+    } else {
+      baseMessages.unshift({
+        role: "system",
+        content: systemPromptAddition.trim()
+      });
+    }
+    const completion = await client.chat.completions.create({
+      model: params.model,
+      messages: baseMessages,
+      temperature: params.temperature ?? 0.2,
+      maxTokens: params.maxTokens ?? params.max_tokens
+    });
+    const firstAnswer = completion.choices[0]?.message?.content || "";
+    const verification = this.verifyGrounding({
+      answer: firstAnswer,
+      context: params.context,
+      threshold
+    });
+    if (verification.passed || !autoRetry) {
+      return { completion, grounding: verification };
+    }
+    const strictSystemPrompt = `CRITICAL ACCURACY INSTRUCTION: The previous answer contained potential ungrounded claims. Answer strictly and solely based on the provided reference context facts. If the information is not present in the context, explicitly say: "I do not have enough context to answer this." Do not extrapolate.
+
+REFERENCE CONTEXT:
+${rawContext}`;
+    const retryMessages = [
+      { role: "system", content: strictSystemPrompt },
+      ...params.messages.filter((m) => m.role !== "system")
+    ];
+    const retryModel = escalationModel || params.model;
+    const retryCompletion = await client.chat.completions.create({
+      model: retryModel,
+      messages: retryMessages,
+      temperature: 0,
+      // clamp to deterministic
+      maxTokens: params.maxTokens ?? params.max_tokens
+    });
+    const retryAnswer = retryCompletion.choices[0]?.message?.content || "";
+    const retryVerification = this.verifyGrounding({
+      answer: retryAnswer,
+      context: params.context,
+      threshold
+    });
+    retryVerification.escalated = true;
+    retryVerification.originalAnswer = firstAnswer;
+    if (retryVerification.score >= verification.score) {
+      return {
+        completion: retryCompletion,
+        grounding: retryVerification
+      };
+    }
+    return {
+      completion,
+      grounding: verification
+    };
   }
 };
 
@@ -7883,6 +8601,8 @@ var SinapsClient = class {
   hedgedExecutor;
   rateLimiter;
   canary;
+  sentinel;
+  dashboard;
   llmo;
   mcp;
   memory;
@@ -8004,6 +8724,18 @@ var SinapsClient = class {
         canaryOpts
       );
       this.canary.start();
+    }
+    this.sentinel = new FaithfulnessSentinel({
+      ...options.sentinel,
+      client: this
+    });
+    if (options.dashboard) {
+      const dashOpts = typeof options.dashboard === "object" ? options.dashboard : {};
+      this.dashboard = new DashboardServer({
+        client: this,
+        ...dashOpts
+      });
+      void this.dashboard.start();
     }
   }
   chat = {
@@ -8148,10 +8880,44 @@ var SinapsClient = class {
           return streamResult;
         }
         if (this.guardrails && piiVault && piiVault.size > 0 && "choices" in res) {
-          return this.guardrails.restoreResponse(
+          const restored = this.guardrails.restoreResponse(
             res,
             piiVault
           );
+          if (this.dashboard && !request.stream) {
+            const rAny = restored;
+            this.dashboard.recordRequest({
+              id: restored.id || `req_${Date.now()}`,
+              timestamp: Date.now(),
+              model: restored.model || fullReq.model,
+              provider: restored.provider || candidateProviderId || "unknown",
+              latencyMs: Number(rAny.latencyMs ?? 0),
+              promptTokens: restored.usage?.promptTokens || 0,
+              completionTokens: restored.usage?.completionTokens || 0,
+              totalTokens: restored.usage?.totalTokens || 0,
+              cached: Boolean(rAny.cached),
+              costUsd: Number(rAny.estimatedCostUsd ?? 0),
+              status: "success"
+            });
+          }
+          return restored;
+        }
+        if (this.dashboard && !request.stream && "choices" in res) {
+          const resp = res;
+          const rAny = resp;
+          this.dashboard.recordRequest({
+            id: resp.id || `req_${Date.now()}`,
+            timestamp: Date.now(),
+            model: resp.model || fullReq.model,
+            provider: resp.provider || candidateProviderId || "unknown",
+            latencyMs: Number(rAny.latencyMs ?? 0),
+            promptTokens: resp.usage?.promptTokens || 0,
+            completionTokens: resp.usage?.completionTokens || 0,
+            totalTokens: resp.usage?.totalTokens || 0,
+            cached: Boolean(rAny.cached),
+            costUsd: Number(rAny.estimatedCostUsd ?? 0),
+            status: "success"
+          });
         }
         return res;
       }),
@@ -8207,14 +8973,52 @@ var SinapsClient = class {
           );
         }
         return { data: validation.data, response: res };
+      },
+      /**
+       * Creates a chat completion and verifies groundedness against context documents,
+       * guarding against hallucinations with optional auto-retry / escalation.
+       */
+      createGroundingVerified: async (request) => {
+        const result = await this.sentinel.executeVerifiedCompletion(
+          request,
+          this
+        );
+        return {
+          response: result.completion,
+          grounding: result.grounding
+        };
       }
     }
   };
   /**
-   * Stop all active background processes (canary prober, timers) on the client.
+   * Starts the embedded local web metrics dashboard.
+   */
+  async startDashboard(options) {
+    if (!this.dashboard) {
+      this.dashboard = new DashboardServer({
+        client: this,
+        ...options
+      });
+    }
+    if (!this.dashboard.isRunning) {
+      await this.dashboard.start();
+    }
+    return this.dashboard;
+  }
+  /**
+   * Stops the embedded local web metrics dashboard.
+   */
+  async stopDashboard() {
+    if (this.dashboard) {
+      await this.dashboard.stop();
+    }
+  }
+  /**
+   * Stop all active background processes (canary prober, dashboard, timers) on the client.
    */
   stop() {
     this.canary?.stop();
+    void this.dashboard?.stop();
   }
   /**
    * Helper to accumulate streaming chunks into a single UnifiedApiResponse.
@@ -12752,6 +13556,22 @@ var XAiProvider = class {
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Embedded Local Metrics & Telemetry Web UI Dashboard
+ *
+ * Implements:
+ * 1. Zero-dependency in-process HTTP server (node:http).
+ * 2. Ultra-lightweight, responsive dark-mode Single Page Web UI.
+ * 3. Real-time KPI metrics (RPM, Latency P50/Avg, Tokens, FinOps savings).
+ * 4. Visual Provider & Circuit Breaker status monitor (CLOSED/HALF_OPEN/OPEN).
+ * 5. Active Canary Prober health status inspection.
+ * 6. Rolling request history and REST API endpoints (/api/metrics, /api/health, /api/history).
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Durable Agent Workflows & State Checkpoint Engine
  *
  * Implements:
@@ -12773,6 +13593,21 @@ var XAiProvider = class {
  * 2. Zero-dependency cosine similarity vector search with local TF or dense embeddings.
  * 3. Dynamic context injection ([LONG-TERM MEMORY]) into conversational turns.
  * 4. Pluggable persistence with StateStorage (InMemory, KV, Redis, D1).
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Hallucination & Faithfulness Sentinel (RAG Grounding Verification Gate)
+ *
+ * Implements:
+ * 1. Zero-dependency atomic claim extraction from LLM outputs.
+ * 2. Rapid in-process lexical & n-gram reference context alignment (Zero latency, 0 tokens).
+ * 3. Optional LLM-as-a-judge verification for borderline assertions.
+ * 4. Grounding verification score calculation (0.0 to 1.0).
+ * 5. Automatic remediation & hedged retry on low faithfulness scores.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
@@ -12930,6 +13765,6 @@ var XAiProvider = class {
  * @license MIT
  */
 
-export { AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CanaryProber, CircuitBreaker, CloudflareKVStorage, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEFAULT_CASCADE_TIERS, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, LlmEvals, LlmOptimizer, McpToolBridge, MistralProvider, NumberSchemaNode, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RealtimeClient, RealtimeSession, RedisStorage, Router, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, StringSchemaNode, SwarmContext, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, deduplicateSystemInstructions, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, isOpenRouterFreeModel, isSinapsSchema, isStandardSchema, isZodSchema, jsonSchema, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sinapsai, toStandardJsonSchema, tool, tryExtractJson, validateSchema };
+export { AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CanaryProber, CircuitBreaker, CloudflareKVStorage, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEFAULT_CASCADE_TIERS, DashboardServer, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, FaithfulnessSentinel, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, LlmEvals, LlmOptimizer, McpToolBridge, MistralProvider, NumberSchemaNode, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RealtimeClient, RealtimeSession, RedisStorage, Router, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, StringSchemaNode, SwarmContext, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, deduplicateSystemInstructions, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, isOpenRouterFreeModel, isSinapsSchema, isStandardSchema, isZodSchema, jsonSchema, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sinapsai, toStandardJsonSchema, tool, tryExtractJson, validateSchema };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

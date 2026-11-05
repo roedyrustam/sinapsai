@@ -81,12 +81,13 @@ SinapsAI CLI - In-Process AI Gateway & Control Plane
 
 Commands:
   serve       Start local OpenAI-compatible HTTP Gateway Server (default)
+  dashboard   Start embedded Web UI Metrics & Telemetry Dashboard (default: 3140)
   mcp         Start Model Context Protocol (MCP) Stdio Server
   health      Check health and latency of configured providers
   version     Display installed version
 
 Options:
-  --port <num>      Port for gateway server (default: 8080)
+  --port <num>      Port for gateway or dashboard server
   --host <string>   Host to bind server (default: 127.0.0.1)
   --api-key <key>   Protect server with an API key
 `);
@@ -94,11 +95,36 @@ Options:
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {
-    process.stdout.write('sinapsai v2.13.4\n');
+    process.stdout.write('sinapsai v2.13.8\n');
     return;
   }
 
   const client = buildClientFromEnv();
+
+  if (command === 'dashboard') {
+    let port = 3140;
+    let host = '127.0.0.1';
+
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '--port' && args[i + 1]) {
+        port = Number(args[i + 1]) || 3140;
+      }
+      if (args[i] === '--host' && args[i + 1]) {
+        host = args[i + 1];
+      }
+    }
+
+    const dashboard = await client.startDashboard({ port, host });
+    process.stdout.write(`
+┌────────────────────────────────────────────────────────┐
+│  📊 SinapsAI Web UI Metrics Dashboard Running          │
+│  URL      : ${dashboard.getUrl()}                      │
+│  API      : ${dashboard.getUrl()}/api/summary          │
+│  Metrics  : ${dashboard.getUrl()}/api/prometheus       │
+└────────────────────────────────────────────────────────┘
+`);
+    return;
+  }
 
   if (command === 'mcp') {
     startMcpStdioServer(client);

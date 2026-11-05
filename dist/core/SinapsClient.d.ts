@@ -13,8 +13,10 @@ import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
 import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
+import { DashboardServer, type DashboardServerOptions } from './DashboardServer.js';
 import { DurableWorkflowEngine, type DurableWorkflowOptions } from './DurableWorkflow.js';
 import { EpisodicMemory, type EpisodicMemoryOptions } from './EpisodicMemory.js';
+import { FaithfulnessSentinel, type FaithfulnessSentinelOptions, type GroundingVerificationResult, type GroundingVerifiedRequest } from './FaithfulnessSentinel.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
 import { KnowledgeGraph, type KnowledgeGraphOptions } from './KnowledgeGraph.js';
@@ -120,6 +122,16 @@ export interface SinapsClientOptions {
      * opening the circuit breaker before user requests arrive and eliminating P99 tail latency.
      */
     canary?: CanaryProberOptions | boolean;
+    /**
+     * Optional in-process Web UI metrics & telemetry dashboard configuration.
+     * Serves an embedded, zero-dependency dashboard on http://localhost:3140 by default.
+     */
+    dashboard?: DashboardServerOptions | boolean;
+    /**
+     * Optional Hallucination & Faithfulness Sentinel configuration.
+     * Verifies RAG outputs against context references and guards against hallucinations.
+     */
+    sentinel?: FaithfulnessSentinelOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -130,6 +142,8 @@ export declare class SinapsClient {
     readonly hedgedExecutor?: HedgedExecutor;
     readonly rateLimiter?: GatewayRateLimiter;
     readonly canary?: CanaryProber;
+    readonly sentinel: FaithfulnessSentinel;
+    dashboard?: DashboardServer;
     readonly llmo?: LlmOptimizer;
     readonly mcp: McpToolBridge;
     readonly memory: EpisodicMemory;
@@ -179,10 +193,26 @@ export declare class SinapsClient {
                 data: T;
                 response: UnifiedApiResponse;
             }>;
+            /**
+             * Creates a chat completion and verifies groundedness against context documents,
+             * guarding against hallucinations with optional auto-retry / escalation.
+             */
+            createGroundingVerified: (request: GroundingVerifiedRequest) => Promise<{
+                response: UnifiedApiResponse;
+                grounding: GroundingVerificationResult;
+            }>;
         };
     };
     /**
-     * Stop all active background processes (canary prober, timers) on the client.
+     * Starts the embedded local web metrics dashboard.
+     */
+    startDashboard(options?: Partial<DashboardServerOptions>): Promise<DashboardServer>;
+    /**
+     * Stops the embedded local web metrics dashboard.
+     */
+    stopDashboard(): Promise<void>;
+    /**
+     * Stop all active background processes (canary prober, dashboard, timers) on the client.
      */
     stop(): void;
     /**
