@@ -10850,39 +10850,308 @@ var OpenAiProvider = class {
 };
 
 // src/providers/OpenRouterProvider.ts
+var OPENROUTER_FREE_MODEL_CATALOG = {
+  "openrouter/free": {
+    id: "openrouter/free",
+    name: "Free Models Router",
+    developer: "OpenRouter",
+    contextLength: 2e5,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: true
+    },
+    description: "Dynamic meta-router that automatically selects a free model at random with smart filtering for required features (tools, vision, JSON)."
+  },
+  "google/gemma-4-31b-it:free": {
+    id: "google/gemma-4-31b-it:free",
+    name: "Google: Gemma 4 31B (free)",
+    developer: "Google",
+    contextLength: 262144,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: true
+    },
+    description: "Google DeepMind 30.7B dense multimodal instruction model supporting text and vision."
+  },
+  "google/gemma-4-26b-a4b-it:free": {
+    id: "google/gemma-4-26b-a4b-it:free",
+    name: "Google: Gemma 4 26B A4B (free)",
+    developer: "Google",
+    contextLength: 262144,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Google instruction-tuned Mixture-of-Experts (MoE) model for efficient reasoning and text generation."
+  },
+  "nvidia/nemotron-3.5-super-vl:free": {
+    id: "nvidia/nemotron-3.5-super-vl:free",
+    name: "NVIDIA: Nemotron 3.5 Super VL (free)",
+    developer: "NVIDIA",
+    contextLength: 1e6,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: true
+    },
+    description: "NVIDIA open multimodal mixture-of-experts model with massive 1M context window and vision."
+  },
+  "nvidia/nemotron-3.5-lightning:free": {
+    id: "nvidia/nemotron-3.5-lightning:free",
+    name: "NVIDIA: Nemotron 3.5 Lightning (free)",
+    developer: "NVIDIA",
+    contextLength: 1e6,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "NVIDIA open mixture-of-experts model optimized for ultra-high throughput and 1M context."
+  },
+  "nvidia/nemotron-3-ultra-550b-a55b:free": {
+    id: "nvidia/nemotron-3-ultra-550b-a55b:free",
+    name: "NVIDIA: Nemotron 3 Ultra (free)",
+    developer: "NVIDIA",
+    contextLength: 1e6,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: false
+    },
+    description: "NVIDIA flagship 550B MoE frontier reasoning and multi-step agent orchestration model."
+  },
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
+    id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    name: "NVIDIA: Nemotron 3 Nano Omni (free)",
+    developer: "NVIDIA",
+    contextLength: 256e3,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: true
+    },
+    description: "NVIDIA 30B-A3B open multimodal reasoning model with audio, vision, and text support."
+  },
+  "nvidia/nemotron-3.5-content-safety:free": {
+    id: "nvidia/nemotron-3.5-content-safety:free",
+    name: "NVIDIA: Nemotron 3.5 Content Safety (free)",
+    developer: "NVIDIA",
+    contextLength: 128e3,
+    capabilities: {
+      tools: false,
+      jsonMode: false,
+      reasoning: false,
+      vision: false
+    },
+    description: "NVIDIA compact 4B-parameter multimodal guardrail and safety evaluation model."
+  },
+  "cohere/north-mini-code:free": {
+    id: "cohere/north-mini-code:free",
+    name: "Cohere: North Mini Code (free)",
+    developer: "Cohere",
+    contextLength: 256e3,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: true,
+      vision: false
+    },
+    description: "Cohere first agentic coding model optimized for code generation, refactoring, and tool use."
+  },
+  "liquid/lfm-2.5-2.6b:free": {
+    id: "liquid/lfm-2.5-2.6b:free",
+    name: "LiquidAI: LFM2.5-2.6B (free)",
+    developer: "Liquid AI",
+    contextLength: 65536,
+    capabilities: {
+      tools: false,
+      jsonMode: true,
+      reasoning: true,
+      vision: false
+    },
+    description: "Liquid AI compact computational model optimized for on-device and efficient reasoning."
+  },
+  "dots-studio/dots-3-note-preview:free": {
+    id: "dots-studio/dots-3-note-preview:free",
+    name: "Dots Studio: Dots3-Note Preview (free)",
+    developer: "Dots Studio",
+    contextLength: 512e3,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Dots Studio open-weight mixture-of-experts model with 512K context window for long-context notes."
+  },
+  "recursive/flint-v1.0:free": {
+    id: "recursive/flint-v1.0:free",
+    name: "Recursive: Flint (free)",
+    developer: "Recursive",
+    contextLength: 262144,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Recursive open-weight mixture-of-experts model for versatile instruction following."
+  },
+  "xingchen-agi/xing4.0-29b-a4b:free": {
+    id: "xingchen-agi/xing4.0-29b-a4b:free",
+    name: "XingChen: Xing4.0 29B A4B (free)",
+    developer: "China Telecom XingChen",
+    contextLength: 262144,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Open-weight MoE language model trained on multilingual and high-density technical corpora."
+  },
+  "meta-llama/llama-3.3-70b-instruct:free": {
+    id: "meta-llama/llama-3.3-70b-instruct:free",
+    name: "Meta: Llama 3.3 70B Instruct (free)",
+    developer: "Meta",
+    contextLength: 131072,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Meta flagship open-weight 70B instruction model with state-of-the-art coding and dialogue performance."
+  },
+  "meta-llama/llama-3.1-8b-instruct:free": {
+    id: "meta-llama/llama-3.1-8b-instruct:free",
+    name: "Meta: Llama 3.1 8B Instruct (free)",
+    developer: "Meta",
+    contextLength: 131072,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Meta lightweight 8B instruction-tuned model with 128K context window."
+  },
+  "meta-llama/llama-3.2-3b-instruct:free": {
+    id: "meta-llama/llama-3.2-3b-instruct:free",
+    name: "Meta: Llama 3.2 3B Instruct (free)",
+    developer: "Meta",
+    contextLength: 131072,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Meta ultra-fast 3B model designed for high-throughput zero-cost edge tasks."
+  },
+  "deepseek/deepseek-r1:free": {
+    id: "deepseek/deepseek-r1:free",
+    name: "DeepSeek: R1 (free)",
+    developer: "DeepSeek",
+    contextLength: 163840,
+    capabilities: {
+      tools: false,
+      jsonMode: true,
+      reasoning: true,
+      vision: false
+    },
+    description: "DeepSeek flagship reasoning model with verifiable step-by-step thinking traces."
+  },
+  "deepseek/deepseek-chat:free": {
+    id: "deepseek/deepseek-chat:free",
+    name: "DeepSeek: DeepSeek V3 (free)",
+    developer: "DeepSeek",
+    contextLength: 65536,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "DeepSeek V3 671B MoE model delivering frontier conversational quality."
+  },
+  "qwen/qwen-2.5-coder-32b-instruct:free": {
+    id: "qwen/qwen-2.5-coder-32b-instruct:free",
+    name: "Qwen: Qwen 2.5 Coder 32B Instruct (free)",
+    developer: "Alibaba Cloud",
+    contextLength: 32768,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Alibaba Cloud specialized 32B code generation and debugging model."
+  },
+  "mistralai/mistral-7b-instruct:free": {
+    id: "mistralai/mistral-7b-instruct:free",
+    name: "Mistral: Mistral 7B Instruct (free)",
+    developer: "Mistral AI",
+    contextLength: 32768,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: false
+    },
+    description: "Mistral AI classic 7B dense model known for concise and fast instruction following."
+  }
+};
 var OPENROUTER_FREE_MODELS = [
   "openrouter/free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "nvidia/nemotron-3.5-super-vl:free",
+  "nvidia/nemotron-3.5-lightning:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "nvidia/nemotron-3.5-content-safety:free",
+  "cohere/north-mini-code:free",
+  "liquid/lfm-2.5-2.6b:free",
+  "dots-studio/dots-3-note-preview:free",
+  "recursive/flint-v1.0:free",
+  "xingchen-agi/xing4.0-29b-a4b:free",
   "meta-llama/llama-3.3-70b-instruct:free",
   "meta-llama/llama-3.1-8b-instruct:free",
   "meta-llama/llama-3.2-3b-instruct:free",
   "deepseek/deepseek-r1:free",
   "deepseek/deepseek-chat:free",
   "qwen/qwen-2.5-coder-32b-instruct:free",
-  "mistralai/mistral-7b-instruct:free",
+  "mistralai/mistral-7b-instruct:free"
+];
+var OPENROUTER_DEFAULT_FREE_FALLBACKS = [
+  "openrouter/free",
   "google/gemma-4-31b-it:free",
-  "google/gemma-4-26b-a4b-it:free",
   "nvidia/nemotron-3.5-lightning:free",
-  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-  "nvidia/nemotron-3-ultra-550b-a55b:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
-  "thinkingmachines/inkling:free",
-  "thinkingmachines/inkling-small:free",
-  "cohere/north-mini-code:free",
-  "liquid/lfm-2.5-2.6b:free",
-  "apodex/apodex-1.1-mini:free"
+  "meta-llama/llama-3.3-70b-instruct:free"
 ];
 function isOpenRouterFreeModel(model) {
   if (!model) return false;
   return model === "openrouter/free" || model.endsWith(":free");
 }
-var OpenRouterProvider = class {
+var OpenRouterProvider = class _OpenRouterProvider {
   id;
   name = "OpenRouter";
   config;
   constructor(config) {
     this.config = config;
     this.id = config.id || `openrouter-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    if (config.isFreeTier) {
+    if (config.isFreeTier || config.strictFree) {
       this.name = "OpenRouter (Free)";
     }
   }
@@ -10894,7 +11163,7 @@ var OpenRouterProvider = class {
     if (this.config.costPer1kTokens !== void 0) {
       return this.config.costPer1kTokens;
     }
-    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+    if (this.config.isFreeTier || this.config.strictFree || this.isConfiguredModelFree()) {
       return 0;
     }
     return void 0;
@@ -10903,7 +11172,7 @@ var OpenRouterProvider = class {
     if (this.config.promptCostPer1k !== void 0) {
       return this.config.promptCostPer1k;
     }
-    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+    if (this.config.isFreeTier || this.config.strictFree || this.isConfiguredModelFree()) {
       return 0;
     }
     return void 0;
@@ -10912,7 +11181,7 @@ var OpenRouterProvider = class {
     if (this.config.completionCostPer1k !== void 0) {
       return this.config.completionCostPer1k;
     }
-    if (this.config.isFreeTier || this.isConfiguredModelFree()) {
+    if (this.config.isFreeTier || this.config.strictFree || this.isConfiguredModelFree()) {
       return 0;
     }
     return void 0;
@@ -10936,10 +11205,25 @@ var OpenRouterProvider = class {
     if (this.config.defaultModel) {
       return this.config.defaultModel;
     }
-    if (this.config.isFreeTier) {
+    if (this.config.isFreeTier || this.config.strictFree) {
+      return "openrouter/free";
+    }
+    if (!model || model === "default") {
       return "openrouter/free";
     }
     return model;
+  }
+  /**
+   * Look up static metadata for a free model in the catalog.
+   */
+  getFreeModelMeta(modelId) {
+    return OPENROUTER_FREE_MODEL_CATALOG[modelId];
+  }
+  /**
+   * Check whether a model ID is a free tier model.
+   */
+  isFreeModel(modelId) {
+    return isOpenRouterFreeModel(modelId);
   }
   formatRequest(request) {
     const messages = request.messages.map((m) => {
@@ -10952,18 +11236,39 @@ var OpenRouterProvider = class {
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
       return msg;
     });
-    const primaryModel = this.resolveModel(request.model);
+    let primaryModel = this.resolveModel(request.model);
+    if (this.config.strictFree && !isOpenRouterFreeModel(primaryModel)) {
+      primaryModel = "openrouter/free";
+    }
     const payload = {
       model: primaryModel,
       messages
     };
-    const fallbackModels = request.fallbackModels ?? this.config.fallbackModels;
-    if (fallbackModels && fallbackModels.length > 0) {
+    const configuredFallbacks = request.fallbackModels ?? this.config.fallbackModels;
+    let effectiveFallbacks;
+    if (configuredFallbacks && configuredFallbacks.length > 0) {
+      if (this.config.strictFree || this.config.isFreeTier) {
+        effectiveFallbacks = configuredFallbacks.filter(isOpenRouterFreeModel);
+      } else {
+        effectiveFallbacks = configuredFallbacks;
+      }
+    } else if (this.config.isFreeTier || this.config.strictFree) {
+      effectiveFallbacks = OPENROUTER_DEFAULT_FREE_FALLBACKS.filter(
+        (m) => m !== primaryModel
+      );
+    }
+    if (effectiveFallbacks && effectiveFallbacks.length > 0) {
       const distinct = [
         primaryModel,
-        ...fallbackModels.filter((m) => m !== primaryModel)
+        ...effectiveFallbacks.filter((m) => m !== primaryModel)
       ];
       payload.models = distinct;
+    }
+    if (this.config.providerPreferences) {
+      payload.provider = this.config.providerPreferences;
+    }
+    if (this.config.transforms && this.config.transforms.length > 0) {
+      payload.transforms = this.config.transforms;
     }
     if (request.temperature !== void 0) {
       payload.temperature = request.temperature;
@@ -11114,6 +11419,17 @@ var OpenRouterProvider = class {
    * Fetches the dynamic list of free models directly from the OpenRouter API.
    * Matches models listed on https://openrouter.ai/models?variant=free ($0 prompt/completion pricing or :free suffix).
    */
+  async listFreeModels(signal) {
+    return _OpenRouterProvider.fetchFreeModels({
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+      signal
+    });
+  }
+  /**
+   * Fetches the dynamic list of free models directly from the OpenRouter API.
+   * Matches models listed on https://openrouter.ai/models?variant=free ($0 prompt/completion pricing or :free suffix).
+   */
   static async fetchFreeModels(options) {
     const baseUrl = options?.baseUrl || "https://openrouter.ai/api/v1";
     const headers = {};
@@ -11158,9 +11474,7 @@ var OpenRouterProvider = class {
 function createOpenRouterFreeProvider(config) {
   const model = config?.model || config?.defaultModel || "openrouter/free";
   const fallbackModels = config?.fallbackModels || [
-    "openrouter/free",
-    "google/gemma-4-31b-it:free",
-    "nvidia/nemotron-3.5-lightning:free"
+    ...OPENROUTER_DEFAULT_FREE_FALLBACKS
   ];
   const envKey = typeof process !== "undefined" && process.env?.OPENROUTER_API_KEY ? process.env.OPENROUTER_API_KEY : "";
   return new OpenRouterProvider({
@@ -11169,6 +11483,7 @@ function createOpenRouterFreeProvider(config) {
     defaultModel: model,
     fallbackModels,
     isFreeTier: true,
+    strictFree: true,
     costPer1kTokens: 0,
     promptCostPer1k: 0,
     completionCostPer1k: 0
@@ -12101,6 +12416,6 @@ var s = {
  * @license MIT
  */
 
-export { AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CircuitBreaker, CloudflareKVStorage, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEFAULT_CASCADE_TIERS, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, LlmEvals, LlmOptimizer, McpToolBridge, MistralProvider, NumberSchemaNode, OPENROUTER_FREE_MODELS, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RealtimeClient, RealtimeSession, RedisStorage, Router, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, StringSchemaNode, SwarmContext, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, deduplicateSystemInstructions, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, isOpenRouterFreeModel, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sinapsai, tryExtractJson };
+export { AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CircuitBreaker, CloudflareKVStorage, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEFAULT_CASCADE_TIERS, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, LlmEvals, LlmOptimizer, McpToolBridge, MistralProvider, NumberSchemaNode, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, RealtimeClient, RealtimeSession, RedisStorage, Router, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, StringSchemaNode, SwarmContext, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, cosineSimilarity, createOpenRouterFreeProvider, createSinapsAI, deduplicateSystemInstructions, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, executeBatch, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, isOpenRouterFreeModel, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sinapsai, tryExtractJson };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

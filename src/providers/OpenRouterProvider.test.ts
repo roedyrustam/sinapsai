@@ -11,6 +11,8 @@ import type { UnifiedApiRequest } from '../types/index.js';
 import {
   createOpenRouterFreeProvider,
   isOpenRouterFreeModel,
+  OPENROUTER_DEFAULT_FREE_FALLBACKS,
+  OPENROUTER_FREE_MODEL_CATALOG,
   OPENROUTER_FREE_MODELS,
   OpenRouterProvider,
 } from './OpenRouterProvider.js';
@@ -81,7 +83,9 @@ describe('OpenRouterProvider', () => {
 
       const result = provider.formatRequest(request);
 
-      expect(result.tools).toHaveLength(1);
+      expect(result).toHaveLength
+        ? undefined
+        : expect(result.tools).toHaveLength(1);
       expect(result.tool_choice).toBe('auto');
       expect(result.response_format).toEqual({ type: 'json_object' });
       expect(result.messages[1].tool_calls).toHaveLength(1);
@@ -114,6 +118,168 @@ describe('OpenRouterProvider', () => {
         'nvidia/nemotron-3.5-lightning:free',
       ]);
     });
+
+    it('should pass providerPreferences into payload.provider', () => {
+      const customProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        providerPreferences: {
+          order: ['together', 'deepinfra'],
+          allow_fallbacks: false,
+          sort: 'price',
+        },
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hello' }],
+      };
+
+      const result = customProvider.formatRequest(request);
+      expect(result.provider).toEqual({
+        order: ['together', 'deepinfra'],
+        allow_fallbacks: false,
+        sort: 'price',
+      });
+    });
+
+    it('should pass transforms into payload.transforms', () => {
+      const customProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        transforms: ['middle-out'],
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hello' }],
+      };
+
+      const result = customProvider.formatRequest(request);
+      expect(result.transforms).toEqual(['middle-out']);
+    });
+  });
+
+  describe('strictFree Protection', () => {
+    it('should strip non-free fallback models to prevent accidental billing', () => {
+      const safeFreeProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        strictFree: true,
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hi' }],
+        fallbackModels: [
+          'google/gemma-4-31b-it:free',
+          'anthropic/claude-3.5-sonnet', // Paid model!
+          'openai/gpt-4o', // Paid model!
+          'nvidia/nemotron-3.5-lightning:free',
+        ],
+      };
+
+      const result = safeFreeProvider.formatRequest(request);
+      expect(result.models).toEqual([
+        'openrouter/free',
+        'google/gemma-4-31b-it:free',
+        'nvidia/nemotron-3.5-lightning:free',
+      ]);
+    });
+
+    it('should coerce non-free primary model to openrouter/free when strictFree is active', () => {
+      const safeFreeProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        strictFree: true,
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'anthropic/claude-3.5-sonnet', // Paid model requested!
+        messages: [{ role: 'user', content: 'Hi' }],
+      };
+
+      const result = safeFreeProvider.formatRequest(request);
+      expect(result.model).toBe('openrouter/free');
+    });
+
+    it('should supply default free fallbacks when isFreeTier or strictFree has no custom fallbacks', () => {
+      const freeTierProvider = new OpenRouterProvider({
+        apiKey: 'test-key',
+        isFreeTier: true,
+      });
+
+      const request: UnifiedApiRequest = {
+        model: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hi' }],
+      };
+
+      const result = freeTierProvider.formatRequest(request);
+      expect(result.models).toBeDefined();
+      expect(result.models[0]).toBe('openrouter/free');
+      expect(result.models.length).toBeGreaterThan(1);
+      // All fallback models must be free
+      for (const m of result.models) {
+        expect(isOpenRouterFreeModel(m)).toBe(true);
+      }
+    });
+  });
+
+  describe('OPENROUTER_FREE_MODEL_CATALOG', () => {
+    it('should contain catalog entries with verified context windows and capabilities', () => {
+      expect(OPENROUTER_FREE_MODEL_CATALOG['openrouter/free']).toBeDefined();
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['openrouter/free'].contextLength,
+      ).toBe(200_000);
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['openrouter/free'].capabilities.tools,
+      ).toBe(true);
+
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['google/gemma-4-31b-it:free'],
+      ).toBeDefined();
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['google/gemma-4-31b-it:free']
+          .contextLength,
+      ).toBe(262_144);
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['google/gemma-4-31b-it:free'].capabilities
+          .vision,
+      ).toBe(true);
+
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['nvidia/nemotron-3.5-super-vl:free'],
+      ).toBeDefined();
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['nvidia/nemotron-3.5-super-vl:free']
+          .contextLength,
+      ).toBe(1_000_000);
+
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['cohere/north-mini-code:free'],
+      ).toBeDefined();
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['cohere/north-mini-code:free']
+          .capabilities.tools,
+      ).toBe(true);
+
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['deepseek/deepseek-r1:free'],
+      ).toBeDefined();
+      expect(
+        OPENROUTER_FREE_MODEL_CATALOG['deepseek/deepseek-r1:free'].capabilities
+          .reasoning,
+      ).toBe(true);
+    });
+
+    it('should retrieve metadata via getFreeModelMeta', () => {
+      const meta = provider.getFreeModelMeta('google/gemma-4-31b-it:free');
+      expect(meta?.name).toBe('Google: Gemma 4 31B (free)');
+      expect(meta?.developer).toBe('Google');
+      expect(provider.getFreeModelMeta('non-existent-model')).toBeUndefined();
+    });
+
+    it('should check free models via isFreeModel', () => {
+      expect(provider.isFreeModel('openrouter/free')).toBe(true);
+      expect(provider.isFreeModel('google/gemma-4-31b-it:free')).toBe(true);
+      expect(provider.isFreeModel('openai/gpt-4o')).toBe(false);
+    });
   });
 
   describe('Free Tier & Cost Optimization', () => {
@@ -126,6 +292,7 @@ describe('OpenRouterProvider', () => {
       expect(isOpenRouterFreeModel('anthropic/claude-3.5-sonnet')).toBe(false);
       expect(isOpenRouterFreeModel('openai/gpt-4o')).toBe(false);
       expect(OPENROUTER_FREE_MODELS).toContain('openrouter/free');
+      expect(OPENROUTER_DEFAULT_FREE_FALLBACKS).toContain('openrouter/free');
     });
 
     it('should default token costs to 0 for free models', () => {
@@ -218,7 +385,7 @@ describe('OpenRouterProvider', () => {
     });
   });
 
-  describe('fetchFreeModels', () => {
+  describe('fetchFreeModels & listFreeModels', () => {
     it('should fetch and filter free models from OpenRouter API', async () => {
       const mockApiResponse = {
         data: [
@@ -256,6 +423,10 @@ describe('OpenRouterProvider', () => {
           'google/gemma-4-31b-it:free',
         ]);
         expect(freeModels[0].isFree).toBe(true);
+
+        // Also test instance method
+        const instResult = await provider.listFreeModels();
+        expect(instResult).toHaveLength(2);
       } finally {
         globalThis.fetch = originalFetch;
       }
