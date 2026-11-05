@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-461%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-517%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -521,31 +521,37 @@ console.log(embeddings.usage?.totalTokens); // Token count
 
 ### 12. OpenRouter Free Tier & Zero-Cost Routing
 
-Leverage [OpenRouter's Free Models catalog](https://openrouter.ai/models?variant=free) without paying for inference tokens. SinapsAI provides pre-configured zero-cost accounting, `openrouter/free` meta-routing, attribution headers, dynamic model discovery, and native fallback model chains:
+Leverage [OpenRouter's Free Models catalog](https://openrouter.ai/models?variant=free) without paying for inference tokens. SinapsAI provides pre-configured zero-cost accounting, `openrouter/free` meta-routing, attribution headers, dynamic model discovery, native fallback model chains, and `strictFree` accidental billing protection:
+
+- **Verified Free Models Catalog**: Access `OPENROUTER_FREE_MODEL_CATALOG` with context windows up to 1,000,000 tokens (e.g. `nvidia/nemotron-3.5-super-vl:free`, `google/gemma-4-31b-it:free`, `cohere/north-mini-code:free`, `deepseek/deepseek-r1:free`).
+- **Strict Free Billing Protection (`strictFree: true`)**: Automatically purges any non-free fallback models from failover arrays. Guarantees that if a free model hits capacity limits (HTTP 429/503), requests will only failover to other free models or return an error—preventing accidental pay-per-token credit card charges.
+- **Provider Routing Preferences**: Fine-tune backend hosts with `providerPreferences` (`order`, `allow_fallbacks`, `quantizations`, `sort: 'price' | 'throughput' | 'latency'`).
+- **Prompt Transforms**: Support native OpenRouter context compression with `transforms: ['middle-out']`.
 
 ```typescript
 import { 
   SinapsClient, 
   OpenRouterProvider, 
   createOpenRouterFreeProvider,
-  OpenAiProvider 
+  OpenAiProvider,
+  OPENROUTER_FREE_MODEL_CATALOG,
 } from 'sinapsai';
 
 // 1. Inspect live free models dynamically from OpenRouter API
 const freeModels = await OpenRouterProvider.fetchFreeModels();
 console.log(`Live Free Models: ${freeModels.length}`);
 
-// 2. Instantiate pre-configured Free Provider ($0 cost per 1k tokens)
+// 2. Instantiate pre-configured Free Provider ($0 cost per 1k tokens, strictFree enabled)
 const openRouterFree = createOpenRouterFreeProvider({
   apiKey: process.env.OPENROUTER_API_KEY,
   siteUrl: 'https://myapp.com', // Sent as HTTP-Referer for OpenRouter leaderboard ranking
   siteName: 'My App',           // Sent as X-Title
   model: 'openrouter/free',      // Meta-router selecting active free models
-  fallbackModels: [
-    'openrouter/free',
-    'google/gemma-4-31b-it:free',
-    'nvidia/nemotron-3.5-lightning:free',
-  ],
+  strictFree: true,             // Strips any paid fallbacks to guarantee $0 cost
+  providerPreferences: {
+    sort: 'throughput',
+    allow_fallbacks: true,
+  },
 });
 
 // 3. Combine with paid backup provider under 'lowest-cost' strategy
@@ -570,10 +576,12 @@ console.log(response.choices[0].message.content);
 
 ### 13. Groq LPU Ultra-Fast Inference & Reasoning Integration
 
-Harness the raw inference speed of [GroqCloud LPUs](https://console.groq.com/docs/overview) (~500+ tokens/sec) with built-in reasoning support, JSON schema structured outputs, and automatic duration rate-limit header tracking:
+Harness the raw inference speed of [GroqCloud LPUs](https://console.groq.com/docs/overview) (~500+ tokens/sec) with built-in reasoning support, JSON schema structured outputs, Whisper audio speech-to-text endpoints, and automatic duration rate-limit header tracking:
 
-- **Ultra-Fast Production Models**: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`.
-- **Reasoning Tokens Extraction**: Automatically sets `reasoning_format: 'parsed'` and surfaces the thought chain in `choice.message.reasoning_content` (and streaming `delta.reasoning_content`). Supports raw `<think>...</think>` fallback parsing.
+- **Ultra-Fast Production Models**: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`, and metadata catalog `GROQ_MODELS`.
+- **Reasoning Tokens Extraction**: Automatically sets `reasoning_format: 'parsed'` and surfaces the thought chain in `choice.message.reasoning_content` (and streaming `delta.reasoning_content`). Supports raw `<think>...</think>` fallback parsing. Auto-enforces parsed reasoning when tools or JSON structured outputs are used to prevent Groq 400 errors.
+- **Audio Transcription & Translation**: Native zero-dependency Whisper endpoints (`transcribeAudio` and `translateAudio`) powered by `whisper-large-v3-turbo` and `whisper-large-v3`.
+- **Dynamic Model Discovery**: Fetch live models directly from GroqCloud via `groqProvider.listModels()`.
 - **Groq Duration Rate Limit Parsing**: Handles Groq's distinctive duration headers (`x-ratelimit-reset-tokens: 7.66s`, `x-ratelimit-reset-requests: 2m59.56s`) to give exact millisecond precision for proactive throttling and `onRateLimitWarning` hooks.
 - **Strict Compatibility**: Automatically strips unsupported fields (`messages[].name`) that cause Groq 400 errors and safely clamps `temperature: 0` to `1e-8` per Groq documentation.
 
