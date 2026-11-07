@@ -56,6 +56,13 @@ import {
   extractJsonFromText,
   tryExtractJson,
 } from '../utils/structuredOutput.js';
+import {
+  exportOtelTraces,
+  type GenAiSpan,
+  type OtelTraceExportOptions,
+  type OtelTracePayload,
+  toOtelTracePayload,
+} from '../utils/tracingExporter.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { executeBatch } from './BatchExecutor.js';
 import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
@@ -63,6 +70,10 @@ import {
   CircuitBreaker,
   type CircuitBreakerOptions,
 } from './CircuitBreaker.js';
+import {
+  CognitiveBrain,
+  type CognitiveBrainOptions,
+} from './CognitiveBrain.js';
 import {
   ConsensusEngine,
   type ConsensusOptions,
@@ -220,6 +231,10 @@ export interface SinapsClientOptions {
    * Verifies RAG outputs against context references and guards against hallucinations.
    */
   sentinel?: FaithfulnessSentinelOptions;
+  /**
+   * Optional unified in-process cognitive brain configuration (Tri-Memory Fusion: Episodic + Graph + RAG).
+   */
+  brain?: CognitiveBrainOptions;
 }
 
 export class SinapsClient {
@@ -240,6 +255,7 @@ export class SinapsClient {
   public readonly graph: KnowledgeGraph;
   public readonly workflows: DurableWorkflowEngine;
   public readonly evals: LlmEvals;
+  public readonly brain: CognitiveBrain;
   public readonly realtime = new RealtimeClient();
   public readonly consensus: {
     create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -338,6 +354,15 @@ export class SinapsClient {
 
     // Initialize In-Process LLM Evals
     this.evals = new LlmEvals(options.evals);
+
+    // Initialize In-Process Cognitive Brain (Tri-Memory Fusion)
+    this.brain = new CognitiveBrain({
+      storage: this.storage,
+      episodic: options.memory,
+      graph: options.graph,
+      rag: options.rag,
+      ...options.brain,
+    });
 
     // Initialize Speculative Multi-Draft Consensus
     this.consensus = {
@@ -1081,6 +1106,26 @@ export class SinapsClient {
    */
   public toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics {
     return this.exportOtelMetrics(options);
+  }
+
+  /**
+   * Formats internal GenAI spans into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+   */
+  public toOtelTraces(
+    spans: GenAiSpan[],
+    options?: OtelTraceExportOptions,
+  ): OtelTracePayload {
+    return toOtelTracePayload(spans, options);
+  }
+
+  /**
+   * Exports OpenTelemetry GenAI traces directly to an OTLP collector endpoint (/v1/traces).
+   */
+  public async exportOtelTraces(
+    spans: GenAiSpan[],
+    options?: OtelTraceExportOptions,
+  ): Promise<{ success: boolean; status?: number; error?: string }> {
+    return exportOtelTraces(spans, options);
   }
 
   /**

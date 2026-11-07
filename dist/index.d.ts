@@ -7,11 +7,13 @@
  */
 export * from './ai-sdk/index.js';
 export * from './core/AgentSwarm.js';
+export * from './core/AutonomousDriftHealer.js';
 export * from './core/BatchExecutor.js';
 export * from './core/BudgetGuardrails.js';
 export * from './core/CanaryProber.js';
 export * from './core/CircuitBreaker.js';
 export * from './core/CloudflareKVStorage.js';
+export * from './core/CognitiveBrain.js';
 export * from './core/ConsensusEngine.js';
 export * from './core/ContextCompressor.js';
 export * from './core/D1Storage.js';
@@ -27,6 +29,7 @@ export * from './core/KnowledgeGraph.js';
 export * from './core/LlmEvals.js';
 export * from './core/LlmOptimizer.js';
 export * from './core/McpBridge.js';
+export * from './core/McpClientConnector.js';
 export * from './core/PIIGuardrails.js';
 export * from './core/RateLimiter.js';
 export * from './core/RealtimeClient.js';
@@ -44,4 +47,5 @@ export * from './utils/signal.js';
 export * from './utils/similarity.js';
 export * from './utils/streamAccumulator.js';
 export * from './utils/structuredOutput.js';
+export * from './utils/tracingExporter.js';
 //# sourceMappingURL=index.d.ts.map

@@ -146,6 +146,68 @@ export interface LlmOptimizationMetrics {
   cascadedRequestsCount: number;
 }
 
+export interface ConfidenceEvaluationResult {
+  confidenceScore: number; // 0.0 to 1.0
+  isConfident: boolean;
+  shouldEscalate: boolean;
+  signals: string[];
+}
+
+/**
+ * Evaluates the confidence score of an LLM response to determine if early-exit
+ * cascade escalation to a larger reasoning tier is required.
+ */
+export function evaluateResponseConfidence(
+  text: string,
+  finishReason?: string,
+  minConfidence = 0.7,
+): ConfidenceEvaluationResult {
+  const signals: string[] = [];
+  let penalty = 0;
+
+  if (finishReason === 'length') {
+    signals.push('Response truncated due to length limits');
+    penalty += 0.35;
+  }
+
+  const lower = text.toLowerCase();
+
+  const uncertaintyPhrases = [
+    'i am not sure',
+    'i cannot be sure',
+    'not entirely sure',
+    'might be mistaken',
+    'perhaps',
+    'possibly wrong',
+    'i do not have enough information',
+    "i don't know",
+    'unclear to me',
+    'it is difficult to say',
+  ];
+
+  for (const phrase of uncertaintyPhrases) {
+    if (lower.includes(phrase)) {
+      signals.push(`Expressed uncertainty: "${phrase}"`);
+      penalty += 0.2;
+    }
+  }
+
+  if (text.trim().length < 20) {
+    signals.push('Suspiciously brief completion (<20 chars)');
+    penalty += 0.25;
+  }
+
+  const confidenceScore = Math.max(0.0, Number((1.0 - penalty).toFixed(2)));
+  const isConfident = confidenceScore >= minConfidence;
+
+  return {
+    confidenceScore,
+    isConfident,
+    shouldEscalate: !isConfident,
+    signals,
+  };
+}
+
 const COMPLEX_REASONING_REGEX =
   /\b(architect(?:ure)?|refactor|optimiz(?:e|ation)|vulnerabilit(?:y|ies)|security\s+audit|prove|theorem|algorithm|concurren(?:t|cy)|deadlock|race\s+condition|distributed|microkernel|step[\s-]by[\s-]step|root\s+cause|stack\s+trace|benchmark|formal\s+verification|regex|memory\s+leak|reverse\s+engineer)\b/i;
 
@@ -587,5 +649,16 @@ export class LlmOptimizer {
       averageCompressionRatio: 1.0,
       cascadedRequestsCount: 0,
     };
+  }
+
+  /**
+   * Evaluates response confidence to determine if early-exit cascade to a higher model tier is needed.
+   */
+  public evaluateConfidence(
+    text: string,
+    finishReason?: string,
+    minConfidence?: number,
+  ): ConfidenceEvaluationResult {
+    return evaluateResponseConfidence(text, finishReason, minConfidence);
   }
 }

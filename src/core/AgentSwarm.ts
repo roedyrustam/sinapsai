@@ -295,6 +295,82 @@ export type SwarmStreamEvent =
     };
 
 /**
+ * Task specification for an agent in parallel execution
+ */
+export interface SwarmParallelAgentTask {
+  agentId: string;
+  prompt?: string | ChatMessage[];
+  contextUpdates?: Record<string, unknown>;
+}
+
+/**
+ * Options for running multiple swarm agents in parallel
+ */
+export interface SwarmParallelOptions {
+  /**
+   * The list of agents to run in parallel.
+   * Can be agent IDs or custom task overrides with specific sub-prompts.
+   */
+  tasks: Array<string | SwarmParallelAgentTask>;
+  /**
+   * Default prompt given to all tasks if not specified per task.
+   */
+  prompt?: string | ChatMessage[];
+  /**
+   * Optional aggregator / synthesizer agent ID that takes the parallel outputs
+   * and synthesizes a single definitive response.
+   */
+  aggregatorAgentId?: string;
+  /**
+   * Execution mode:
+   * - 'all_settled': Wait for all subagents to finish (fail-soft, returns whatever succeeded)
+   * - 'strict': Fails immediately if any subagent throws an error
+   * Default: 'all_settled'
+   */
+  mode?: 'all_settled' | 'strict';
+  /**
+   * Shared initial context passed to all parallel tasks.
+   */
+  initialContext?: Record<string, unknown>;
+  /**
+   * Optional timeout per branch in milliseconds.
+   */
+  timeoutMs?: number;
+  /**
+   * Optional AbortSignal.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Result of an individual parallel agent branch
+ */
+export interface SwarmParallelBranchResult {
+  agentId: string;
+  agentName: string;
+  status: 'success' | 'error';
+  content: string;
+  error?: string;
+  totalSteps: number;
+  costUsd: number;
+  history: ChatMessage[];
+}
+
+/**
+ * Aggregated result returned after parallel swarm execution finishes
+ */
+export interface SwarmParallelResult {
+  content: string;
+  branches: SwarmParallelBranchResult[];
+  aggregated: boolean;
+  aggregatorAgentId?: string;
+  totalCostUsd: number;
+  totalSteps: number;
+  durationMs: number;
+  sharedContext: Record<string, unknown>;
+}
+
+/**
  * In-Process Multi-Agent Swarm Orchestrator
  */
 export class AgentSwarm {
@@ -907,6 +983,161 @@ export class AgentSwarm {
     yield {
       type: 'done',
       result,
+    };
+  }
+
+  /**
+   * Runs multiple specialist agents concurrently in parallel branches (Fan-Out),
+   * and optionally synthesizes all branch outputs via an aggregator agent (Fan-In / Map-Reduce).
+   */
+  public async runParallel(
+    options: SwarmParallelOptions,
+  ): Promise<SwarmParallelResult> {
+    const startTime = Date.now();
+    const mode = options.mode ?? 'all_settled';
+    const sharedContext = new SwarmContext(options.initialContext);
+
+    // Normalize tasks
+    const tasks: SwarmParallelAgentTask[] = options.tasks.map((t) => {
+      if (typeof t === 'string') {
+        return { agentId: t, prompt: options.prompt };
+      }
+      return {
+        agentId: t.agentId,
+        prompt: t.prompt ?? options.prompt,
+        contextUpdates: t.contextUpdates,
+      };
+    });
+
+    const branchPromises = tasks.map(
+      async (task): Promise<SwarmParallelBranchResult> => {
+        const agent = this.getAgent(task.agentId);
+        const agentName = agent ? agent.name : task.agentId;
+
+        if (!agent) {
+          return {
+            agentId: task.agentId,
+            agentName,
+            status: 'error',
+            content: '',
+            error: `Agent with ID "${task.agentId}" is not registered in the swarm.`,
+            totalSteps: 0,
+            costUsd: 0,
+            history: [],
+          };
+        }
+
+        // Branch context includes shared context + branch updates
+        const branchContext = new SwarmContext({
+          ...sharedContext.getAll(),
+          ...(task.contextUpdates || {}),
+        });
+
+        const branchPrompt =
+          task.prompt ?? 'Execute your assigned specialization.';
+
+        try {
+          const branchResult = await this.run({
+            initialAgentId: task.agentId,
+            ...(typeof branchPrompt === 'string'
+              ? { task: branchPrompt }
+              : { messages: branchPrompt }),
+            context: branchContext.getAll(),
+          });
+
+          // Merge any branch context updates back
+          for (const [k, v] of Object.entries(branchResult.sharedContext)) {
+            sharedContext.set(k, v);
+          }
+
+          return {
+            agentId: task.agentId,
+            agentName,
+            status: 'success',
+            content: branchResult.content,
+            totalSteps: branchResult.totalSteps,
+            costUsd: branchResult.totalCostUsd,
+            history: branchResult.history,
+          };
+        } catch (err) {
+          if (mode === 'strict') {
+            throw err;
+          }
+          return {
+            agentId: task.agentId,
+            agentName,
+            status: 'error',
+            content: '',
+            error: err instanceof Error ? err.message : String(err),
+            totalSteps: 0,
+            costUsd: 0,
+            history: [],
+          };
+        }
+      },
+    );
+
+    const branches = await Promise.all(branchPromises);
+
+    let totalCostUsd = branches.reduce((sum, b) => sum + b.costUsd, 0);
+    let totalSteps = branches.reduce((sum, b) => sum + b.totalSteps, 0);
+    let finalContent = '';
+    let aggregated = false;
+
+    // Optional Map-Reduce / Aggregator Step
+    if (options.aggregatorAgentId) {
+      const aggregator = this.getAgent(options.aggregatorAgentId);
+      if (aggregator) {
+        const synthesisPrompt = `You are the lead synthesizer for a multi-agent team.
+Below are the individual outputs from our specialist agents who investigated the problem concurrently:
+
+${branches
+  .map(
+    (b) =>
+      `### Specialist [${b.agentName} (${b.agentId})]:\n${b.status === 'success' ? b.content : `[Error: ${b.error}]`}`,
+  )
+  .join('\n\n')}
+
+Please review all specialist findings and provide a comprehensive, unified, and definitive response.`;
+
+        const aggResult = await this.run({
+          initialAgentId: options.aggregatorAgentId,
+          task: synthesisPrompt,
+          context: sharedContext.getAll(),
+        });
+
+        finalContent = aggResult.content;
+        totalCostUsd += aggResult.totalCostUsd;
+        totalSteps += aggResult.totalSteps;
+        aggregated = true;
+
+        for (const [k, v] of Object.entries(aggResult.sharedContext)) {
+          sharedContext.set(k, v);
+        }
+      }
+    }
+
+    if (!finalContent) {
+      // Default formatting if no aggregator is specified
+      finalContent = branches
+        .map(
+          (b) =>
+            `### [${b.agentName}]:\n${b.status === 'success' ? b.content : `Error: ${b.error}`}`,
+        )
+        .join('\n\n');
+    }
+
+    const durationMs = Date.now() - startTime;
+
+    return {
+      content: finalContent,
+      branches,
+      aggregated,
+      aggregatorAgentId: options.aggregatorAgentId,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      totalSteps,
+      durationMs,
+      sharedContext: sharedContext.getAll(),
     };
   }
 }

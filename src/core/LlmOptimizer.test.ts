@@ -306,5 +306,38 @@ Perform a security audit, root cause analysis, and formal verification step-by-s
         estimateTotalTokens([{ role: 'user', content: 'Test prompt' }]),
       ).toBeGreaterThan(0);
     });
+
+    it('evaluates response confidence to detect uncertainty signals and recommend escalation', () => {
+      const optimizer = new LlmOptimizer();
+
+      // Confident, thorough response
+      const confident = optimizer.evaluateConfidence(
+        'Here is the verified production architecture using Kubernetes and Istio with mTLS enabled.',
+        'stop',
+      );
+      expect(confident.isConfident).toBe(true);
+      expect(confident.shouldEscalate).toBe(false);
+      expect(confident.confidenceScore).toBe(1.0);
+
+      // Uncertain response
+      const uncertain = optimizer.evaluateConfidence(
+        'I am not sure, perhaps the bug might be mistaken in the database connection string.',
+        'stop',
+      );
+      expect(uncertain.isConfident).toBe(false);
+      expect(uncertain.shouldEscalate).toBe(true);
+      expect(uncertain.confidenceScore).toBeLessThan(0.7);
+      expect(uncertain.signals.length).toBeGreaterThan(0);
+
+      // Truncated response due to length
+      const truncated = optimizer.evaluateConfidence(
+        'The quick brown fox jumps over',
+        'length',
+      );
+      expect(truncated.shouldEscalate).toBe(true);
+      expect(truncated.signals).toContain(
+        'Response truncated due to length limits',
+      );
+    });
   });
 });

@@ -196,6 +196,24 @@ export class DashboardServer {
       return;
     }
 
+    if (pathname === '/api/traces') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const recentSpans = this.history.map((h) => ({
+        name: `chat ${h.model}`,
+        startTimeMs: h.timestamp - h.latencyMs,
+        endTimeMs: h.timestamp,
+        attributes: {
+          'gen_ai.system': h.provider,
+          'gen_ai.request.model': h.model,
+          'gen_ai.usage.total_tokens': h.totalTokens,
+          'gen_ai.usage.prompt_tokens': h.promptTokens,
+          'gen_ai.usage.completion_tokens': h.completionTokens,
+        },
+      }));
+      res.end(JSON.stringify(this.client.toOtelTraces(recentSpans)));
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found', path: pathname }));
   }
@@ -209,7 +227,7 @@ export class DashboardServer {
 
     const summary = {
       title: this.title,
-      version: '2.13.8',
+      version: '3.0.0',
       uptimeSeconds,
       strategy: this.client.getStrategy(),
       metrics: {

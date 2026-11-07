@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.0.0] - 2026-11-08
+### Added
+- **Unified In-Process Cognitive Brain (`CognitiveBrain`, `client.brain`, `src/core/CognitiveBrain.ts`)**:
+  - Tri-Memory Fusion architecture synthesizing Episodic Memory (facts), Knowledge Graph (relational triples & multi-hop traversal), and Hybrid RAG (BM25 + Dense Vectors) in a single declarative call (`client.brain.retrieveContext`).
+  - Dynamic Markdown prompt injection (`[UNIFIED COGNITIVE BRAIN CONTEXT]`) with in-memory LRU tracking and memory caps.
+- **Parallel Subagent Swarm with Map-Reduce (`AgentSwarm.runParallel`, `client.swarm.runParallel`)**:
+  - High-throughput parallel concurrent execution of specialist subagents (`Promise.all`) with context isolation.
+  - Optional synthesizer/aggregator agent that consolidates parallel findings into a unified, definitive response.
+- **Human-in-the-Loop (HITL) Workflow Suspension (`DurableWorkflowEngine`)**:
+  - `suspendForApproval` and `resolveApproval` methods transitioning workflow status to `waiting_approval`.
+  - Atomic persistence to `StateStorage` preventing automated continuation until explicit human approval.
+- **Universal External MCP Client Ingestion (`McpClientConnector`, `client.mcp.connectExternalServer`)**:
+  - Connects to external MCP servers over HTTP/SSE or Stdio transports, completes initialize handshake, discovers tools, and mounts them with automatic namespace prefixing.
+- **Autonomous API Schema Drift Healer (`AutonomousDriftHealer`, `src/core/AutonomousDriftHealer.ts`)**:
+  - Dynamic parameter key alias resolution (camelCase vs snake_case, Levenshtein matching), recursive type coercion, smart defaults, and upstream provider error diagnosis.
+- **OpenTelemetry GenAI Semantic Conventions v1.30+ Tracing (`src/utils/tracingExporter.ts`, `client.exportOtelTraces`)**:
+  - Pure JSON OTLP Traces (`/v1/traces`) emitting standard distributed spans for GenAI operations without external dependencies.
+- **Confidence-Calibrated Early-Exit Cascading (`evaluateResponseConfidence`, `LlmOptimizer.evaluateConfidence`)**:
+  - Analyzes response uncertainty phrases and length truncation to trigger automatic escalation from light models to frontier reasoning models.
+- **3 New Runnable Examples (Examples 40–42)** and 14 new unit tests; total 556/556 unit tests passing across 53 test suites with 100% pass rate.
+
 ## [2.13.4] - 2026-11-05
 ### Fixed
 - **GitHub Packages Userconfig Authentication**: Injected `_authToken` into both `$NPM_CONFIG_USERCONFIG` runner path and project `.npmrc` to satisfy `npm 11+` strict auth resolution for `npm.pkg.github.com`.

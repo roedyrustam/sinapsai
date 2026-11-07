@@ -811,10 +811,27 @@ export type AgentStreamEvent =
 
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
 
+export type {
+  SwarmParallelAgentTask,
+  SwarmParallelBranchResult,
+  SwarmParallelOptions,
+  SwarmParallelResult,
+} from '../core/AgentSwarm.js';
 export {
   AgentWalletExceededError,
   type SwarmAgentWallet,
 } from '../core/AgentSwarm.js';
+export {
+  AutonomousDriftHealer,
+  type DriftHealResult,
+  type ProviderErrorRemediation,
+} from '../core/AutonomousDriftHealer.js';
+export {
+  CognitiveBrain,
+  type CognitiveBrainOptions,
+  type CognitiveContextResult,
+  type CognitiveRetrieveOptions,
+} from '../core/CognitiveBrain.js';
 export {
   type ConsensusDraftResult,
   ConsensusEngine,
@@ -823,6 +840,10 @@ export {
   calculatePairwiseSimilarity,
   computeTermFrequencyVector,
 } from '../core/ConsensusEngine.js';
+export type {
+  ApprovalRecord,
+  ApprovalRequest,
+} from '../core/DurableWorkflow.js';
 export {
   EpisodicMemory,
   type EpisodicMemoryOptions,
@@ -881,6 +902,10 @@ export {
   type McpToolResult,
 } from '../core/McpBridge.js';
 export {
+  type ExternalMcpServerConfig,
+  McpClientConnector,
+} from '../core/McpClientConnector.js';
+export {
   GatewayRateLimitError,
   GatewayRateLimiter,
 } from '../core/RateLimiter.js';
@@ -895,3 +920,13 @@ export type {
   ExtendedPIIGuardrailsOptions,
   SinapsClientOptions,
 } from '../core/SinapsClient.js';
+export {
+  exportOtelTraces,
+  type GenAiSpan,
+  type GenAiSpanAttribute,
+  generateSpanId,
+  generateTraceId,
+  type OtelTraceExportOptions,
+  type OtelTracePayload,
+  toOtelTracePayload,
+} from '../utils/tracingExporter.js';

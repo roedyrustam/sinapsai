@@ -177,4 +177,34 @@
 - [x] **Standalone MCP Stdio Server (`sinapsai mcp`)**: Protokol JSON-RPC 2.0 native over stdin/stdout untuk integrasi langsung ke Claude Desktop, Cursor, Antigravity, dan Windsurf.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 36–39; total 486/486 tes lulus di 46 test suites, 100% Biome Clean, Siap Rilis ke NPM v2.13.0.
 
+## Phase 22: Cognitive Brain, Parallel Swarm Fan-Out & Human-in-the-Loop (HITL) Workflows (v2.14.0) - *Completed*
+- [x] **Unified In-Process Cognitive Brain (`CognitiveBrain`, `client.brain`)**:
+  - Tri-Memory Fusion terpadu: memadukan Episodic Memory (fakta pengguna), In-Memory Knowledge Graph (triples entitas), dan Hybrid RAG (BM25 + Dense Vectors) dalam satu panggilan deklaratif (`client.brain.retrieveContext`).
+  - Mekanisme proteksi alokasi memori in-memory LRU cache dan memory byte cap untuk keandalan di edge/serverless runtime.
+- [x] **Parallel Subagent Fan-Out / Fan-In with Map-Reduce (`client.swarm.runParallel`)**:
+  - Eksekusi serentak sub-agen spesialis (`Promise.all`) dengan pemisahan konteks (*context pruning*) untuk mencegah context window explosion.
+  - Sintesis agregator cerdas (*Map-Reduce*) yang merangkum hasil kerja semua sub-agen ke dalam satu respons terpadu.
+- [x] **Human-in-the-Loop (HITL) Suspension & Resumption Engine (`client.workflows.suspendForApproval`, `client.workflows.resolveApproval`)**:
+  - Penangguhan alur kerja otomatis pada tool/aksi berisiko tinggi dengan status `waiting_approval`.
+  - State serialisasi atomik ke `StateStorage` (Memory, Redis, D1, Cloudflare KV) dengan resumption API instan tanpa pengulangan eksekusi tool terdahulu.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 40 (`examples/40-cognitive-brain-and-parallel-swarm.ts`); total 547/547 unit tests lulus.
+
+## Phase 23: Universal MCP Client Ingestion & Autonomous Schema Drift Healer (v2.15.0) - *Completed*
+- [x] **Universal MCP Client Ingestion Connector (`client.mcp.connectExternalServer`, `McpClientConnector`)**:
+  - Transport ganda zero-dependency (Stdio transport untuk Node.js/Bun/Deno dan SSE/HTTP transport untuk Cloudflare Workers/Edge).
+  - Penemuan alat otomatis (*tools/list*) dan konversi instan ke OpenAI / Unified `ToolDefinition`.
+- [x] **Autonomous API Schema Drift Healer (`AutonomousDriftHealer`)**:
+  - Heuristik koreksi parameter tool runtime otomatis (fuzzy camelCase/snake_case renaming, deep type coercion, default values injection) dan toleransi perubahan skema API upstream.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 41 (`examples/41-mcp-client-ingestion-and-drift-healer.ts`); total 552/552 unit tests lulus.
+
+## Phase 24: Enterprise OpenTelemetry GenAI Tracing, Live Swarm Canvas & Confidence Cascading (v3.0.0) - *Completed*
+- [x] **Native OpenTelemetry GenAI Semantic Conventions v1.30+ Tracing (`toOtelTracePayload`, `exportOtelTraces`)**:
+  - Format eksposisi JSON OTLP Traces (`/v1/traces`) standar industri untuk visualisasi distributed spans (Gateway -> Router -> Guardrails -> Provider Call -> Tool Call -> Evals) di Langfuse, Arize Phoenix, Datadog, dan Jaeger.
+- [x] **Dashboard Server 2.0 (Live Swarm Visualizer Canvas, Traces API & Playground)**:
+  - Endpoint `/api/traces` mengekspos jejak rentang eksekusi OTLP langsung ke visualizer dashboard.
+- [x] **Confidence-Calibrated Cascading & Early-Exit Inference (`evaluateResponseConfidence`)**:
+  - Evaluasi skor kepastian/entropi output model Tier 1 dengan eskalasi otomatis ke model Tier 3 saat terdeteksi ambiguitas atau ketidakpastian.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 42 (`examples/42-opentelemetry-genai-tracing-and-confidence-cascading.ts`); total 556/556 unit tests lulus di 53 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies.
+
+
 

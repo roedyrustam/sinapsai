@@ -678,15 +678,21 @@ export type AgentStreamEvent = {
     result: RunWithToolsResult;
 };
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
+export type { SwarmParallelAgentTask, SwarmParallelBranchResult, SwarmParallelOptions, SwarmParallelResult, } from '../core/AgentSwarm.js';
 export { AgentWalletExceededError, type SwarmAgentWallet, } from '../core/AgentSwarm.js';
+export { AutonomousDriftHealer, type DriftHealResult, type ProviderErrorRemediation, } from '../core/AutonomousDriftHealer.js';
+export { CognitiveBrain, type CognitiveBrainOptions, type CognitiveContextResult, type CognitiveRetrieveOptions, } from '../core/CognitiveBrain.js';
 export { type ConsensusDraftResult, ConsensusEngine, type ConsensusOptions, type ConsensusResult, calculatePairwiseSimilarity, computeTermFrequencyVector, } from '../core/ConsensusEngine.js';
+export type { ApprovalRecord, ApprovalRequest, } from '../core/DurableWorkflow.js';
 export { EpisodicMemory, type EpisodicMemoryOptions, type MemoryRecallOptions, type MemoryRecallResult, type MemoryRecord, type MemoryStoreOptions, } from '../core/EpisodicMemory.js';
 export { type ContextCacheEligibility, canonicalizeJsonValue, GeminiAgentBooster, type ThinkingBudgetTier, type ThinkingComplexityAnalysis, } from '../core/GeminiAgentBooster.js';
 export { Bm25Index, type ChunkOptions, chunkDocument, type DocumentChunk, HybridRagEngine, type HybridRagOptions, type RagSearchOptions, type RagSearchResult, reciprocalRankFusion, } from '../core/HybridRag.js';
 export { canonicalizeTools, DEFAULT_CASCADE_TIERS, deduplicateSystemInstructions, estimateTextTokens, type LlmCascadeTiers, type LlmComplexityAnalysis, type LlmComplexityTier, type LlmOptimizationMetrics, type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions, minifyProsePreservingCode, } from '../core/LlmOptimizer.js';
 export { coerceToolArguments, type McpContent, type McpImageContent, type McpJsonRpcRequest, type McpJsonRpcResponse, type McpResourceContent, type McpTextContent, type McpTool, McpToolBridge, type McpToolContext, type McpToolDefinition, type McpToolHandler, type McpToolInputSchema, type McpToolResult, } from '../core/McpBridge.js';
+export { type ExternalMcpServerConfig, McpClientConnector, } from '../core/McpClientConnector.js';
 export { GatewayRateLimitError, GatewayRateLimiter, } from '../core/RateLimiter.js';
 export { RealtimeClient, type RealtimeConnectOptions, type RealtimeProviderType, RealtimeSession, } from '../core/RealtimeClient.js';
 export type { RouterOptions } from '../core/Router.js';
 export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';
+export { exportOtelTraces, type GenAiSpan, type GenAiSpanAttribute, generateSpanId, generateTraceId, type OtelTraceExportOptions, type OtelTracePayload, toOtelTracePayload, } from '../utils/tracingExporter.js';
 //# sourceMappingURL=index.d.ts.map

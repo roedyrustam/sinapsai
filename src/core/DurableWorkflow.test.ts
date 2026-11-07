@@ -80,4 +80,49 @@ describe('Durable Agent Workflows & State Checkpoint Engine', () => {
     expect(resumeState.agent).toBe('ResearchAgent');
     expect(resumeState.messages.length).toBe(1);
   });
+
+  it('should support Human-in-the-Loop (HITL) suspension and resolution', async () => {
+    const storage = new InMemoryStorage();
+    const engine = new DurableWorkflowEngine({ storage });
+
+    await engine.createWorkflow({
+      workflowId: 'transfer_789',
+      initialAgent: 'FinanceAgent',
+      initialMessages: [
+        { role: 'user', content: 'Transfer $50,000 to vendor.' },
+      ],
+    });
+
+    // Suspend for approval
+    const suspended = await engine.suspendForApproval('transfer_789', {
+      action: 'wire_transfer',
+      reason: 'Amount exceeds $10,000 automated limit.',
+      payload: { amount: 50000, recipient: 'Acme Corp' },
+    });
+
+    expect(suspended.status).toBe('waiting_approval');
+    expect(suspended.pendingApproval).toBeDefined();
+    expect(suspended.pendingApproval?.action).toBe('wire_transfer');
+    expect(suspended.pendingApproval?.status).toBe('pending');
+
+    // Verify cannot resume automatically while waiting approval
+    const preResume = await engine.resume('transfer_789');
+    expect(preResume.canResume).toBe(false);
+
+    // Resolve approval
+    const approved = await engine.resolveApproval('transfer_789', {
+      approved: true,
+      resolvedBy: 'finance_manager@company.com',
+      notes: 'Approved after verifying invoice.',
+      resolutionPayload: { transactionAuthCode: 'AUTH_888' },
+    });
+
+    expect(approved.status).toBe('running');
+    expect(approved.pendingApproval).toBeUndefined();
+    expect(approved.approvalHistory?.[0].status).toBe('approved');
+
+    // Verify can now resume
+    const postResume = await engine.resume('transfer_789');
+    expect(postResume.canResume).toBe(true);
+  });
 });

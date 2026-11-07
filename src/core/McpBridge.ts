@@ -10,6 +10,11 @@
 
 import type { ChatMessage, ToolCall, ToolDefinition } from '../types/index.js';
 import { extractJsonFromText } from '../utils/structuredOutput.js';
+import { AutonomousDriftHealer } from './AutonomousDriftHealer.js';
+import {
+  type ExternalMcpServerConfig,
+  McpClientConnector,
+} from './McpClientConnector.js';
 
 export interface McpTextContent {
   type: 'text';
@@ -207,6 +212,18 @@ export class McpToolBridge {
   }
 
   /**
+   * Connects to an external MCP server (via HTTP/SSE or Stdio), discovers its tools,
+   * and automatically registers them into this bridge.
+   */
+  public async connectExternalServer(
+    config: ExternalMcpServerConfig,
+  ): Promise<McpToolDefinition[]> {
+    const tools = await McpClientConnector.ingestServer(config);
+    this.registerTools(tools);
+    return tools;
+  }
+
+  /**
    * Returns the count of registered tools.
    */
   public get size(): number {
@@ -376,8 +393,12 @@ export class McpToolBridge {
       parsedArgs = rawArgs;
     }
 
-    // Apply automatic parameter coercion if schema properties are defined
-    parsedArgs = coerceToolArguments(parsedArgs, toolDef.inputSchema);
+    // Apply autonomous schema drift healing (fuzzy renaming, type coercion, smart defaults)
+    const driftResult = AutonomousDriftHealer.healToolArguments(
+      parsedArgs,
+      toolDef.inputSchema,
+    );
+    parsedArgs = driftResult.healedArgs;
 
     if (context?.signal?.aborted) {
       return {
@@ -430,6 +451,9 @@ export class McpToolBridge {
       return {
         content: this.formatContentResult(rawResult),
         isError,
+        selfHealingHint: driftResult.driftDetected
+          ? `Self-healing notice: arguments were adjusted from drift: ${driftResult.remediatedFields.map((f) => `${f.field}->${f.matchedTo || f.action}`).join(', ')}`
+          : undefined,
         _raw: rawResult,
       };
     } catch (err) {

@@ -23,7 +23,7 @@ describe('SinapsAI CLI runner', () => {
     await runCli(['--version']);
     expect(writeSpy).toHaveBeenCalled();
     const output = writeSpy.mock.calls.map((c) => c[0]).join('');
-    expect(output).toMatch(/sinapsai v2\.\d+\.\d+/);
+    expect(output).toMatch(/sinapsai v\d+\.\d+\.\d+/);
     writeSpy.mockRestore();
   });
 

@@ -8,9 +8,11 @@
 import type { Provider } from '../providers/Provider.js';
 import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CachedContentInfo, CircuitBreakerStatus, ContextCacheEligibility, CreateCachedContentOptions, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
+import { type GenAiSpan, type OtelTraceExportOptions, type OtelTracePayload } from '../utils/tracingExporter.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
+import { CognitiveBrain, type CognitiveBrainOptions } from './CognitiveBrain.js';
 import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import { DashboardServer, type DashboardServerOptions } from './DashboardServer.js';
@@ -132,6 +134,10 @@ export interface SinapsClientOptions {
      * Verifies RAG outputs against context references and guards against hallucinations.
      */
     sentinel?: FaithfulnessSentinelOptions;
+    /**
+     * Optional unified in-process cognitive brain configuration (Tri-Memory Fusion: Episodic + Graph + RAG).
+     */
+    brain?: CognitiveBrainOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -151,6 +157,7 @@ export declare class SinapsClient {
     readonly graph: KnowledgeGraph;
     readonly workflows: DurableWorkflowEngine;
     readonly evals: LlmEvals;
+    readonly brain: CognitiveBrain;
     readonly realtime: RealtimeClient;
     readonly consensus: {
         create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -319,6 +326,18 @@ export declare class SinapsClient {
      * Alias for exportOtelMetrics.
      */
     toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
+    /**
+     * Formats internal GenAI spans into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+     */
+    toOtelTraces(spans: GenAiSpan[], options?: OtelTraceExportOptions): OtelTracePayload;
+    /**
+     * Exports OpenTelemetry GenAI traces directly to an OTLP collector endpoint (/v1/traces).
+     */
+    exportOtelTraces(spans: GenAiSpan[], options?: OtelTraceExportOptions): Promise<{
+        success: boolean;
+        status?: number;
+        error?: string;
+    }>;
     /**
      * Runs an autonomous multi-step tool-calling agent loop.
      *

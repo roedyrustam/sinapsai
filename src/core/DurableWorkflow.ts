@@ -22,15 +22,42 @@ export type WorkflowStatus =
   | 'running'
   | 'completed'
   | 'failed'
-  | 'paused';
+  | 'paused'
+  | 'waiting_approval';
 
 export interface WorkflowStepRecord {
   stepIndex: number;
   agentName?: string;
-  action: 'tool_call' | 'handoff' | 'llm_generation' | 'user_input';
+  action:
+    | 'tool_call'
+    | 'handoff'
+    | 'llm_generation'
+    | 'user_input'
+    | 'approval_request'
+    | 'approval_resolution';
   details?: Record<string, unknown>;
   output?: unknown;
   timestamp: number;
+}
+
+export interface ApprovalRequest {
+  action: string;
+  reason?: string;
+  payload?: unknown;
+  requiredRole?: string;
+  timeoutSeconds?: number;
+}
+
+export interface ApprovalRecord extends ApprovalRequest {
+  requestId: string;
+  workflowId: string;
+  stepIndex: number;
+  createdAt: number;
+  status: 'pending' | 'approved' | 'rejected';
+  resolvedAt?: number;
+  resolvedBy?: string;
+  resolutionNotes?: string;
+  resolutionPayload?: unknown;
 }
 
 export interface WorkflowCheckpoint {
@@ -41,6 +68,8 @@ export interface WorkflowCheckpoint {
   messages: ChatMessage[];
   sharedContext: Record<string, unknown>;
   history: WorkflowStepRecord[];
+  pendingApproval?: ApprovalRecord;
+  approvalHistory?: ApprovalRecord[];
   finalOutput?: unknown;
   error?: string;
   createdAt: number;
@@ -228,5 +257,113 @@ export class DurableWorkflowEngine {
       messages: [...cp.messages],
       context: { ...cp.sharedContext },
     };
+  }
+
+  /**
+   * Suspends the workflow waiting for human review / approval (HITL).
+   */
+  public async suspendForApproval(
+    workflowId: string,
+    request: ApprovalRequest,
+  ): Promise<WorkflowCheckpoint> {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+
+    const now = Date.now();
+    const nextStep = cp.currentStep + 1;
+    const requestId = `appr_${Math.random().toString(36).slice(2, 10)}`;
+
+    const record: ApprovalRecord = {
+      ...request,
+      requestId,
+      workflowId,
+      stepIndex: nextStep,
+      createdAt: now,
+      status: 'pending',
+    };
+
+    cp.currentStep = nextStep;
+    cp.status = 'waiting_approval';
+    cp.pendingApproval = record;
+    if (!cp.approvalHistory) cp.approvalHistory = [];
+    cp.approvalHistory.push(record);
+
+    cp.history.push({
+      stepIndex: nextStep,
+      agentName: cp.currentAgent,
+      action: 'approval_request',
+      details: {
+        requestId,
+        action: request.action,
+        reason: request.reason,
+        payload: request.payload,
+      },
+      timestamp: now,
+    });
+
+    cp.updatedAt = now;
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+
+  /**
+   * Resolves a pending human approval request, transitioning workflow back to running or failed.
+   */
+  public async resolveApproval(
+    workflowId: string,
+    resolution: {
+      approved: boolean;
+      resolvedBy?: string;
+      notes?: string;
+      resolutionPayload?: unknown;
+    },
+  ): Promise<WorkflowCheckpoint> {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+
+    if (cp.status !== 'waiting_approval' || !cp.pendingApproval) {
+      throw new Error(
+        `Workflow "${workflowId}" is not in waiting_approval status or has no pending approval.`,
+      );
+    }
+
+    const now = Date.now();
+    const nextStep = cp.currentStep + 1;
+    const approval = cp.pendingApproval;
+
+    approval.status = resolution.approved ? 'approved' : 'rejected';
+    approval.resolvedAt = now;
+    approval.resolvedBy = resolution.resolvedBy;
+    approval.resolutionNotes = resolution.notes;
+    approval.resolutionPayload = resolution.resolutionPayload;
+
+    cp.pendingApproval = undefined;
+    cp.status = resolution.approved ? 'running' : 'failed';
+    if (!resolution.approved) {
+      cp.error = resolution.notes || 'Human approval was rejected.';
+    }
+
+    cp.currentStep = nextStep;
+    cp.history.push({
+      stepIndex: nextStep,
+      agentName: cp.currentAgent,
+      action: 'approval_resolution',
+      details: {
+        requestId: approval.requestId,
+        approved: resolution.approved,
+        resolvedBy: resolution.resolvedBy,
+        notes: resolution.notes,
+        resolutionPayload: resolution.resolutionPayload,
+      },
+      timestamp: now,
+    });
+
+    cp.updatedAt = now;
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
   }
 }

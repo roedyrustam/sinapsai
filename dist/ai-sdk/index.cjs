@@ -1638,6 +1638,120 @@ function tryExtractJson(text) {
   }
 }
 
+// src/utils/tracingExporter.ts
+function generateTraceId() {
+  let hex = "";
+  for (let i = 0; i < 4; i++) {
+    hex += Math.floor(Math.random() * 4294967295).toString(16).padStart(8, "0");
+  }
+  return hex.slice(0, 32);
+}
+function generateSpanId() {
+  let hex = "";
+  for (let i = 0; i < 2; i++) {
+    hex += Math.floor(Math.random() * 4294967295).toString(16).padStart(8, "0");
+  }
+  return hex.slice(0, 16);
+}
+function formatAttribute(key, val) {
+  if (typeof val === "string") {
+    return { key, value: { stringValue: val } };
+  }
+  if (typeof val === "boolean") {
+    return { key, value: { boolValue: val } };
+  }
+  if (Number.isInteger(val)) {
+    return { key, value: { intValue: String(val) } };
+  }
+  return { key, value: { doubleValue: Number(val) } };
+}
+function toOtelTracePayload(spans, options = {}) {
+  const serviceName = options.serviceName ?? "sinapsai-gateway";
+  const serviceVersion = options.serviceVersion ?? "3.0.0";
+  const resourceAttributes = [
+    { key: "service.name", value: { stringValue: serviceName } },
+    { key: "service.version", value: { stringValue: serviceVersion } },
+    { key: "telemetry.sdk.name", value: { stringValue: "sinapsai" } },
+    { key: "telemetry.sdk.language", value: { stringValue: "typescript" } }
+  ];
+  if (options.attributes) {
+    for (const [k, v] of Object.entries(options.attributes)) {
+      resourceAttributes.push({ key: k, value: { stringValue: v } });
+    }
+  }
+  const defaultTraceId = generateTraceId();
+  const formattedSpans = spans.map((span) => {
+    const traceId = span.traceId || defaultTraceId;
+    const spanId = span.spanId || generateSpanId();
+    const startTimeUnixNano = `${BigInt(Math.floor(span.startTimeMs)) * 1000000n}`;
+    const endTimeUnixNano = `${BigInt(Math.floor(span.endTimeMs)) * 1000000n}`;
+    const attributes = [];
+    for (const [k, v] of Object.entries(span.attributes)) {
+      if (v !== void 0) {
+        attributes.push(formatAttribute(k, v));
+      }
+    }
+    return {
+      traceId,
+      spanId,
+      parentSpanId: span.parentSpanId,
+      name: span.name,
+      kind: span.kind ?? 3,
+      // Client kind default for external LLM calls
+      startTimeUnixNano,
+      endTimeUnixNano,
+      attributes,
+      status: {
+        code: span.status?.code ?? 1,
+        // 1 = OK
+        message: span.status?.message
+      }
+    };
+  });
+  return {
+    resourceSpans: [
+      {
+        resource: {
+          attributes: resourceAttributes
+        },
+        scopeSpans: [
+          {
+            scope: {
+              name: "sinapsai.gen_ai",
+              version: serviceVersion
+            },
+            spans: formattedSpans
+          }
+        ]
+      }
+    ]
+  };
+}
+async function exportOtelTraces(spans, options = {}) {
+  const endpoint = options.endpoint || "http://127.0.0.1:4318/v1/traces";
+  const payload = toOtelTracePayload(spans, options);
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers || {}
+      },
+      body: JSON.stringify(payload)
+    });
+    return {
+      success: res.ok,
+      status: res.status,
+      error: res.ok ? void 0 : `HTTP ${res.status}: ${res.statusText}`
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+
 // src/core/AgentSwarm.ts
 var AgentWalletExceededError = class extends Error {
   agentId;
@@ -2148,6 +2262,129 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
     yield {
       type: "done",
       result
+    };
+  }
+  /**
+   * Runs multiple specialist agents concurrently in parallel branches (Fan-Out),
+   * and optionally synthesizes all branch outputs via an aggregator agent (Fan-In / Map-Reduce).
+   */
+  async runParallel(options) {
+    const startTime = Date.now();
+    const mode = options.mode ?? "all_settled";
+    const sharedContext = new SwarmContext(options.initialContext);
+    const tasks = options.tasks.map((t) => {
+      if (typeof t === "string") {
+        return { agentId: t, prompt: options.prompt };
+      }
+      return {
+        agentId: t.agentId,
+        prompt: t.prompt ?? options.prompt,
+        contextUpdates: t.contextUpdates
+      };
+    });
+    const branchPromises = tasks.map(
+      async (task) => {
+        const agent = this.getAgent(task.agentId);
+        const agentName = agent ? agent.name : task.agentId;
+        if (!agent) {
+          return {
+            agentId: task.agentId,
+            agentName,
+            status: "error",
+            content: "",
+            error: `Agent with ID "${task.agentId}" is not registered in the swarm.`,
+            totalSteps: 0,
+            costUsd: 0,
+            history: []
+          };
+        }
+        const branchContext = new SwarmContext({
+          ...sharedContext.getAll(),
+          ...task.contextUpdates || {}
+        });
+        const branchPrompt = task.prompt ?? "Execute your assigned specialization.";
+        try {
+          const branchResult = await this.run({
+            initialAgentId: task.agentId,
+            ...typeof branchPrompt === "string" ? { task: branchPrompt } : { messages: branchPrompt },
+            context: branchContext.getAll()
+          });
+          for (const [k, v] of Object.entries(branchResult.sharedContext)) {
+            sharedContext.set(k, v);
+          }
+          return {
+            agentId: task.agentId,
+            agentName,
+            status: "success",
+            content: branchResult.content,
+            totalSteps: branchResult.totalSteps,
+            costUsd: branchResult.totalCostUsd,
+            history: branchResult.history
+          };
+        } catch (err) {
+          if (mode === "strict") {
+            throw err;
+          }
+          return {
+            agentId: task.agentId,
+            agentName,
+            status: "error",
+            content: "",
+            error: err instanceof Error ? err.message : String(err),
+            totalSteps: 0,
+            costUsd: 0,
+            history: []
+          };
+        }
+      }
+    );
+    const branches = await Promise.all(branchPromises);
+    let totalCostUsd = branches.reduce((sum, b) => sum + b.costUsd, 0);
+    let totalSteps = branches.reduce((sum, b) => sum + b.totalSteps, 0);
+    let finalContent = "";
+    let aggregated = false;
+    if (options.aggregatorAgentId) {
+      const aggregator = this.getAgent(options.aggregatorAgentId);
+      if (aggregator) {
+        const synthesisPrompt = `You are the lead synthesizer for a multi-agent team.
+Below are the individual outputs from our specialist agents who investigated the problem concurrently:
+
+${branches.map(
+          (b) => `### Specialist [${b.agentName} (${b.agentId})]:
+${b.status === "success" ? b.content : `[Error: ${b.error}]`}`
+        ).join("\n\n")}
+
+Please review all specialist findings and provide a comprehensive, unified, and definitive response.`;
+        const aggResult = await this.run({
+          initialAgentId: options.aggregatorAgentId,
+          task: synthesisPrompt,
+          context: sharedContext.getAll()
+        });
+        finalContent = aggResult.content;
+        totalCostUsd += aggResult.totalCostUsd;
+        totalSteps += aggResult.totalSteps;
+        aggregated = true;
+        for (const [k, v] of Object.entries(aggResult.sharedContext)) {
+          sharedContext.set(k, v);
+        }
+      }
+    }
+    if (!finalContent) {
+      finalContent = branches.map(
+        (b) => `### [${b.agentName}]:
+${b.status === "success" ? b.content : `Error: ${b.error}`}`
+      ).join("\n\n");
+    }
+    const durationMs = Date.now() - startTime;
+    return {
+      content: finalContent,
+      branches,
+      aggregated,
+      aggregatorAgentId: options.aggregatorAgentId,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      totalSteps,
+      durationMs,
+      sharedContext: sharedContext.getAll()
     };
   }
 };
@@ -2720,1018 +2957,6 @@ function extractPromptText(messages) {
   }).join("\n");
 }
 
-// src/core/ConsensusEngine.ts
-function computeTermFrequencyVector(text, vocabulary) {
-  const vec = new Array(vocabulary.size).fill(0);
-  const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-  for (const word of words) {
-    const idx = vocabulary.get(word);
-    if (idx !== void 0) {
-      vec[idx] += 1;
-    }
-  }
-  const norm = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
-  if (norm > 0) {
-    for (let i = 0; i < vec.length; i++) {
-      vec[i] /= norm;
-    }
-  }
-  return vec;
-}
-function calculatePairwiseSimilarity(vectors) {
-  if (vectors.length < 2) return 1;
-  let totalSim = 0;
-  let pairs = 0;
-  for (let i = 0; i < vectors.length; i++) {
-    for (let j = i + 1; j < vectors.length; j++) {
-      const sim = Math.max(0, cosineSimilarity(vectors[i], vectors[j]));
-      totalSim += sim;
-      pairs++;
-    }
-  }
-  return pairs > 0 ? Number((totalSim / pairs).toFixed(4)) : 1;
-}
-var ConsensusEngine = class {
-  /**
-   * Executes multi-model speculative drafting and consensus arbitration.
-   */
-  async execute(client, options) {
-    const start = Date.now();
-    const threshold = options.consensusThreshold ?? 0.85;
-    const extractText = (res) => {
-      const c = res.choices?.[0]?.message?.content;
-      return typeof c === "string" ? c : JSON.stringify(c ?? "");
-    };
-    if (!options.draftModels || options.draftModels.length === 0) {
-      throw new Error(
-        "ConsensusEngine requires at least one draftModel in draftModels array."
-      );
-    }
-    const draftPromises = options.draftModels.map(async (model) => {
-      const draftStart = Date.now();
-      const res = await client.chat.completions.create({
-        model,
-        messages: options.messages,
-        temperature: options.temperature ?? 0.2,
-        maxTokens: options.maxTokens,
-        signal: options.signal
-      });
-      const latencyMs = Date.now() - draftStart;
-      const text = res.choices?.[0]?.message?.content || "";
-      return {
-        model,
-        provider: res.provider,
-        response: res,
-        latencyMs,
-        text
-      };
-    });
-    const settled = await Promise.allSettled(draftPromises);
-    const successfulDrafts = [];
-    for (const s of settled) {
-      if (s.status === "fulfilled" && s.value.text.trim().length > 0) {
-        successfulDrafts.push(s.value);
-      }
-    }
-    if (successfulDrafts.length === 0) {
-      const firstRejected = settled.find((s) => s.status === "rejected");
-      throw firstRejected?.reason ?? new Error("All candidate draft models failed to produce a response.");
-    }
-    if (successfulDrafts.length === 1) {
-      return {
-        finalResponse: successfulDrafts[0].response,
-        synthesizedText: extractText(successfulDrafts[0].response),
-        consensusReached: true,
-        averageSimilarity: 1,
-        consensusScore: 1,
-        drafts: successfulDrafts,
-        escalatedToJudge: false,
-        judgeEscalated: false,
-        totalDurationMs: Date.now() - start
-      };
-    }
-    let vectors = [];
-    const embedFn = options.customEmbed;
-    if (embedFn) {
-      vectors = await Promise.all(successfulDrafts.map((d) => embedFn(d.text)));
-    } else {
-      const vocab = /* @__PURE__ */ new Map();
-      let vocabIdx = 0;
-      for (const d of successfulDrafts) {
-        const words = d.text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-        for (const w of words) {
-          if (!vocab.has(w)) {
-            vocab.set(w, vocabIdx++);
-          }
-        }
-      }
-      vectors = successfulDrafts.map(
-        (d) => computeTermFrequencyVector(d.text, vocab)
-      );
-    }
-    const averageSimilarity = calculatePairwiseSimilarity(vectors);
-    const consensusReached = averageSimilarity >= threshold;
-    if (consensusReached || !options.judgeModel) {
-      const best = [...successfulDrafts].sort(
-        (a, b) => a.latencyMs - b.latencyMs
-      )[0];
-      return {
-        finalResponse: best.response,
-        synthesizedText: extractText(best.response),
-        consensusReached,
-        averageSimilarity,
-        consensusScore: averageSimilarity,
-        drafts: successfulDrafts,
-        escalatedToJudge: false,
-        judgeEscalated: false,
-        totalDurationMs: Date.now() - start
-      };
-    }
-    const userPromptText = options.messages.filter((m) => m.role === "user").map(
-      (m) => typeof m.content === "string" ? m.content : JSON.stringify(m.content)
-    ).join("\n");
-    const draftEvidence = successfulDrafts.map(
-      (d, i) => `### Candidate Draft ${i + 1} (${d.model} | ${d.latencyMs}ms):
-${d.text}`
-    ).join("\n\n");
-    const judgePrompt = [
-      {
-        role: "system",
-        content: "You are an expert Supreme AI Arbitrator. Multiple independent AI models produced divergent answers for the user request. Analyze the candidate drafts, cross-verify claims, eliminate hallucinations, and synthesize the single authoritative, complete, and accurate final response."
-      },
-      {
-        role: "user",
-        content: `User Request:
-"""
-${userPromptText}
-"""
-
-Candidate Drafts:
-${draftEvidence}
-
-Please deliver the definitive answer:`
-      }
-    ];
-    const judgeResponse = await client.chat.completions.create({
-      model: options.judgeModel,
-      messages: judgePrompt,
-      temperature: 0.1,
-      signal: options.signal
-    });
-    return {
-      finalResponse: judgeResponse,
-      synthesizedText: extractText(judgeResponse),
-      consensusReached: false,
-      averageSimilarity,
-      consensusScore: averageSimilarity,
-      drafts: successfulDrafts,
-      escalatedToJudge: true,
-      judgeEscalated: true,
-      judgeModel: options.judgeModel,
-      judgeResponse,
-      totalDurationMs: Date.now() - start
-    };
-  }
-};
-
-// src/core/ContextCompressor.ts
-function estimateMessageTokens(msg) {
-  let chars = 16;
-  if (typeof msg.content === "string") {
-    chars += msg.content.length;
-  } else if (Array.isArray(msg.content)) {
-    for (const part of msg.content) {
-      if (part.type === "text") {
-        chars += part.text.length;
-      } else {
-        chars += 1024;
-      }
-    }
-  }
-  if (msg.reasoning_content) {
-    chars += msg.reasoning_content.length;
-  }
-  if (msg.tool_calls) {
-    for (const tc of msg.tool_calls) {
-      chars += tc.function.name.length + tc.function.arguments.length + 24;
-    }
-  }
-  return Math.ceil(chars / 4);
-}
-function estimateTotalTokens(messages) {
-  let total = 0;
-  for (const m of messages) {
-    total += estimateMessageTokens(m);
-  }
-  return total;
-}
-function groupAtomicUnits(messages) {
-  const units = [];
-  let i = 0;
-  while (i < messages.length) {
-    const current = messages[i];
-    if (current.role === "assistant" && current.tool_calls && current.tool_calls.length > 0) {
-      const group = [current];
-      i++;
-      while (i < messages.length && messages[i].role === "tool") {
-        group.push(messages[i]);
-        i++;
-      }
-      units.push(group);
-    } else {
-      units.push([current]);
-      i++;
-    }
-  }
-  return units;
-}
-var ContextCompressor = class {
-  options;
-  constructor(options) {
-    this.options = {
-      maxPromptTokens: options.maxPromptTokens,
-      strategy: options.strategy ?? "sliding-window",
-      preserveSystemMessages: options.preserveSystemMessages ?? true
-    };
-  }
-  compress(messages) {
-    const originalTokens = estimateTotalTokens(messages);
-    if (originalTokens <= this.options.maxPromptTokens || messages.length <= 1) {
-      return {
-        messages,
-        originalTokens,
-        compressedTokens: originalTokens,
-        droppedCount: 0
-      };
-    }
-    const systemMsgs = [];
-    const conversationMsgs = [];
-    for (const m of messages) {
-      if (this.options.preserveSystemMessages && m.role === "system") {
-        systemMsgs.push(m);
-      } else {
-        conversationMsgs.push(m);
-      }
-    }
-    const systemTokens = estimateTotalTokens(systemMsgs);
-    const availableBudget = Math.max(
-      0,
-      this.options.maxPromptTokens - systemTokens
-    );
-    const units = groupAtomicUnits(conversationMsgs);
-    const unitTokens = units.map((u) => estimateTotalTokens(u));
-    if (this.options.strategy === "middle-out" && units.length > 2) {
-      const firstUnit = units[0];
-      const firstUnitCost = unitTokens[0];
-      const keptTailUnits = [];
-      let currentBudget = availableBudget - firstUnitCost;
-      for (let idx = units.length - 1; idx >= 1; idx--) {
-        if (currentBudget >= unitTokens[idx] || keptTailUnits.length === 0) {
-          keptTailUnits.unshift(units[idx]);
-          currentBudget -= unitTokens[idx];
-        } else {
-          break;
-        }
-      }
-      const finalMessages2 = [
-        ...systemMsgs,
-        ...firstUnitCost <= availableBudget ? firstUnit : [],
-        ...keptTailUnits.flat()
-      ];
-      return {
-        messages: finalMessages2,
-        originalTokens,
-        compressedTokens: estimateTotalTokens(finalMessages2),
-        droppedCount: messages.length - finalMessages2.length
-      };
-    }
-    const keptUnits = [];
-    let usedTokens = 0;
-    for (let idx = units.length - 1; idx >= 0; idx--) {
-      const cost = unitTokens[idx];
-      if (usedTokens + cost <= availableBudget || keptUnits.length === 0) {
-        keptUnits.unshift(units[idx]);
-        usedTokens += cost;
-      } else {
-        break;
-      }
-    }
-    const finalMessages = [...systemMsgs, ...keptUnits.flat()];
-    return {
-      messages: finalMessages,
-      originalTokens,
-      compressedTokens: estimateTotalTokens(finalMessages),
-      droppedCount: messages.length - finalMessages.length
-    };
-  }
-};
-var DashboardServer = class {
-  client;
-  port;
-  host;
-  authKey;
-  title;
-  maxHistory;
-  server = null;
-  history = [];
-  startTime = Date.now();
-  constructor(options) {
-    this.client = options.client;
-    this.port = options.port ?? 3140;
-    this.host = options.host ?? "127.0.0.1";
-    this.authKey = options.authKey;
-    this.title = options.title ?? "SinapsAI Control Plane";
-    this.maxHistory = options.maxHistory ?? 100;
-  }
-  get isRunning() {
-    return Boolean(this.server?.listening);
-  }
-  getUrl() {
-    return `http://${this.host}:${this.port}`;
-  }
-  recordRequest(log) {
-    this.history.unshift(log);
-    if (this.history.length > this.maxHistory) {
-      this.history.pop();
-    }
-  }
-  getHistory() {
-    return [...this.history];
-  }
-  async start() {
-    if (this.isRunning) return;
-    return new Promise((resolve, reject) => {
-      this.server = http__default.default.createServer((req, res) => {
-        this.handleHttpRequest(req, res);
-      });
-      this.server.on("error", (err) => {
-        reject(err);
-      });
-      this.server.listen(this.port, this.host, () => {
-        resolve();
-      });
-    });
-  }
-  async stop() {
-    if (!this.server) return;
-    return new Promise((resolve, reject) => {
-      this.server?.close((err) => {
-        this.server = null;
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  }
-  isAuthorized(req, parsedUrl) {
-    if (!this.authKey) return true;
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.replace(/^Bearer\s+/i, "") === this.authKey) {
-      return true;
-    }
-    const tokenParam = parsedUrl.searchParams.get("token");
-    if (tokenParam === this.authKey) {
-      return true;
-    }
-    return false;
-  }
-  handleHttpRequest(req, res) {
-    const parsedUrl = new URL(
-      req.url || "/",
-      `http://${req.headers.host || `${this.host}:${this.port}`}`
-    );
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
-    );
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-    if (!this.isAuthorized(req, parsedUrl)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: "Unauthorized: invalid or missing auth token"
-        })
-      );
-      return;
-    }
-    const pathname = parsedUrl.pathname;
-    if (pathname === "/" || pathname === "/index.html") {
-      this.serveDashboardHtml(res);
-      return;
-    }
-    if (pathname === "/api/summary") {
-      this.serveSummaryJson(res);
-      return;
-    }
-    if (pathname === "/api/metrics") {
-      this.serveMetricsJson(res);
-      return;
-    }
-    if (pathname === "/api/history") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(this.getHistory()));
-      return;
-    }
-    if (pathname === "/api/health") {
-      this.serveHealthJson(res);
-      return;
-    }
-    if (pathname === "/api/prometheus") {
-      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" });
-      res.end(this.client.exportPrometheusMetrics());
-      return;
-    }
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Not Found", path: pathname }));
-  }
-  serveSummaryJson(res) {
-    const metrics = this.client.getMetrics();
-    const canaryHealth = this.client.canary?.getAllHealth() ?? {};
-    const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1e3);
-    const summary = {
-      title: this.title,
-      version: "2.13.8",
-      uptimeSeconds,
-      strategy: this.client.getStrategy(),
-      metrics: {
-        totalRequests: metrics.totalRequests,
-        successfulRequests: metrics.successfulRequests,
-        failedRequests: metrics.failedRequests,
-        cachedRequests: metrics.cachedRequests,
-        successRate: metrics.totalRequests > 0 ? Number(
-          (metrics.successfulRequests / metrics.totalRequests * 100).toFixed(1)
-        ) : 100,
-        totalTokens: metrics.totalTokens,
-        totalPromptTokens: metrics.totalPromptTokens,
-        totalCompletionTokens: metrics.totalCompletionTokens,
-        totalCachedPromptTokens: metrics.totalCachedPromptTokens ?? 0,
-        estimatedCostUsd: metrics.estimatedCostUsd,
-        llmoSavingsUsd: metrics.llmoMetrics?.totalEstimatedUsdSaved ?? 0,
-        llmoTokensSaved: metrics.llmoMetrics?.totalTokensSaved ?? 0,
-        providerMetrics: metrics.providerMetrics
-      },
-      canary: canaryHealth,
-      recentHistory: this.history.slice(0, 20)
-    };
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(summary));
-  }
-  serveMetricsJson(res) {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(this.client.getMetrics()));
-  }
-  async serveHealthJson(res) {
-    try {
-      const health = await this.client.checkHealth();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(health));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", message }));
-    }
-  }
-  serveDashboardHtml(res) {
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${this.title}</title>
-  <style>
-    :root {
-      --bg: #0b0f19;
-      --card-bg: #111827;
-      --border: #1f293d;
-      --text-main: #f9fafb;
-      --text-muted: #9ca3af;
-      --cyan: #06b6d4;
-      --green: #10b981;
-      --amber: #f59e0b;
-      --red: #ef4444;
-      --purple: #8b5cf6;
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: var(--bg);
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      padding: 24px;
-      line-height: 1.5;
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 24px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--border);
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 9999px;
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .badge-online { background: rgba(16, 185, 129, 0.15); color: var(--green); border: 1px solid var(--green); }
-    .badge-degraded { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid var(--amber); }
-    .badge-down { background: rgba(239, 68, 68, 0.15); color: var(--red); border: 1px solid var(--red); }
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-      position: relative;
-    }
-    .card-title {
-      font-size: 12px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 8px;
-    }
-    .card-value {
-      font-size: 24px;
-      font-weight: 700;
-      color: var(--text-main);
-      font-family: var(--font-mono);
-    }
-    .card-sub {
-      font-size: 12px;
-      color: var(--cyan);
-      margin-top: 4px;
-    }
-    .section-title {
-      font-size: 16px;
-      font-weight: 600;
-      margin: 24px 0 12px 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .providers-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .provider-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-    }
-    .provider-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .provider-name {
-      font-size: 15px;
-      font-weight: 600;
-      text-transform: capitalize;
-    }
-    .stat-row {
-      display: flex;
-      justify-content: space-between;
-      font-size: 13px;
-      margin-bottom: 6px;
-      color: var(--text-muted);
-    }
-    .stat-row span:last-child {
-      color: var(--text-main);
-      font-family: var(--font-mono);
-      font-weight: 500;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      text-align: left;
-    }
-    th {
-      background: rgba(31, 41, 61, 0.5);
-      color: var(--text-muted);
-      padding: 10px 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      font-size: 11px;
-      letter-spacing: 0.05em;
-    }
-    td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      font-family: var(--font-mono);
-    }
-    .table-container {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow-x: auto;
-    }
-    .tag {
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .tag-success { background: rgba(16, 185, 129, 0.2); color: var(--green); }
-    .tag-error { background: rgba(239, 68, 68, 0.2); color: var(--red); }
-    .tag-cached { background: rgba(6, 182, 212, 0.2); color: var(--cyan); }
-    .refresh-btn {
-      background: var(--border);
-      color: var(--text-main);
-      border: none;
-      padding: 6px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-    .refresh-btn:hover { background: #2d3748; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="brand">
-      <h1 style="font-size: 20px; font-weight: 700;">SinapsAI Gateway</h1>
-      <span class="badge badge-online" id="status-badge">\u25CF ONLINE</span>
-    </div>
-    <div style="display: flex; gap: 12px; align-items: center;">
-      <span style="font-size: 12px; color: var(--text-muted);" id="uptime-text">Uptime: 0s</span>
-      <button class="refresh-btn" onclick="fetchSummary()">\u21BB Refresh</button>
-    </div>
-  </div>
-
-  <div class="kpi-grid">
-    <div class="card">
-      <div class="card-title">Total Requests</div>
-      <div class="card-value" id="kpi-requests">0</div>
-      <div class="card-sub" id="kpi-success-rate">100% Success Rate</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Total Tokens</div>
-      <div class="card-value" id="kpi-tokens">0</div>
-      <div class="card-sub" id="kpi-cached-tokens">0 Cached</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Estimated Cost</div>
-      <div class="card-value" id="kpi-cost">$0.0000</div>
-      <div class="card-sub" id="kpi-savings">$0.0000 Saved (FinOps)</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Routing Strategy</div>
-      <div class="card-value" style="font-size: 20px;" id="kpi-strategy">-</div>
-      <div class="card-sub" id="kpi-active-providers">0 Configured</div>
-    </div>
-  </div>
-
-  <div class="section-title">
-    <span>Configured Providers & Health</span>
-    <span style="font-size: 12px; color: var(--text-muted);">Canary Prober Active</span>
-  </div>
-  <div class="providers-grid" id="providers-container">
-    <div style="color: var(--text-muted); font-size: 13px;">Loading providers...</div>
-  </div>
-
-  <div class="section-title">
-    <span>Recent Request History</span>
-    <span style="font-size: 12px; color: var(--text-muted);">Real-time Activity Log</span>
-  </div>
-  <div class="table-container">
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Model</th>
-          <th>Provider</th>
-          <th>Tokens</th>
-          <th>Latency</th>
-          <th>Cost</th>
-          <th>Cache</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody id="history-tbody">
-        <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No requests recorded yet.</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <script>
-    async function fetchSummary() {
-      try {
-        const res = await fetch('/api/summary');
-        if (!res.ok) return;
-        const data = await res.json();
-        renderDashboard(data);
-      } catch (err) {
-        console.error('Failed to fetch summary:', err);
-      }
-    }
-
-    function renderDashboard(data) {
-      document.getElementById('uptime-text').textContent = 'Uptime: ' + data.uptimeSeconds + 's';
-      document.getElementById('kpi-requests').textContent = data.metrics.totalRequests.toLocaleString();
-      document.getElementById('kpi-success-rate').textContent = data.metrics.successRate + '% Success Rate';
-      document.getElementById('kpi-tokens').textContent = data.metrics.totalTokens.toLocaleString();
-      document.getElementById('kpi-cached-tokens').textContent = (data.metrics.totalCachedPromptTokens || 0).toLocaleString() + ' Cached';
-      document.getElementById('kpi-cost').textContent = '$' + data.metrics.estimatedCostUsd.toFixed(4);
-      document.getElementById('kpi-savings').textContent = '$' + (data.metrics.llmoSavingsUsd || 0).toFixed(4) + ' Saved (FinOps)';
-      document.getElementById('kpi-strategy').textContent = (data.strategy || 'adaptive').toUpperCase();
-
-      const providers = Object.entries(data.metrics.providerMetrics || {});
-      document.getElementById('kpi-active-providers').textContent = providers.length + ' Providers';
-
-      const provContainer = document.getElementById('providers-container');
-      if (providers.length === 0) {
-        provContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No active provider metrics yet.</div>';
-      } else {
-        provContainer.innerHTML = providers.map(([id, p]) => {
-          const canary = (data.canary && data.canary[id]) ? data.canary[id].status : 'HEALTHY';
-          const badgeClass = canary === 'HEALTHY' ? 'badge-online' : (canary === 'DEGRADED' ? 'badge-degraded' : 'badge-down');
-          return \`
-            <div class="provider-card">
-              <div class="provider-header">
-                <span class="provider-name">\${id}</span>
-                <span class="badge \${badgeClass}">\${canary}</span>
-              </div>
-              <div class="stat-row">
-                <span>Requests</span>
-                <span>\${p.requests}</span>
-              </div>
-              <div class="stat-row">
-                <span>Success / Failed</span>
-                <span>\${p.successes} / \${p.failures}</span>
-              </div>
-              <div class="stat-row">
-                <span>Avg Latency</span>
-                <span>\${Math.round(p.averageLatencyMs || 0)}ms</span>
-              </div>
-              <div class="stat-row">
-                <span>Total Tokens</span>
-                <span>\${(p.totalTokens || 0).toLocaleString()}</span>
-              </div>
-            </div>
-          \`;
-        }).join('');
-      }
-
-      const historyTbody = document.getElementById('history-tbody');
-      if (!data.recentHistory || data.recentHistory.length === 0) {
-        historyTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No requests recorded yet.</td></tr>';
-      } else {
-        historyTbody.innerHTML = data.recentHistory.map(req => {
-          const time = new Date(req.timestamp).toLocaleTimeString();
-          const statusTag = req.status === 'success' ? '<span class="tag tag-success">200 OK</span>' : '<span class="tag tag-error">ERROR</span>';
-          const cacheTag = req.cached ? '<span class="tag tag-cached">HIT</span>' : '<span style="color: var(--text-muted);">-</span>';
-          return \`
-            <tr>
-              <td>\${time}</td>
-              <td style="color: var(--cyan);">\${req.model}</td>
-              <td style="text-transform: capitalize;">\${req.provider}</td>
-              <td>\${req.totalTokens.toLocaleString()}</td>
-              <td>\${Math.round(req.latencyMs)}ms</td>
-              <td>$\${req.costUsd.toFixed(5)}</td>
-              <td>\${cacheTag}</td>
-              <td>\${statusTag}</td>
-            </tr>
-          \`;
-        }).join('');
-      }
-    }
-
-    fetchSummary();
-    setInterval(fetchSummary, 2000);
-  </script>
-</body>
-</html>`;
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-cache"
-    });
-    res.end(html);
-  }
-};
-
-// src/core/InMemoryStorage.ts
-var InMemoryStorage = class {
-  store = /* @__PURE__ */ new Map();
-  sweepInterval;
-  constructor(options) {
-    const sweepIntervalMs = typeof options === "number" ? options : options?.sweepIntervalMs ?? 6e4;
-    const autoSweep = typeof options === "object" ? options?.autoSweep ?? true : true;
-    if (autoSweep && typeof setInterval !== "undefined") {
-      this.sweepInterval = setInterval(() => this.sweep(), sweepIntervalMs);
-      if (this.sweepInterval && typeof this.sweepInterval.unref === "function") {
-        this.sweepInterval.unref?.();
-      }
-    }
-  }
-  sweep() {
-    const now = Date.now();
-    for (const [key, item] of this.store.entries()) {
-      if (item.expiresAt !== null && now > item.expiresAt) {
-        this.store.delete(key);
-      }
-    }
-  }
-  async get(key) {
-    const item = this.store.get(key);
-    if (!item) {
-      return null;
-    }
-    if (item.expiresAt !== null && Date.now() > item.expiresAt) {
-      this.store.delete(key);
-      return null;
-    }
-    return item.value;
-  }
-  async set(key, value, ttlSeconds) {
-    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1e3 : null;
-    this.store.set(key, { value, expiresAt });
-  }
-  async delete(key) {
-    this.store.delete(key);
-  }
-  async increment(key, ttlSeconds) {
-    const item = this.store.get(key);
-    let currentValue = 0;
-    if (item) {
-      if (item.expiresAt !== null && Date.now() > item.expiresAt) {
-        this.store.delete(key);
-      } else {
-        currentValue = item.value || 0;
-      }
-    }
-    const newValue = currentValue + 1;
-    const existing = this.store.get(key);
-    const expiresAt = existing?.expiresAt ?? (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1e3 : null);
-    this.store.set(key, {
-      value: newValue,
-      expiresAt
-    });
-    return newValue;
-  }
-  async clear() {
-    this.store.clear();
-  }
-  destroy() {
-    if (this.sweepInterval) {
-      clearInterval(this.sweepInterval);
-    }
-  }
-};
-
-// src/core/DurableWorkflow.ts
-var DurableWorkflowEngine = class {
-  storage;
-  keyPrefix;
-  defaultTtlSeconds;
-  constructor(options = {}) {
-    this.storage = options.storage || new InMemoryStorage();
-    this.keyPrefix = options.keyPrefix || "sinapsai:wf:";
-    this.defaultTtlSeconds = options.defaultTtlSeconds || 86400 * 7;
-  }
-  getKey(workflowId) {
-    return `${this.keyPrefix}${workflowId}`;
-  }
-  /**
-   * Initializes or creates a new durable workflow checkpoint.
-   */
-  async createWorkflow(params) {
-    const now = Date.now();
-    const checkpoint = {
-      workflowId: params.workflowId,
-      status: "pending",
-      currentStep: 0,
-      currentAgent: params.initialAgent,
-      messages: params.initialMessages ? [...params.initialMessages] : [],
-      sharedContext: params.initialContext ? { ...params.initialContext } : {},
-      history: [],
-      createdAt: now,
-      updatedAt: now
-    };
-    await this.storage.set(
-      this.getKey(params.workflowId),
-      checkpoint,
-      this.defaultTtlSeconds
-    );
-    return checkpoint;
-  }
-  /**
-   * Retrieves an existing checkpoint by workflowId.
-   */
-  async getCheckpoint(workflowId) {
-    return this.storage.get(this.getKey(workflowId));
-  }
-  /**
-   * Records a step in the workflow and updates context/messages.
-   */
-  async recordStep(workflowId, update) {
-    const cp = await this.getCheckpoint(workflowId);
-    if (!cp) {
-      throw new Error(`Workflow with ID "${workflowId}" not found.`);
-    }
-    const now = Date.now();
-    const nextStep = cp.currentStep + 1;
-    const stepRecord = {
-      stepIndex: nextStep,
-      agentName: update.agentName || cp.currentAgent,
-      action: update.action,
-      details: update.details,
-      output: update.output,
-      timestamp: now
-    };
-    cp.currentStep = nextStep;
-    cp.status = "running";
-    if (update.agentName) cp.currentAgent = update.agentName;
-    if (update.newMessages) cp.messages.push(...update.newMessages);
-    if (update.contextUpdates) {
-      cp.sharedContext = { ...cp.sharedContext, ...update.contextUpdates };
-    }
-    cp.history.push(stepRecord);
-    cp.updatedAt = now;
-    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
-    return cp;
-  }
-  /**
-   * Marks workflow as successfully completed with final output.
-   */
-  async completeWorkflow(workflowId, finalOutput) {
-    const cp = await this.getCheckpoint(workflowId);
-    if (!cp) {
-      throw new Error(`Workflow with ID "${workflowId}" not found.`);
-    }
-    cp.status = "completed";
-    cp.finalOutput = finalOutput;
-    cp.updatedAt = Date.now();
-    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
-    return cp;
-  }
-  /**
-   * Marks workflow as failed with error details.
-   */
-  async failWorkflow(workflowId, error) {
-    const cp = await this.getCheckpoint(workflowId);
-    if (!cp) {
-      throw new Error(`Workflow with ID "${workflowId}" not found.`);
-    }
-    cp.status = "failed";
-    cp.error = error;
-    cp.updatedAt = Date.now();
-    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
-    return cp;
-  }
-  /**
-   * Resumes workflow checkpoint and provides replay context.
-   */
-  async resume(workflowId) {
-    const cp = await this.getCheckpoint(workflowId);
-    if (!cp) {
-      return {
-        canResume: false,
-        checkpoint: null,
-        resumeFromStep: 0,
-        agent: void 0,
-        messages: [],
-        context: {}
-      };
-    }
-    const canResume = cp.status === "running" || cp.status === "paused" || cp.status === "pending";
-    return {
-      canResume,
-      checkpoint: cp,
-      resumeFromStep: cp.currentStep,
-      agent: cp.currentAgent,
-      messages: [...cp.messages],
-      context: { ...cp.sharedContext }
-    };
-  }
-};
-
 // src/core/EpisodicMemory.ts
 function createFastTfEmbedding(text, dimensions = 64) {
   const vec = new Array(dimensions).fill(0);
@@ -3921,212 +3146,6 @@ ${contextText}`
       if (r.userId === userId) c++;
     }
     return c;
-  }
-};
-
-// src/core/FaithfulnessSentinel.ts
-var FaithfulnessSentinel = class {
-  minFaithfulnessScore;
-  mode;
-  judgeModel;
-  escalationModel;
-  autoEscalate;
-  client;
-  constructor(options = {}) {
-    this.minFaithfulnessScore = options.minFaithfulnessScore ?? 0.75;
-    this.mode = options.mode ?? "heuristic";
-    this.judgeModel = options.judgeModel;
-    this.escalationModel = options.escalationModel;
-    this.autoEscalate = options.autoEscalate ?? false;
-    this.client = options.client;
-  }
-  setClient(client) {
-    this.client = client;
-  }
-  /**
-   * Tokenizes text into normalized words of length > 2.
-   */
-  tokenize(text) {
-    const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-    return new Set(words);
-  }
-  /**
-   * Splits an LLM response into discrete atomic claims/assertions.
-   */
-  extractClaims(text) {
-    if (!text || text.trim().length === 0) return [];
-    const rawSegments = text.split(/(?<=[.?!])\s+|\n+/).map((s) => s.trim()).filter((s) => s.length > 0);
-    const claims = [];
-    const preambleRegex = /^(sure|certainly|here is|here are|based on|according to|of course|as an ai|in summary|to summarize)\b/i;
-    for (const seg of rawSegments) {
-      const clean = seg.replace(/^[-*•\d.]+\s*/, "").trim();
-      if (clean.length < 8) continue;
-      if (preambleRegex.test(clean) && clean.split(/\s+/).length < 6) {
-        continue;
-      }
-      claims.push(clean);
-    }
-    return claims.length > 0 ? claims : [text.trim()];
-  }
-  /**
-   * Rapid in-process heuristic grounding verification against context.
-   */
-  verifyGrounding(params) {
-    const startTime = Date.now();
-    const threshold = params.threshold ?? this.minFaithfulnessScore;
-    const chunks = Array.isArray(params.context) ? params.context : [params.context];
-    const claims = this.extractClaims(params.answer);
-    if (claims.length === 0) {
-      return {
-        score: 1,
-        passed: true,
-        totalClaims: 0,
-        supportedClaims: 0,
-        unsupportedClaims: [],
-        claimAudits: [],
-        finalAnswer: params.answer,
-        durationMs: Date.now() - startTime
-      };
-    }
-    const chunkTokenSets = chunks.map((c) => this.tokenize(c));
-    const chunkLowerList = chunks.map((c) => c.toLowerCase());
-    const claimAudits = [];
-    let supportedCount = 0;
-    const unsupportedClaims = [];
-    for (const claim of claims) {
-      const claimWords = Array.from(this.tokenize(claim));
-      if (claimWords.length === 0) {
-        supportedCount++;
-        claimAudits.push({
-          claim,
-          isSupported: true,
-          confidence: 1
-        });
-        continue;
-      }
-      let bestChunkIndex = -1;
-      let maxOverlap = 0;
-      let matchingSnippet;
-      for (let i = 0; i < chunks.length; i++) {
-        const tokenSet = chunkTokenSets[i];
-        const lowerChunk = chunkLowerList[i];
-        let matched = 0;
-        for (const word of claimWords) {
-          if (tokenSet.has(word) || lowerChunk.includes(word)) {
-            matched++;
-          }
-        }
-        const overlap = matched / claimWords.length;
-        if (overlap > maxOverlap) {
-          maxOverlap = overlap;
-          bestChunkIndex = i;
-          matchingSnippet = chunks[i].slice(0, 120);
-        }
-      }
-      const isSupported = maxOverlap >= 0.5;
-      if (isSupported) {
-        supportedCount++;
-      } else {
-        unsupportedClaims.push(claim);
-      }
-      claimAudits.push({
-        claim,
-        isSupported,
-        confidence: Number(maxOverlap.toFixed(3)),
-        matchingChunkIndex: bestChunkIndex !== -1 ? bestChunkIndex : void 0,
-        matchingSnippet: isSupported ? matchingSnippet : void 0
-      });
-    }
-    const score = Number((supportedCount / claims.length).toFixed(3));
-    const passed = score >= threshold;
-    return {
-      score,
-      passed,
-      totalClaims: claims.length,
-      supportedClaims: supportedCount,
-      unsupportedClaims,
-      claimAudits,
-      finalAnswer: params.answer,
-      durationMs: Date.now() - startTime
-    };
-  }
-  /**
-   * High-level verification with automatic retry / escalation if hallucination detected.
-   */
-  async executeVerifiedCompletion(params, callerClient) {
-    const client = this.client ?? callerClient;
-    const threshold = params.minFaithfulness ?? this.minFaithfulnessScore;
-    const autoRetry = params.autoRetryOnHallucination ?? this.autoEscalate ?? true;
-    const escalationModel = params.escalationModel ?? this.escalationModel;
-    const rawContext = Array.isArray(params.context) ? params.context.join("\n\n") : params.context;
-    const baseMessages = [...params.messages];
-    const systemPromptAddition = `
-
-REFERENCE CONTEXT:
-${rawContext}
-
-INSTRUCTION: Answer the question strictly using the provided context above. Do not introduce outside unverified facts.`;
-    const firstSystemIdx = baseMessages.findIndex((m) => m.role === "system");
-    if (firstSystemIdx >= 0) {
-      baseMessages[firstSystemIdx] = {
-        ...baseMessages[firstSystemIdx],
-        content: baseMessages[firstSystemIdx].content + systemPromptAddition
-      };
-    } else {
-      baseMessages.unshift({
-        role: "system",
-        content: systemPromptAddition.trim()
-      });
-    }
-    const completion = await client.chat.completions.create({
-      model: params.model,
-      messages: baseMessages,
-      temperature: params.temperature ?? 0.2,
-      maxTokens: params.maxTokens ?? params.max_tokens
-    });
-    const firstAnswer = completion.choices[0]?.message?.content || "";
-    const verification = this.verifyGrounding({
-      answer: firstAnswer,
-      context: params.context,
-      threshold
-    });
-    if (verification.passed || !autoRetry) {
-      return { completion, grounding: verification };
-    }
-    const strictSystemPrompt = `CRITICAL ACCURACY INSTRUCTION: The previous answer contained potential ungrounded claims. Answer strictly and solely based on the provided reference context facts. If the information is not present in the context, explicitly say: "I do not have enough context to answer this." Do not extrapolate.
-
-REFERENCE CONTEXT:
-${rawContext}`;
-    const retryMessages = [
-      { role: "system", content: strictSystemPrompt },
-      ...params.messages.filter((m) => m.role !== "system")
-    ];
-    const retryModel = escalationModel || params.model;
-    const retryCompletion = await client.chat.completions.create({
-      model: retryModel,
-      messages: retryMessages,
-      temperature: 0,
-      // clamp to deterministic
-      maxTokens: params.maxTokens ?? params.max_tokens
-    });
-    const retryAnswer = retryCompletion.choices[0]?.message?.content || "";
-    const retryVerification = this.verifyGrounding({
-      answer: retryAnswer,
-      context: params.context,
-      threshold
-    });
-    retryVerification.escalated = true;
-    retryVerification.originalAnswer = firstAnswer;
-    if (retryVerification.score >= verification.score) {
-      return {
-        completion: retryCompletion,
-        grounding: retryVerification
-      };
-    }
-    return {
-      completion,
-      grounding: verification
-    };
   }
 };
 
@@ -4708,6 +3727,1477 @@ var KnowledgeGraph = class {
   }
 };
 
+// src/core/CognitiveBrain.ts
+var CognitiveBrain = class {
+  memory;
+  graph;
+  rag;
+  maxRecentMemoryEntries;
+  recentEntries = [];
+  constructor(options = {}) {
+    this.memory = new EpisodicMemory({
+      storage: options.storage,
+      ...options.episodic
+    });
+    this.graph = new KnowledgeGraph(options.graph);
+    this.rag = new HybridRagEngine(options.rag);
+    this.maxRecentMemoryEntries = options.maxRecentMemoryEntries ?? 500;
+  }
+  /**
+   * Stores an episodic memory fact for a user or tenant.
+   */
+  async rememberFact(fact, userId) {
+    const opts = typeof fact === "string" ? { text: fact, userId } : { ...fact, userId: fact.userId || userId };
+    const record = await this.memory.store(opts);
+    if (this.recentEntries.length >= this.maxRecentMemoryEntries) {
+      this.recentEntries.shift();
+    }
+    this.recentEntries.push(record.id);
+    return record;
+  }
+  /**
+   * Adds a relational triple (subject - predicate - object) to the Knowledge Graph.
+   */
+  addKnowledgeTriple(triple) {
+    this.graph.addTriple(triple);
+  }
+  /**
+   * Automatically extracts triples from text and adds them to the Knowledge Graph.
+   */
+  ingestKnowledgeFromText(text) {
+    const triples = this.graph.extractTriplesFromText(text);
+    for (const t of triples) {
+      this.graph.addTriple(t);
+    }
+    return triples;
+  }
+  /**
+   * Ingests and chunks a reference document into the Hybrid RAG engine (BM25 + Dense Vectors).
+   */
+  async ingestDocument(documentId, text, metadata) {
+    return this.rag.addDocument(documentId, text, metadata);
+  }
+  /**
+   * Performs unified cross-memory context retrieval:
+   * 1. Recalls relevant user episodic memory facts.
+   * 2. Traverses knowledge graph relations around key terms in the query.
+   * 3. Executes hybrid RAG search across indexed documents.
+   * 4. Combines and synthesizes all three sources into an optimized Markdown prompt section.
+   */
+  async retrieveContext(options) {
+    const {
+      query,
+      userId,
+      maxFacts = 5,
+      maxGraphDepth = 2,
+      maxChunks = 4,
+      minSimilarity = 0.25
+    } = options;
+    const factsPromise = this.memory.recall({
+      query,
+      userId,
+      topK: maxFacts,
+      minSimilarity
+    });
+    const ragPromise = this.rag.search({
+      query,
+      topK: maxChunks
+    });
+    const [facts, chunks] = await Promise.all([factsPromise, ragPromise]);
+    const queryTokens = query.toLowerCase().replace(/[^a-z0-9\s_-]/g, " ").split(/\s+/).filter((t) => t.length > 2);
+    const subgraph = this.graph.findSubGraph(queryTokens, maxGraphDepth);
+    const sections = [];
+    if (facts.length > 0) {
+      const factLines = facts.map((f, i) => `${i + 1}. ${f.record.text}`).join("\n");
+      sections.push(`### [EPISODIC USER FACTS]
+${factLines}`);
+    }
+    if (subgraph.triples.length > 0) {
+      const graphText = this.graph.toContextPrompt(subgraph);
+      sections.push(graphText);
+    }
+    if (chunks.length > 0) {
+      const ragText = this.rag.formatForPrompt(chunks);
+      sections.push(ragText);
+    }
+    const formattedPrompt = sections.length > 0 ? `
+
+[UNIFIED COGNITIVE BRAIN CONTEXT]:
+${sections.join("\n\n")}
+` : "";
+    const totalTokensEstimate = Math.ceil(formattedPrompt.length / 4);
+    return {
+      query,
+      facts,
+      subgraph,
+      chunks,
+      formattedPrompt,
+      totalTokensEstimate
+    };
+  }
+  /**
+   * Injects retrieved cognitive context cleanly into the system instruction of ChatMessage[].
+   */
+  injectIntoMessages(messages, contextResult) {
+    if (!contextResult.formattedPrompt) {
+      return [...messages];
+    }
+    const result = [...messages];
+    const systemIndex = result.findIndex((m) => m.role === "system");
+    if (systemIndex >= 0) {
+      const sysMsg = result[systemIndex];
+      let newContent;
+      if (typeof sysMsg.content === "string") {
+        newContent = `${sysMsg.content}${contextResult.formattedPrompt}`;
+      } else if (Array.isArray(sysMsg.content)) {
+        const textPart = sysMsg.content.find(
+          (p) => p.type === "text"
+        );
+        if (textPart) {
+          textPart.text = `${textPart.text}${contextResult.formattedPrompt}`;
+          newContent = "";
+        } else {
+          newContent = contextResult.formattedPrompt;
+        }
+      } else {
+        newContent = contextResult.formattedPrompt;
+      }
+      if (newContent) {
+        result[systemIndex] = {
+          ...sysMsg,
+          content: newContent
+        };
+      }
+    } else {
+      result.unshift({
+        role: "system",
+        content: `You are an intelligent assistant with access to cognitive memory.
+${contextResult.formattedPrompt}`
+      });
+    }
+    return result;
+  }
+};
+
+// src/core/ConsensusEngine.ts
+function computeTermFrequencyVector(text, vocabulary) {
+  const vec = new Array(vocabulary.size).fill(0);
+  const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+  for (const word of words) {
+    const idx = vocabulary.get(word);
+    if (idx !== void 0) {
+      vec[idx] += 1;
+    }
+  }
+  const norm = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
+  if (norm > 0) {
+    for (let i = 0; i < vec.length; i++) {
+      vec[i] /= norm;
+    }
+  }
+  return vec;
+}
+function calculatePairwiseSimilarity(vectors) {
+  if (vectors.length < 2) return 1;
+  let totalSim = 0;
+  let pairs = 0;
+  for (let i = 0; i < vectors.length; i++) {
+    for (let j = i + 1; j < vectors.length; j++) {
+      const sim = Math.max(0, cosineSimilarity(vectors[i], vectors[j]));
+      totalSim += sim;
+      pairs++;
+    }
+  }
+  return pairs > 0 ? Number((totalSim / pairs).toFixed(4)) : 1;
+}
+var ConsensusEngine = class {
+  /**
+   * Executes multi-model speculative drafting and consensus arbitration.
+   */
+  async execute(client, options) {
+    const start = Date.now();
+    const threshold = options.consensusThreshold ?? 0.85;
+    const extractText = (res) => {
+      const c = res.choices?.[0]?.message?.content;
+      return typeof c === "string" ? c : JSON.stringify(c ?? "");
+    };
+    if (!options.draftModels || options.draftModels.length === 0) {
+      throw new Error(
+        "ConsensusEngine requires at least one draftModel in draftModels array."
+      );
+    }
+    const draftPromises = options.draftModels.map(async (model) => {
+      const draftStart = Date.now();
+      const res = await client.chat.completions.create({
+        model,
+        messages: options.messages,
+        temperature: options.temperature ?? 0.2,
+        maxTokens: options.maxTokens,
+        signal: options.signal
+      });
+      const latencyMs = Date.now() - draftStart;
+      const text = res.choices?.[0]?.message?.content || "";
+      return {
+        model,
+        provider: res.provider,
+        response: res,
+        latencyMs,
+        text
+      };
+    });
+    const settled = await Promise.allSettled(draftPromises);
+    const successfulDrafts = [];
+    for (const s of settled) {
+      if (s.status === "fulfilled" && s.value.text.trim().length > 0) {
+        successfulDrafts.push(s.value);
+      }
+    }
+    if (successfulDrafts.length === 0) {
+      const firstRejected = settled.find((s) => s.status === "rejected");
+      throw firstRejected?.reason ?? new Error("All candidate draft models failed to produce a response.");
+    }
+    if (successfulDrafts.length === 1) {
+      return {
+        finalResponse: successfulDrafts[0].response,
+        synthesizedText: extractText(successfulDrafts[0].response),
+        consensusReached: true,
+        averageSimilarity: 1,
+        consensusScore: 1,
+        drafts: successfulDrafts,
+        escalatedToJudge: false,
+        judgeEscalated: false,
+        totalDurationMs: Date.now() - start
+      };
+    }
+    let vectors = [];
+    const embedFn = options.customEmbed;
+    if (embedFn) {
+      vectors = await Promise.all(successfulDrafts.map((d) => embedFn(d.text)));
+    } else {
+      const vocab = /* @__PURE__ */ new Map();
+      let vocabIdx = 0;
+      for (const d of successfulDrafts) {
+        const words = d.text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+        for (const w of words) {
+          if (!vocab.has(w)) {
+            vocab.set(w, vocabIdx++);
+          }
+        }
+      }
+      vectors = successfulDrafts.map(
+        (d) => computeTermFrequencyVector(d.text, vocab)
+      );
+    }
+    const averageSimilarity = calculatePairwiseSimilarity(vectors);
+    const consensusReached = averageSimilarity >= threshold;
+    if (consensusReached || !options.judgeModel) {
+      const best = [...successfulDrafts].sort(
+        (a, b) => a.latencyMs - b.latencyMs
+      )[0];
+      return {
+        finalResponse: best.response,
+        synthesizedText: extractText(best.response),
+        consensusReached,
+        averageSimilarity,
+        consensusScore: averageSimilarity,
+        drafts: successfulDrafts,
+        escalatedToJudge: false,
+        judgeEscalated: false,
+        totalDurationMs: Date.now() - start
+      };
+    }
+    const userPromptText = options.messages.filter((m) => m.role === "user").map(
+      (m) => typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+    ).join("\n");
+    const draftEvidence = successfulDrafts.map(
+      (d, i) => `### Candidate Draft ${i + 1} (${d.model} | ${d.latencyMs}ms):
+${d.text}`
+    ).join("\n\n");
+    const judgePrompt = [
+      {
+        role: "system",
+        content: "You are an expert Supreme AI Arbitrator. Multiple independent AI models produced divergent answers for the user request. Analyze the candidate drafts, cross-verify claims, eliminate hallucinations, and synthesize the single authoritative, complete, and accurate final response."
+      },
+      {
+        role: "user",
+        content: `User Request:
+"""
+${userPromptText}
+"""
+
+Candidate Drafts:
+${draftEvidence}
+
+Please deliver the definitive answer:`
+      }
+    ];
+    const judgeResponse = await client.chat.completions.create({
+      model: options.judgeModel,
+      messages: judgePrompt,
+      temperature: 0.1,
+      signal: options.signal
+    });
+    return {
+      finalResponse: judgeResponse,
+      synthesizedText: extractText(judgeResponse),
+      consensusReached: false,
+      averageSimilarity,
+      consensusScore: averageSimilarity,
+      drafts: successfulDrafts,
+      escalatedToJudge: true,
+      judgeEscalated: true,
+      judgeModel: options.judgeModel,
+      judgeResponse,
+      totalDurationMs: Date.now() - start
+    };
+  }
+};
+
+// src/core/ContextCompressor.ts
+function estimateMessageTokens(msg) {
+  let chars = 16;
+  if (typeof msg.content === "string") {
+    chars += msg.content.length;
+  } else if (Array.isArray(msg.content)) {
+    for (const part of msg.content) {
+      if (part.type === "text") {
+        chars += part.text.length;
+      } else {
+        chars += 1024;
+      }
+    }
+  }
+  if (msg.reasoning_content) {
+    chars += msg.reasoning_content.length;
+  }
+  if (msg.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      chars += tc.function.name.length + tc.function.arguments.length + 24;
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+function estimateTotalTokens(messages) {
+  let total = 0;
+  for (const m of messages) {
+    total += estimateMessageTokens(m);
+  }
+  return total;
+}
+function groupAtomicUnits(messages) {
+  const units = [];
+  let i = 0;
+  while (i < messages.length) {
+    const current = messages[i];
+    if (current.role === "assistant" && current.tool_calls && current.tool_calls.length > 0) {
+      const group = [current];
+      i++;
+      while (i < messages.length && messages[i].role === "tool") {
+        group.push(messages[i]);
+        i++;
+      }
+      units.push(group);
+    } else {
+      units.push([current]);
+      i++;
+    }
+  }
+  return units;
+}
+var ContextCompressor = class {
+  options;
+  constructor(options) {
+    this.options = {
+      maxPromptTokens: options.maxPromptTokens,
+      strategy: options.strategy ?? "sliding-window",
+      preserveSystemMessages: options.preserveSystemMessages ?? true
+    };
+  }
+  compress(messages) {
+    const originalTokens = estimateTotalTokens(messages);
+    if (originalTokens <= this.options.maxPromptTokens || messages.length <= 1) {
+      return {
+        messages,
+        originalTokens,
+        compressedTokens: originalTokens,
+        droppedCount: 0
+      };
+    }
+    const systemMsgs = [];
+    const conversationMsgs = [];
+    for (const m of messages) {
+      if (this.options.preserveSystemMessages && m.role === "system") {
+        systemMsgs.push(m);
+      } else {
+        conversationMsgs.push(m);
+      }
+    }
+    const systemTokens = estimateTotalTokens(systemMsgs);
+    const availableBudget = Math.max(
+      0,
+      this.options.maxPromptTokens - systemTokens
+    );
+    const units = groupAtomicUnits(conversationMsgs);
+    const unitTokens = units.map((u) => estimateTotalTokens(u));
+    if (this.options.strategy === "middle-out" && units.length > 2) {
+      const firstUnit = units[0];
+      const firstUnitCost = unitTokens[0];
+      const keptTailUnits = [];
+      let currentBudget = availableBudget - firstUnitCost;
+      for (let idx = units.length - 1; idx >= 1; idx--) {
+        if (currentBudget >= unitTokens[idx] || keptTailUnits.length === 0) {
+          keptTailUnits.unshift(units[idx]);
+          currentBudget -= unitTokens[idx];
+        } else {
+          break;
+        }
+      }
+      const finalMessages2 = [
+        ...systemMsgs,
+        ...firstUnitCost <= availableBudget ? firstUnit : [],
+        ...keptTailUnits.flat()
+      ];
+      return {
+        messages: finalMessages2,
+        originalTokens,
+        compressedTokens: estimateTotalTokens(finalMessages2),
+        droppedCount: messages.length - finalMessages2.length
+      };
+    }
+    const keptUnits = [];
+    let usedTokens = 0;
+    for (let idx = units.length - 1; idx >= 0; idx--) {
+      const cost = unitTokens[idx];
+      if (usedTokens + cost <= availableBudget || keptUnits.length === 0) {
+        keptUnits.unshift(units[idx]);
+        usedTokens += cost;
+      } else {
+        break;
+      }
+    }
+    const finalMessages = [...systemMsgs, ...keptUnits.flat()];
+    return {
+      messages: finalMessages,
+      originalTokens,
+      compressedTokens: estimateTotalTokens(finalMessages),
+      droppedCount: messages.length - finalMessages.length
+    };
+  }
+};
+var DashboardServer = class {
+  client;
+  port;
+  host;
+  authKey;
+  title;
+  maxHistory;
+  server = null;
+  history = [];
+  startTime = Date.now();
+  constructor(options) {
+    this.client = options.client;
+    this.port = options.port ?? 3140;
+    this.host = options.host ?? "127.0.0.1";
+    this.authKey = options.authKey;
+    this.title = options.title ?? "SinapsAI Control Plane";
+    this.maxHistory = options.maxHistory ?? 100;
+  }
+  get isRunning() {
+    return Boolean(this.server?.listening);
+  }
+  getUrl() {
+    return `http://${this.host}:${this.port}`;
+  }
+  recordRequest(log) {
+    this.history.unshift(log);
+    if (this.history.length > this.maxHistory) {
+      this.history.pop();
+    }
+  }
+  getHistory() {
+    return [...this.history];
+  }
+  async start() {
+    if (this.isRunning) return;
+    return new Promise((resolve, reject) => {
+      this.server = http__default.default.createServer((req, res) => {
+        this.handleHttpRequest(req, res);
+      });
+      this.server.on("error", (err) => {
+        reject(err);
+      });
+      this.server.listen(this.port, this.host, () => {
+        resolve();
+      });
+    });
+  }
+  async stop() {
+    if (!this.server) return;
+    return new Promise((resolve, reject) => {
+      this.server?.close((err) => {
+        this.server = null;
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+  isAuthorized(req, parsedUrl) {
+    if (!this.authKey) return true;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.replace(/^Bearer\s+/i, "") === this.authKey) {
+      return true;
+    }
+    const tokenParam = parsedUrl.searchParams.get("token");
+    if (tokenParam === this.authKey) {
+      return true;
+    }
+    return false;
+  }
+  handleHttpRequest(req, res) {
+    const parsedUrl = new URL(
+      req.url || "/",
+      `http://${req.headers.host || `${this.host}:${this.port}`}`
+    );
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (!this.isAuthorized(req, parsedUrl)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "Unauthorized: invalid or missing auth token"
+        })
+      );
+      return;
+    }
+    const pathname = parsedUrl.pathname;
+    if (pathname === "/" || pathname === "/index.html") {
+      this.serveDashboardHtml(res);
+      return;
+    }
+    if (pathname === "/api/summary") {
+      this.serveSummaryJson(res);
+      return;
+    }
+    if (pathname === "/api/metrics") {
+      this.serveMetricsJson(res);
+      return;
+    }
+    if (pathname === "/api/history") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(this.getHistory()));
+      return;
+    }
+    if (pathname === "/api/health") {
+      this.serveHealthJson(res);
+      return;
+    }
+    if (pathname === "/api/prometheus") {
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" });
+      res.end(this.client.exportPrometheusMetrics());
+      return;
+    }
+    if (pathname === "/api/traces") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const recentSpans = this.history.map((h) => ({
+        name: `chat ${h.model}`,
+        startTimeMs: h.timestamp - h.latencyMs,
+        endTimeMs: h.timestamp,
+        attributes: {
+          "gen_ai.system": h.provider,
+          "gen_ai.request.model": h.model,
+          "gen_ai.usage.total_tokens": h.totalTokens,
+          "gen_ai.usage.prompt_tokens": h.promptTokens,
+          "gen_ai.usage.completion_tokens": h.completionTokens
+        }
+      }));
+      res.end(JSON.stringify(this.client.toOtelTraces(recentSpans)));
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not Found", path: pathname }));
+  }
+  serveSummaryJson(res) {
+    const metrics = this.client.getMetrics();
+    const canaryHealth = this.client.canary?.getAllHealth() ?? {};
+    const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1e3);
+    const summary = {
+      title: this.title,
+      version: "3.0.0",
+      uptimeSeconds,
+      strategy: this.client.getStrategy(),
+      metrics: {
+        totalRequests: metrics.totalRequests,
+        successfulRequests: metrics.successfulRequests,
+        failedRequests: metrics.failedRequests,
+        cachedRequests: metrics.cachedRequests,
+        successRate: metrics.totalRequests > 0 ? Number(
+          (metrics.successfulRequests / metrics.totalRequests * 100).toFixed(1)
+        ) : 100,
+        totalTokens: metrics.totalTokens,
+        totalPromptTokens: metrics.totalPromptTokens,
+        totalCompletionTokens: metrics.totalCompletionTokens,
+        totalCachedPromptTokens: metrics.totalCachedPromptTokens ?? 0,
+        estimatedCostUsd: metrics.estimatedCostUsd,
+        llmoSavingsUsd: metrics.llmoMetrics?.totalEstimatedUsdSaved ?? 0,
+        llmoTokensSaved: metrics.llmoMetrics?.totalTokensSaved ?? 0,
+        providerMetrics: metrics.providerMetrics
+      },
+      canary: canaryHealth,
+      recentHistory: this.history.slice(0, 20)
+    };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(summary));
+  }
+  serveMetricsJson(res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(this.client.getMetrics()));
+  }
+  async serveHealthJson(res) {
+    try {
+      const health = await this.client.checkHealth();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(health));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", message }));
+    }
+  }
+  serveDashboardHtml(res) {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${this.title}</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f293d;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --cyan: #06b6d4;
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --purple: #8b5cf6;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-online { background: rgba(16, 185, 129, 0.15); color: var(--green); border: 1px solid var(--green); }
+    .badge-degraded { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid var(--amber); }
+    .badge-down { background: rgba(239, 68, 68, 0.15); color: var(--red); border: 1px solid var(--red); }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      position: relative;
+    }
+    .card-title {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+    }
+    .card-sub {
+      font-size: 12px;
+      color: var(--cyan);
+      margin-top: 4px;
+    }
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 24px 0 12px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .providers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .provider-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .provider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .provider-name {
+      font-size: 15px;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+    }
+    .stat-row span:last-child {
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      text-align: left;
+    }
+    th {
+      background: rgba(31, 41, 61, 0.5);
+      color: var(--text-muted);
+      padding: 10px 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+    }
+    .table-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow-x: auto;
+    }
+    .tag {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .tag-success { background: rgba(16, 185, 129, 0.2); color: var(--green); }
+    .tag-error { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .tag-cached { background: rgba(6, 182, 212, 0.2); color: var(--cyan); }
+    .refresh-btn {
+      background: var(--border);
+      color: var(--text-main);
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .refresh-btn:hover { background: #2d3748; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <h1 style="font-size: 20px; font-weight: 700;">SinapsAI Gateway</h1>
+      <span class="badge badge-online" id="status-badge">\u25CF ONLINE</span>
+    </div>
+    <div style="display: flex; gap: 12px; align-items: center;">
+      <span style="font-size: 12px; color: var(--text-muted);" id="uptime-text">Uptime: 0s</span>
+      <button class="refresh-btn" onclick="fetchSummary()">\u21BB Refresh</button>
+    </div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="card">
+      <div class="card-title">Total Requests</div>
+      <div class="card-value" id="kpi-requests">0</div>
+      <div class="card-sub" id="kpi-success-rate">100% Success Rate</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Total Tokens</div>
+      <div class="card-value" id="kpi-tokens">0</div>
+      <div class="card-sub" id="kpi-cached-tokens">0 Cached</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Estimated Cost</div>
+      <div class="card-value" id="kpi-cost">$0.0000</div>
+      <div class="card-sub" id="kpi-savings">$0.0000 Saved (FinOps)</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Routing Strategy</div>
+      <div class="card-value" style="font-size: 20px;" id="kpi-strategy">-</div>
+      <div class="card-sub" id="kpi-active-providers">0 Configured</div>
+    </div>
+  </div>
+
+  <div class="section-title">
+    <span>Configured Providers & Health</span>
+    <span style="font-size: 12px; color: var(--text-muted);">Canary Prober Active</span>
+  </div>
+  <div class="providers-grid" id="providers-container">
+    <div style="color: var(--text-muted); font-size: 13px;">Loading providers...</div>
+  </div>
+
+  <div class="section-title">
+    <span>Recent Request History</span>
+    <span style="font-size: 12px; color: var(--text-muted);">Real-time Activity Log</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Model</th>
+          <th>Provider</th>
+          <th>Tokens</th>
+          <th>Latency</th>
+          <th>Cost</th>
+          <th>Cache</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="history-tbody">
+        <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No requests recorded yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    async function fetchSummary() {
+      try {
+        const res = await fetch('/api/summary');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderDashboard(data);
+      } catch (err) {
+        console.error('Failed to fetch summary:', err);
+      }
+    }
+
+    function renderDashboard(data) {
+      document.getElementById('uptime-text').textContent = 'Uptime: ' + data.uptimeSeconds + 's';
+      document.getElementById('kpi-requests').textContent = data.metrics.totalRequests.toLocaleString();
+      document.getElementById('kpi-success-rate').textContent = data.metrics.successRate + '% Success Rate';
+      document.getElementById('kpi-tokens').textContent = data.metrics.totalTokens.toLocaleString();
+      document.getElementById('kpi-cached-tokens').textContent = (data.metrics.totalCachedPromptTokens || 0).toLocaleString() + ' Cached';
+      document.getElementById('kpi-cost').textContent = '$' + data.metrics.estimatedCostUsd.toFixed(4);
+      document.getElementById('kpi-savings').textContent = '$' + (data.metrics.llmoSavingsUsd || 0).toFixed(4) + ' Saved (FinOps)';
+      document.getElementById('kpi-strategy').textContent = (data.strategy || 'adaptive').toUpperCase();
+
+      const providers = Object.entries(data.metrics.providerMetrics || {});
+      document.getElementById('kpi-active-providers').textContent = providers.length + ' Providers';
+
+      const provContainer = document.getElementById('providers-container');
+      if (providers.length === 0) {
+        provContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No active provider metrics yet.</div>';
+      } else {
+        provContainer.innerHTML = providers.map(([id, p]) => {
+          const canary = (data.canary && data.canary[id]) ? data.canary[id].status : 'HEALTHY';
+          const badgeClass = canary === 'HEALTHY' ? 'badge-online' : (canary === 'DEGRADED' ? 'badge-degraded' : 'badge-down');
+          return \`
+            <div class="provider-card">
+              <div class="provider-header">
+                <span class="provider-name">\${id}</span>
+                <span class="badge \${badgeClass}">\${canary}</span>
+              </div>
+              <div class="stat-row">
+                <span>Requests</span>
+                <span>\${p.requests}</span>
+              </div>
+              <div class="stat-row">
+                <span>Success / Failed</span>
+                <span>\${p.successes} / \${p.failures}</span>
+              </div>
+              <div class="stat-row">
+                <span>Avg Latency</span>
+                <span>\${Math.round(p.averageLatencyMs || 0)}ms</span>
+              </div>
+              <div class="stat-row">
+                <span>Total Tokens</span>
+                <span>\${(p.totalTokens || 0).toLocaleString()}</span>
+              </div>
+            </div>
+          \`;
+        }).join('');
+      }
+
+      const historyTbody = document.getElementById('history-tbody');
+      if (!data.recentHistory || data.recentHistory.length === 0) {
+        historyTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No requests recorded yet.</td></tr>';
+      } else {
+        historyTbody.innerHTML = data.recentHistory.map(req => {
+          const time = new Date(req.timestamp).toLocaleTimeString();
+          const statusTag = req.status === 'success' ? '<span class="tag tag-success">200 OK</span>' : '<span class="tag tag-error">ERROR</span>';
+          const cacheTag = req.cached ? '<span class="tag tag-cached">HIT</span>' : '<span style="color: var(--text-muted);">-</span>';
+          return \`
+            <tr>
+              <td>\${time}</td>
+              <td style="color: var(--cyan);">\${req.model}</td>
+              <td style="text-transform: capitalize;">\${req.provider}</td>
+              <td>\${req.totalTokens.toLocaleString()}</td>
+              <td>\${Math.round(req.latencyMs)}ms</td>
+              <td>$\${req.costUsd.toFixed(5)}</td>
+              <td>\${cacheTag}</td>
+              <td>\${statusTag}</td>
+            </tr>
+          \`;
+        }).join('');
+      }
+    }
+
+    fetchSummary();
+    setInterval(fetchSummary, 2000);
+  </script>
+</body>
+</html>`;
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache"
+    });
+    res.end(html);
+  }
+};
+
+// src/core/InMemoryStorage.ts
+var InMemoryStorage = class {
+  store = /* @__PURE__ */ new Map();
+  sweepInterval;
+  constructor(options) {
+    const sweepIntervalMs = typeof options === "number" ? options : options?.sweepIntervalMs ?? 6e4;
+    const autoSweep = typeof options === "object" ? options?.autoSweep ?? true : true;
+    if (autoSweep && typeof setInterval !== "undefined") {
+      this.sweepInterval = setInterval(() => this.sweep(), sweepIntervalMs);
+      if (this.sweepInterval && typeof this.sweepInterval.unref === "function") {
+        this.sweepInterval.unref?.();
+      }
+    }
+  }
+  sweep() {
+    const now = Date.now();
+    for (const [key, item] of this.store.entries()) {
+      if (item.expiresAt !== null && now > item.expiresAt) {
+        this.store.delete(key);
+      }
+    }
+  }
+  async get(key) {
+    const item = this.store.get(key);
+    if (!item) {
+      return null;
+    }
+    if (item.expiresAt !== null && Date.now() > item.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+    return item.value;
+  }
+  async set(key, value, ttlSeconds) {
+    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1e3 : null;
+    this.store.set(key, { value, expiresAt });
+  }
+  async delete(key) {
+    this.store.delete(key);
+  }
+  async increment(key, ttlSeconds) {
+    const item = this.store.get(key);
+    let currentValue = 0;
+    if (item) {
+      if (item.expiresAt !== null && Date.now() > item.expiresAt) {
+        this.store.delete(key);
+      } else {
+        currentValue = item.value || 0;
+      }
+    }
+    const newValue = currentValue + 1;
+    const existing = this.store.get(key);
+    const expiresAt = existing?.expiresAt ?? (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1e3 : null);
+    this.store.set(key, {
+      value: newValue,
+      expiresAt
+    });
+    return newValue;
+  }
+  async clear() {
+    this.store.clear();
+  }
+  destroy() {
+    if (this.sweepInterval) {
+      clearInterval(this.sweepInterval);
+    }
+  }
+};
+
+// src/core/DurableWorkflow.ts
+var DurableWorkflowEngine = class {
+  storage;
+  keyPrefix;
+  defaultTtlSeconds;
+  constructor(options = {}) {
+    this.storage = options.storage || new InMemoryStorage();
+    this.keyPrefix = options.keyPrefix || "sinapsai:wf:";
+    this.defaultTtlSeconds = options.defaultTtlSeconds || 86400 * 7;
+  }
+  getKey(workflowId) {
+    return `${this.keyPrefix}${workflowId}`;
+  }
+  /**
+   * Initializes or creates a new durable workflow checkpoint.
+   */
+  async createWorkflow(params) {
+    const now = Date.now();
+    const checkpoint = {
+      workflowId: params.workflowId,
+      status: "pending",
+      currentStep: 0,
+      currentAgent: params.initialAgent,
+      messages: params.initialMessages ? [...params.initialMessages] : [],
+      sharedContext: params.initialContext ? { ...params.initialContext } : {},
+      history: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.storage.set(
+      this.getKey(params.workflowId),
+      checkpoint,
+      this.defaultTtlSeconds
+    );
+    return checkpoint;
+  }
+  /**
+   * Retrieves an existing checkpoint by workflowId.
+   */
+  async getCheckpoint(workflowId) {
+    return this.storage.get(this.getKey(workflowId));
+  }
+  /**
+   * Records a step in the workflow and updates context/messages.
+   */
+  async recordStep(workflowId, update) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    const now = Date.now();
+    const nextStep = cp.currentStep + 1;
+    const stepRecord = {
+      stepIndex: nextStep,
+      agentName: update.agentName || cp.currentAgent,
+      action: update.action,
+      details: update.details,
+      output: update.output,
+      timestamp: now
+    };
+    cp.currentStep = nextStep;
+    cp.status = "running";
+    if (update.agentName) cp.currentAgent = update.agentName;
+    if (update.newMessages) cp.messages.push(...update.newMessages);
+    if (update.contextUpdates) {
+      cp.sharedContext = { ...cp.sharedContext, ...update.contextUpdates };
+    }
+    cp.history.push(stepRecord);
+    cp.updatedAt = now;
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Marks workflow as successfully completed with final output.
+   */
+  async completeWorkflow(workflowId, finalOutput) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    cp.status = "completed";
+    cp.finalOutput = finalOutput;
+    cp.updatedAt = Date.now();
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Marks workflow as failed with error details.
+   */
+  async failWorkflow(workflowId, error) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    cp.status = "failed";
+    cp.error = error;
+    cp.updatedAt = Date.now();
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Resumes workflow checkpoint and provides replay context.
+   */
+  async resume(workflowId) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      return {
+        canResume: false,
+        checkpoint: null,
+        resumeFromStep: 0,
+        agent: void 0,
+        messages: [],
+        context: {}
+      };
+    }
+    const canResume = cp.status === "running" || cp.status === "paused" || cp.status === "pending";
+    return {
+      canResume,
+      checkpoint: cp,
+      resumeFromStep: cp.currentStep,
+      agent: cp.currentAgent,
+      messages: [...cp.messages],
+      context: { ...cp.sharedContext }
+    };
+  }
+  /**
+   * Suspends the workflow waiting for human review / approval (HITL).
+   */
+  async suspendForApproval(workflowId, request) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    const now = Date.now();
+    const nextStep = cp.currentStep + 1;
+    const requestId = `appr_${Math.random().toString(36).slice(2, 10)}`;
+    const record = {
+      ...request,
+      requestId,
+      workflowId,
+      stepIndex: nextStep,
+      createdAt: now,
+      status: "pending"
+    };
+    cp.currentStep = nextStep;
+    cp.status = "waiting_approval";
+    cp.pendingApproval = record;
+    if (!cp.approvalHistory) cp.approvalHistory = [];
+    cp.approvalHistory.push(record);
+    cp.history.push({
+      stepIndex: nextStep,
+      agentName: cp.currentAgent,
+      action: "approval_request",
+      details: {
+        requestId,
+        action: request.action,
+        reason: request.reason,
+        payload: request.payload
+      },
+      timestamp: now
+    });
+    cp.updatedAt = now;
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+  /**
+   * Resolves a pending human approval request, transitioning workflow back to running or failed.
+   */
+  async resolveApproval(workflowId, resolution) {
+    const cp = await this.getCheckpoint(workflowId);
+    if (!cp) {
+      throw new Error(`Workflow with ID "${workflowId}" not found.`);
+    }
+    if (cp.status !== "waiting_approval" || !cp.pendingApproval) {
+      throw new Error(
+        `Workflow "${workflowId}" is not in waiting_approval status or has no pending approval.`
+      );
+    }
+    const now = Date.now();
+    const nextStep = cp.currentStep + 1;
+    const approval = cp.pendingApproval;
+    approval.status = resolution.approved ? "approved" : "rejected";
+    approval.resolvedAt = now;
+    approval.resolvedBy = resolution.resolvedBy;
+    approval.resolutionNotes = resolution.notes;
+    approval.resolutionPayload = resolution.resolutionPayload;
+    cp.pendingApproval = void 0;
+    cp.status = resolution.approved ? "running" : "failed";
+    if (!resolution.approved) {
+      cp.error = resolution.notes || "Human approval was rejected.";
+    }
+    cp.currentStep = nextStep;
+    cp.history.push({
+      stepIndex: nextStep,
+      agentName: cp.currentAgent,
+      action: "approval_resolution",
+      details: {
+        requestId: approval.requestId,
+        approved: resolution.approved,
+        resolvedBy: resolution.resolvedBy,
+        notes: resolution.notes,
+        resolutionPayload: resolution.resolutionPayload
+      },
+      timestamp: now
+    });
+    cp.updatedAt = now;
+    await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    return cp;
+  }
+};
+
+// src/core/FaithfulnessSentinel.ts
+var FaithfulnessSentinel = class {
+  minFaithfulnessScore;
+  mode;
+  judgeModel;
+  escalationModel;
+  autoEscalate;
+  client;
+  constructor(options = {}) {
+    this.minFaithfulnessScore = options.minFaithfulnessScore ?? 0.75;
+    this.mode = options.mode ?? "heuristic";
+    this.judgeModel = options.judgeModel;
+    this.escalationModel = options.escalationModel;
+    this.autoEscalate = options.autoEscalate ?? false;
+    this.client = options.client;
+  }
+  setClient(client) {
+    this.client = client;
+  }
+  /**
+   * Tokenizes text into normalized words of length > 2.
+   */
+  tokenize(text) {
+    const words = text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+    return new Set(words);
+  }
+  /**
+   * Splits an LLM response into discrete atomic claims/assertions.
+   */
+  extractClaims(text) {
+    if (!text || text.trim().length === 0) return [];
+    const rawSegments = text.split(/(?<=[.?!])\s+|\n+/).map((s) => s.trim()).filter((s) => s.length > 0);
+    const claims = [];
+    const preambleRegex = /^(sure|certainly|here is|here are|based on|according to|of course|as an ai|in summary|to summarize)\b/i;
+    for (const seg of rawSegments) {
+      const clean = seg.replace(/^[-*•\d.]+\s*/, "").trim();
+      if (clean.length < 8) continue;
+      if (preambleRegex.test(clean) && clean.split(/\s+/).length < 6) {
+        continue;
+      }
+      claims.push(clean);
+    }
+    return claims.length > 0 ? claims : [text.trim()];
+  }
+  /**
+   * Rapid in-process heuristic grounding verification against context.
+   */
+  verifyGrounding(params) {
+    const startTime = Date.now();
+    const threshold = params.threshold ?? this.minFaithfulnessScore;
+    const chunks = Array.isArray(params.context) ? params.context : [params.context];
+    const claims = this.extractClaims(params.answer);
+    if (claims.length === 0) {
+      return {
+        score: 1,
+        passed: true,
+        totalClaims: 0,
+        supportedClaims: 0,
+        unsupportedClaims: [],
+        claimAudits: [],
+        finalAnswer: params.answer,
+        durationMs: Date.now() - startTime
+      };
+    }
+    const chunkTokenSets = chunks.map((c) => this.tokenize(c));
+    const chunkLowerList = chunks.map((c) => c.toLowerCase());
+    const claimAudits = [];
+    let supportedCount = 0;
+    const unsupportedClaims = [];
+    for (const claim of claims) {
+      const claimWords = Array.from(this.tokenize(claim));
+      if (claimWords.length === 0) {
+        supportedCount++;
+        claimAudits.push({
+          claim,
+          isSupported: true,
+          confidence: 1
+        });
+        continue;
+      }
+      let bestChunkIndex = -1;
+      let maxOverlap = 0;
+      let matchingSnippet;
+      for (let i = 0; i < chunks.length; i++) {
+        const tokenSet = chunkTokenSets[i];
+        const lowerChunk = chunkLowerList[i];
+        let matched = 0;
+        for (const word of claimWords) {
+          if (tokenSet.has(word) || lowerChunk.includes(word)) {
+            matched++;
+          }
+        }
+        const overlap = matched / claimWords.length;
+        if (overlap > maxOverlap) {
+          maxOverlap = overlap;
+          bestChunkIndex = i;
+          matchingSnippet = chunks[i].slice(0, 120);
+        }
+      }
+      const isSupported = maxOverlap >= 0.5;
+      if (isSupported) {
+        supportedCount++;
+      } else {
+        unsupportedClaims.push(claim);
+      }
+      claimAudits.push({
+        claim,
+        isSupported,
+        confidence: Number(maxOverlap.toFixed(3)),
+        matchingChunkIndex: bestChunkIndex !== -1 ? bestChunkIndex : void 0,
+        matchingSnippet: isSupported ? matchingSnippet : void 0
+      });
+    }
+    const score = Number((supportedCount / claims.length).toFixed(3));
+    const passed = score >= threshold;
+    return {
+      score,
+      passed,
+      totalClaims: claims.length,
+      supportedClaims: supportedCount,
+      unsupportedClaims,
+      claimAudits,
+      finalAnswer: params.answer,
+      durationMs: Date.now() - startTime
+    };
+  }
+  /**
+   * High-level verification with automatic retry / escalation if hallucination detected.
+   */
+  async executeVerifiedCompletion(params, callerClient) {
+    const client = this.client ?? callerClient;
+    const threshold = params.minFaithfulness ?? this.minFaithfulnessScore;
+    const autoRetry = params.autoRetryOnHallucination ?? this.autoEscalate ?? true;
+    const escalationModel = params.escalationModel ?? this.escalationModel;
+    const rawContext = Array.isArray(params.context) ? params.context.join("\n\n") : params.context;
+    const baseMessages = [...params.messages];
+    const systemPromptAddition = `
+
+REFERENCE CONTEXT:
+${rawContext}
+
+INSTRUCTION: Answer the question strictly using the provided context above. Do not introduce outside unverified facts.`;
+    const firstSystemIdx = baseMessages.findIndex((m) => m.role === "system");
+    if (firstSystemIdx >= 0) {
+      baseMessages[firstSystemIdx] = {
+        ...baseMessages[firstSystemIdx],
+        content: baseMessages[firstSystemIdx].content + systemPromptAddition
+      };
+    } else {
+      baseMessages.unshift({
+        role: "system",
+        content: systemPromptAddition.trim()
+      });
+    }
+    const completion = await client.chat.completions.create({
+      model: params.model,
+      messages: baseMessages,
+      temperature: params.temperature ?? 0.2,
+      maxTokens: params.maxTokens ?? params.max_tokens
+    });
+    const firstAnswer = completion.choices[0]?.message?.content || "";
+    const verification = this.verifyGrounding({
+      answer: firstAnswer,
+      context: params.context,
+      threshold
+    });
+    if (verification.passed || !autoRetry) {
+      return { completion, grounding: verification };
+    }
+    const strictSystemPrompt = `CRITICAL ACCURACY INSTRUCTION: The previous answer contained potential ungrounded claims. Answer strictly and solely based on the provided reference context facts. If the information is not present in the context, explicitly say: "I do not have enough context to answer this." Do not extrapolate.
+
+REFERENCE CONTEXT:
+${rawContext}`;
+    const retryMessages = [
+      { role: "system", content: strictSystemPrompt },
+      ...params.messages.filter((m) => m.role !== "system")
+    ];
+    const retryModel = escalationModel || params.model;
+    const retryCompletion = await client.chat.completions.create({
+      model: retryModel,
+      messages: retryMessages,
+      temperature: 0,
+      // clamp to deterministic
+      maxTokens: params.maxTokens ?? params.max_tokens
+    });
+    const retryAnswer = retryCompletion.choices[0]?.message?.content || "";
+    const retryVerification = this.verifyGrounding({
+      answer: retryAnswer,
+      context: params.context,
+      threshold
+    });
+    retryVerification.escalated = true;
+    retryVerification.originalAnswer = firstAnswer;
+    if (retryVerification.score >= verification.score) {
+      return {
+        completion: retryCompletion,
+        grounding: retryVerification
+      };
+    }
+    return {
+      completion,
+      grounding: verification
+    };
+  }
+};
+
 // src/core/LlmEvals.ts
 var LlmEvals = class {
   options;
@@ -4875,6 +5365,45 @@ var LlmEvals = class {
 };
 
 // src/core/LlmOptimizer.ts
+function evaluateResponseConfidence(text, finishReason, minConfidence = 0.7) {
+  const signals = [];
+  let penalty = 0;
+  if (finishReason === "length") {
+    signals.push("Response truncated due to length limits");
+    penalty += 0.35;
+  }
+  const lower = text.toLowerCase();
+  const uncertaintyPhrases = [
+    "i am not sure",
+    "i cannot be sure",
+    "not entirely sure",
+    "might be mistaken",
+    "perhaps",
+    "possibly wrong",
+    "i do not have enough information",
+    "i don't know",
+    "unclear to me",
+    "it is difficult to say"
+  ];
+  for (const phrase of uncertaintyPhrases) {
+    if (lower.includes(phrase)) {
+      signals.push(`Expressed uncertainty: "${phrase}"`);
+      penalty += 0.2;
+    }
+  }
+  if (text.trim().length < 20) {
+    signals.push("Suspiciously brief completion (<20 chars)");
+    penalty += 0.25;
+  }
+  const confidenceScore = Math.max(0, Number((1 - penalty).toFixed(2)));
+  const isConfident = confidenceScore >= minConfidence;
+  return {
+    confidenceScore,
+    isConfident,
+    shouldEscalate: !isConfident,
+    signals
+  };
+}
 var COMPLEX_REASONING_REGEX2 = /\b(architect(?:ure)?|refactor|optimiz(?:e|ation)|vulnerabilit(?:y|ies)|security\s+audit|prove|theorem|algorithm|concurren(?:t|cy)|deadlock|race\s+condition|distributed|microkernel|step[\s-]by[\s-]step|root\s+cause|stack\s+trace|benchmark|formal\s+verification|regex|memory\s+leak|reverse\s+engineer)\b/i;
 var CODE_OR_MATH_REGEX2 = /```[\s\S]*?```|\b(?:function|class|interface|SELECT\s+.+\s+FROM|CREATE\s+TABLE|async\s+function|Promise\.all|TypeError:|ReferenceError:|Error:\s+at\s+)\b|\$\$[\s\S]+?\$\$/i;
 var SIMPLE_INTENT_REGEX2 = /^(?:hi|hello|hey|halo|ping|ok|okay|thanks|thank\s+you|terima\s+kasih|yes|no|ya|tidak|translate\s+to\s+\w+:|classify\s*:)/i;
@@ -5161,35 +5690,461 @@ var LlmOptimizer = class {
       cascadedRequestsCount: 0
     };
   }
+  /**
+   * Evaluates response confidence to determine if early-exit cascade to a higher model tier is needed.
+   */
+  evaluateConfidence(text, finishReason, minConfidence) {
+    return evaluateResponseConfidence(text, finishReason, minConfidence);
+  }
+};
+
+// src/core/AutonomousDriftHealer.ts
+var AutonomousDriftHealer = class _AutonomousDriftHealer {
+  /**
+   * Instance helper for dependency injection.
+   */
+  heal(rawArgs, schema) {
+    return _AutonomousDriftHealer.healToolArguments(rawArgs, schema);
+  }
+  /**
+   * Calculates Levenshtein edit distance between two strings.
+   */
+  static levenshtein(a, b) {
+    const s1 = a.toLowerCase();
+    const s2 = b.toLowerCase();
+    const matrix = [];
+    for (let i = 0; i <= s1.length; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= s2.length; j++) {
+      matrix[0][j] = j;
+    }
+    for (let i = 1; i <= s1.length; i++) {
+      for (let j = 1; j <= s2.length; j++) {
+        if (s1[i - 1] === s2[j - 1]) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            // substitution
+            matrix[i][j - 1] + 1,
+            // insertion
+            matrix[i - 1][j] + 1
+            // deletion
+          );
+        }
+      }
+    }
+    return matrix[s1.length][s2.length];
+  }
+  /**
+   * Normalizes a property name for fuzzy matching (stripping underscores, hyphens, and casing).
+   */
+  static normalizeKey(key) {
+    return key.toLowerCase().replace(/[_\-\s]/g, "");
+  }
+  /**
+   * Heals incoming arguments against a tool's JSON Schema:
+   * 1. Resolves drifted / misnamed parameter keys using normalized and Levenshtein similarity.
+   * 2. Coerces types (strings to numbers, booleans, or parsed JSON).
+   * 3. Injects safe defaults for missing required properties.
+   */
+  static healToolArguments(rawArgs, schema) {
+    if (!rawArgs || typeof rawArgs !== "object") {
+      return {
+        originalArgs: rawArgs,
+        healedArgs: rawArgs,
+        remediatedFields: [],
+        driftDetected: false
+      };
+    }
+    const originalArgs = { ...rawArgs };
+    const healedArgs = { ...rawArgs };
+    const remediatedFields = [];
+    if (!schema?.properties) {
+      return {
+        originalArgs,
+        healedArgs,
+        remediatedFields,
+        driftDetected: false
+      };
+    }
+    const allowedProps = Object.keys(schema.properties);
+    const normalizedAllowed = /* @__PURE__ */ new Map();
+    for (const prop of allowedProps) {
+      normalizedAllowed.set(_AutonomousDriftHealer.normalizeKey(prop), prop);
+    }
+    for (const [key, value] of Object.entries(originalArgs)) {
+      if (allowedProps.includes(key)) continue;
+      const norm = _AutonomousDriftHealer.normalizeKey(key);
+      let matchedProp = normalizedAllowed.get(norm);
+      if (!matchedProp) {
+        let bestDist = 3;
+        for (const prop of allowedProps) {
+          const dist = _AutonomousDriftHealer.levenshtein(key, prop);
+          if (dist < bestDist) {
+            bestDist = dist;
+            matchedProp = prop;
+          }
+        }
+      }
+      if (matchedProp && !healedArgs[matchedProp]) {
+        healedArgs[matchedProp] = value;
+        delete healedArgs[key];
+        remediatedFields.push({
+          field: key,
+          originalValue: value,
+          healedValue: value,
+          action: "fuzzy_renamed",
+          matchedTo: matchedProp
+        });
+      }
+    }
+    for (const [propName, propDef] of Object.entries(schema.properties)) {
+      const val = healedArgs[propName];
+      if (val === void 0 || val === null) continue;
+      const expectedType = propDef?.type;
+      if ((expectedType === "number" || expectedType === "integer") && typeof val === "string") {
+        const num = Number(val);
+        if (!Number.isNaN(num)) {
+          healedArgs[propName] = num;
+          remediatedFields.push({
+            field: propName,
+            originalValue: val,
+            healedValue: num,
+            action: "type_coerced"
+          });
+        }
+      } else if (expectedType === "boolean" && typeof val === "string") {
+        const lower = val.toLowerCase().trim();
+        if (lower === "true" || lower === "1") {
+          healedArgs[propName] = true;
+          remediatedFields.push({
+            field: propName,
+            originalValue: val,
+            healedValue: true,
+            action: "type_coerced"
+          });
+        } else if (lower === "false" || lower === "0") {
+          healedArgs[propName] = false;
+          remediatedFields.push({
+            field: propName,
+            originalValue: val,
+            healedValue: false,
+            action: "type_coerced"
+          });
+        }
+      } else if ((expectedType === "object" || expectedType === "array") && typeof val === "string") {
+        try {
+          const parsed = JSON.parse(val);
+          healedArgs[propName] = parsed;
+          remediatedFields.push({
+            field: propName,
+            originalValue: val,
+            healedValue: parsed,
+            action: "type_coerced"
+          });
+        } catch {
+        }
+      }
+    }
+    if (schema.required && Array.isArray(schema.required)) {
+      for (const reqField of schema.required) {
+        if (healedArgs[reqField] === void 0) {
+          const propDef = schema.properties[reqField];
+          let defaultValue;
+          if (propDef?.default !== void 0) {
+            defaultValue = propDef.default;
+          } else if (propDef?.type === "string") {
+            defaultValue = "";
+          } else if (propDef?.type === "number" || propDef?.type === "integer") {
+            defaultValue = 0;
+          } else if (propDef?.type === "boolean") {
+            defaultValue = false;
+          } else if (propDef?.type === "array") {
+            defaultValue = [];
+          } else if (propDef?.type === "object") {
+            defaultValue = {};
+          }
+          if (defaultValue !== void 0) {
+            healedArgs[reqField] = defaultValue;
+            remediatedFields.push({
+              field: reqField,
+              originalValue: void 0,
+              healedValue: defaultValue,
+              action: "default_injected"
+            });
+          }
+        }
+      }
+    }
+    return {
+      originalArgs,
+      healedArgs,
+      remediatedFields,
+      driftDetected: remediatedFields.length > 0
+    };
+  }
+  /**
+   * Translates arbitrary upstream provider errors into standard remediation advice.
+   */
+  static diagnoseProviderError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const lower = message.toLowerCase();
+    if (lower.includes("429") || lower.includes("rate limit") || lower.includes("quota exceeded") || lower.includes("resource_exhausted")) {
+      return {
+        category: "rate_limit",
+        isTransient: true,
+        recommendedAction: "retry_with_backoff",
+        normalizedMessage: "Upstream provider rate limit or quota exceeded."
+      };
+    }
+    if (lower.includes("context length") || lower.includes("maximum context") || lower.includes("too many tokens") || lower.includes("prompt is too long")) {
+      return {
+        category: "context_length_exceeded",
+        isTransient: false,
+        recommendedAction: "compress_context",
+        suggestedFallbackModel: "gemini-2.5-flash",
+        // 1M context window
+        normalizedMessage: "Prompt exceeded model context window limit."
+      };
+    }
+    if (lower.includes("model_not_found") || lower.includes("does not exist") || lower.includes("deprecated") || lower.includes("404")) {
+      return {
+        category: "model_deprecated",
+        isTransient: false,
+        recommendedAction: "switch_to_fallback_model",
+        suggestedFallbackModel: "gemini-2.5-flash",
+        normalizedMessage: "Target model was not found or has been deprecated by provider."
+      };
+    }
+    if (lower.includes("401") || lower.includes("invalid api key") || lower.includes("unauthorized") || lower.includes("authentication")) {
+      return {
+        category: "auth_failure",
+        isTransient: false,
+        recommendedAction: "check_api_key",
+        normalizedMessage: "Invalid API credentials provided."
+      };
+    }
+    return {
+      category: "transient",
+      isTransient: true,
+      recommendedAction: "retry_with_backoff",
+      normalizedMessage: message
+    };
+  }
+};
+
+// src/core/McpClientConnector.ts
+var McpClientConnector = class _McpClientConnector {
+  /**
+   * Connects to an external MCP server, completes the initialize handshake,
+   * fetches available tools, and returns registered McpToolDefinition instances.
+   */
+  async connect(config) {
+    return _McpClientConnector.ingestServer(config);
+  }
+  /**
+   * Connects to an external MCP server, completes the initialize handshake,
+   * fetches available tools, and returns registered McpToolDefinition instances.
+   */
+  static async ingestServer(config) {
+    if (config.transport === "stdio") {
+      return _McpClientConnector.ingestStdioServer(config);
+    }
+    return _McpClientConnector.ingestHttpServer(config);
+  }
+  /**
+   * Ingests tools from an HTTP / SSE MCP server using standard fetch.
+   */
+  static async ingestHttpServer(config) {
+    if (!config.url) {
+      throw new Error(
+        `MCP HTTP transport for "${config.name}" requires a valid "url".`
+      );
+    }
+    const endpoint = config.url;
+    let rpcId = 1;
+    const callRpc = async (method, params) => {
+      const payload = {
+        jsonrpc: "2.0",
+        id: rpcId++,
+        method,
+        params
+      };
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...config.headers || {}
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        throw new Error(
+          `MCP server "${config.name}" HTTP error: ${res.status} ${res.statusText}`
+        );
+      }
+      const json = await res.json();
+      if (json.error) {
+        throw new Error(
+          `MCP RPC error [${json.error.code}]: ${json.error.message}`
+        );
+      }
+      return json.result;
+    };
+    await callRpc("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "SinapsAI", version: "2.15.0" }
+    });
+    const listRes = await callRpc("tools/list");
+    const rawTools = listRes?.tools || [];
+    return rawTools.map((t) => {
+      const toolName = config.prefixTools !== false ? `${config.name}_${t.name}` : t.name;
+      return {
+        name: toolName,
+        description: t.description || `MCP Tool from ${config.name}`,
+        inputSchema: t.inputSchema,
+        timeoutMs: config.timeoutMs,
+        handler: async (args, _context) => {
+          const healed = AutonomousDriftHealer.healToolArguments(
+            args,
+            t.inputSchema
+          );
+          try {
+            const result = await callRpc("tools/call", {
+              name: t.name,
+              // call with remote tool's original name
+              arguments: healed.healedArgs
+            });
+            return {
+              content: result?.content || [
+                { type: "text", text: JSON.stringify(result) }
+              ],
+              isError: Boolean(result?.isError),
+              selfHealingHint: healed.driftDetected ? `Note: Tool arguments were automatically healed from schema drift.` : void 0
+            };
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed executing remote tool "${t.name}" on MCP server "${config.name}": ${err instanceof Error ? err.message : String(err)}`
+                }
+              ],
+              isError: true
+            };
+          }
+        }
+      };
+    });
+  }
+  /**
+   * Ingests tools from a local subprocess MCP server communicating over stdio.
+   */
+  static async ingestStdioServer(config) {
+    if (typeof process === "undefined" || !process.versions?.node) {
+      throw new Error(
+        `MCP Stdio transport is only supported in Node.js and Bun environments.`
+      );
+    }
+    if (!config.command) {
+      throw new Error(
+        `MCP Stdio transport for "${config.name}" requires a valid "command".`
+      );
+    }
+    const { spawn } = await import('child_process');
+    const { createInterface } = await import('readline');
+    const proc = spawn(config.command, config.args || [], {
+      env: { ...process.env, ...config.env || {} },
+      stdio: ["pipe", "pipe", "inherit"]
+    });
+    const pendingRequests = /* @__PURE__ */ new Map();
+    let rpcId = 1;
+    const rl = createInterface({ input: proc.stdout });
+    rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      try {
+        const msg = JSON.parse(trimmed);
+        if (msg.id !== void 0 && msg.id !== null && pendingRequests.has(msg.id)) {
+          const handler = pendingRequests.get(msg.id);
+          pendingRequests.delete(msg.id);
+          if (handler) {
+            if (msg.error) {
+              handler.reject(new Error(`MCP RPC error: ${msg.error.message}`));
+            } else {
+              handler.resolve(msg.result);
+            }
+          }
+        }
+      } catch {
+      }
+    });
+    const callRpc = (method, params) => {
+      return new Promise((resolve, reject) => {
+        const id = rpcId++;
+        pendingRequests.set(id, { resolve, reject });
+        const req = {
+          jsonrpc: "2.0",
+          id,
+          method,
+          params
+        };
+        proc.stdin.write(`${JSON.stringify(req)}
+`);
+      });
+    };
+    await callRpc("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "SinapsAI", version: "2.15.0" }
+    });
+    const listRes = await callRpc("tools/list");
+    const rawTools = listRes?.tools || [];
+    return rawTools.map((t) => {
+      const toolName = config.prefixTools !== false ? `${config.name}_${t.name}` : t.name;
+      return {
+        name: toolName,
+        description: t.description || `MCP Tool from ${config.name}`,
+        inputSchema: t.inputSchema,
+        timeoutMs: config.timeoutMs,
+        handler: async (args) => {
+          const healed = AutonomousDriftHealer.healToolArguments(
+            args,
+            t.inputSchema
+          );
+          try {
+            const res = await callRpc("tools/call", {
+              name: t.name,
+              arguments: healed.healedArgs
+            });
+            return {
+              content: res?.content || [
+                { type: "text", text: JSON.stringify(res) }
+              ],
+              isError: Boolean(res?.isError),
+              selfHealingHint: healed.driftDetected ? "Tool arguments were automatically healed from schema drift." : void 0
+            };
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Subprocess tool execution error: ${err instanceof Error ? err.message : String(err)}`
+                }
+              ],
+              isError: true
+            };
+          }
+        }
+      };
+    });
+  }
 };
 
 // src/core/McpBridge.ts
-function coerceToolArguments(args, schema) {
-  if (!args || typeof args !== "object" || !schema?.properties) {
-    return args;
-  }
-  const result = { ...args };
-  for (const [key, prop] of Object.entries(schema.properties)) {
-    const val = result[key];
-    if (val === void 0 || val === null) continue;
-    const propType = prop?.type;
-    if ((propType === "number" || propType === "integer") && typeof val === "string") {
-      const num = Number(val);
-      if (!Number.isNaN(num)) {
-        result[key] = num;
-      }
-    } else if (propType === "boolean" && typeof val === "string") {
-      if (val.toLowerCase() === "true") result[key] = true;
-      if (val.toLowerCase() === "false") result[key] = false;
-    } else if (propType === "object" && typeof val === "string") {
-      try {
-        result[key] = JSON.parse(val);
-      } catch {
-      }
-    }
-  }
-  return result;
-}
 var McpToolBridge = class _McpToolBridge {
   tools = /* @__PURE__ */ new Map();
   constructor(tools) {
@@ -5232,6 +6187,15 @@ var McpToolBridge = class _McpToolBridge {
       }
     }
     return this;
+  }
+  /**
+   * Connects to an external MCP server (via HTTP/SSE or Stdio), discovers its tools,
+   * and automatically registers them into this bridge.
+   */
+  async connectExternalServer(config) {
+    const tools = await McpClientConnector.ingestServer(config);
+    this.registerTools(tools);
+    return tools;
   }
   /**
    * Returns the count of registered tools.
@@ -5374,7 +6338,11 @@ var McpToolBridge = class _McpToolBridge {
     } else if (typeof rawArgs === "object" && rawArgs !== null) {
       parsedArgs = rawArgs;
     }
-    parsedArgs = coerceToolArguments(parsedArgs, toolDef.inputSchema);
+    const driftResult = AutonomousDriftHealer.healToolArguments(
+      parsedArgs,
+      toolDef.inputSchema
+    );
+    parsedArgs = driftResult.healedArgs;
     if (context?.signal?.aborted) {
       return {
         content: [
@@ -5417,6 +6385,7 @@ var McpToolBridge = class _McpToolBridge {
       return {
         content: this.formatContentResult(rawResult),
         isError,
+        selfHealingHint: driftResult.driftDetected ? `Self-healing notice: arguments were adjusted from drift: ${driftResult.remediatedFields.map((f) => `${f.field}->${f.matchedTo || f.action}`).join(", ")}` : void 0,
         _raw: rawResult
       };
     } catch (err) {
@@ -8151,6 +9120,7 @@ var SinapsClient = class {
   graph;
   workflows;
   evals;
+  brain;
   realtime = new RealtimeClient();
   consensus;
   isReversiblePII = false;
@@ -8223,6 +9193,13 @@ var SinapsClient = class {
       ...options.workflows
     });
     this.evals = new LlmEvals(options.evals);
+    this.brain = new CognitiveBrain({
+      storage: this.storage,
+      episodic: options.memory,
+      graph: options.graph,
+      rag: options.rag,
+      ...options.brain
+    });
     this.consensus = {
       create: async (consensusOptions) => {
         const engine = new ConsensusEngine();
@@ -8797,6 +9774,18 @@ var SinapsClient = class {
    */
   toOtelMetrics(options) {
     return this.exportOtelMetrics(options);
+  }
+  /**
+   * Formats internal GenAI spans into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+   */
+  toOtelTraces(spans, options) {
+    return toOtelTracePayload(spans, options);
+  }
+  /**
+   * Exports OpenTelemetry GenAI traces directly to an OTLP collector endpoint (/v1/traces).
+   */
+  async exportOtelTraces(spans, options) {
+    return exportOtelTraces(spans, options);
   }
   /**
    * Runs an autonomous multi-step tool-calling agent loop.
@@ -9552,6 +10541,24 @@ var sinapsai = createSinapsAI;
  * @license MIT
  */
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * OpenTelemetry GenAI Semantic Conventions (v1.30+) Distributed Tracing Exporter
+ *
+ * Implements:
+ * 1. Zero-dependency OTLP JSON Trace Payload generator conforming to OpenTelemetry v1 spec.
+ * 2. Standard GenAI attributes:
+ *    - `gen_ai.system` ("openai", "anthropic", "gemini", "groq", etc.)
+ *    - `gen_ai.request.model`, `gen_ai.response.model`
+ *    - `gen_ai.operation.name` ("chat", "embeddings", "tool_call", "swarm_agent")
+ *    - `gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens`
+ * 3. 16-byte random hex TraceID and 8-byte SpanID generators without external crypto libraries.
+ * 4. Ready for instant ingest into Langfuse, Arize Phoenix, Datadog, Jaeger, Honeycomb, or Grafana Tempo.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
  * SinapsAI - In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
  *
  * Implements an in-memory, zero-dependency multi-agent orchestrator featuring:
@@ -9573,6 +10580,67 @@ var sinapsai = createSinapsAI;
  * Runs non-blocking background canary probes to detect provider outages
  * and degradations proactively. Opens the circuit breaker *before* user
  * traffic arrives, eliminating P99 timeout spikes and achieving zero tail-latency failover.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Long-Term Episodic Vector Memory Engine
+ *
+ * Implements:
+ * 1. User & tenant-partitioned memory storage.
+ * 2. Zero-dependency cosine similarity vector search with local TF or dense embeddings.
+ * 3. Dynamic context injection ([LONG-TERM MEMORY]) into conversational turns.
+ * 4. Pluggable persistence with StateStorage (InMemory, KV, Redis, D1).
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Hybrid RAG Engine (BM25 + Dense Cosine + Reciprocal Rank Fusion)
+ *
+ * Implements:
+ * 1. Semantic paragraph chunker with configurable max token / size and overlap.
+ * 2. Pure in-memory Okapi BM25 inverted index for lexical keyword precision.
+ * 3. Dense vector cosine similarity for deep semantic understanding.
+ * 4. Reciprocal Rank Fusion (RRF) combining sparse + dense rank lists.
+ * 5. Zero external dependencies, pure Web Standards.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Knowledge Graph & GraphRAG Traversal Engine
+ *
+ * Implements:
+ * 1. Zero-dependency in-memory graph representation (Adjacency List).
+ * 2. Triples extraction (Subject - Predicate - Object).
+ * 3. Multi-Hop BFS / DFS graph traversal and path scoring.
+ * 4. Subgraph synthesis formatted for LLM system prompt injection.
+ * 5. Integration with Hybrid RAG for multi-hop relational retrieval.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Unified In-Process Cognitive Brain (Tri-Memory Fusion Architecture)
+ *
+ * Implements:
+ * 1. Tri-Memory Fusion: Unifies Episodic Vector Memory (user facts),
+ *    In-Memory Knowledge Graph (relational triples & multi-hop traversal),
+ *    and Hybrid RAG (BM25 sparse + dense cosine Reciprocal Rank Fusion).
+ * 2. Unified context retrieval synthesizing all three memory pillars into a single
+ *    structured system prompt section.
+ * 3. Dynamic conversational injection ([UNIFIED COGNITIVE BRAIN CONTEXT]).
+ * 4. Zero runtime dependencies, edge-ready, with LRU memory safeguards.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
@@ -9624,20 +10692,6 @@ var sinapsai = createSinapsAI;
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
- * In-Process Long-Term Episodic Vector Memory Engine
- *
- * Implements:
- * 1. User & tenant-partitioned memory storage.
- * 2. Zero-dependency cosine similarity vector search with local TF or dense embeddings.
- * 3. Dynamic context injection ([LONG-TERM MEMORY]) into conversational turns.
- * 4. Pluggable persistence with StateStorage (InMemory, KV, Redis, D1).
- *
- * @author Roedy Rustam <roedyrustam.id@gmail.com>
- * @copyright 2026 Roedy Rustam
- * @license MIT
- */
-/**
- * SinapsAI - In-Process AI Gateway & Control Plane
  * Hallucination & Faithfulness Sentinel (RAG Grounding Verification Gate)
  *
  * Implements:
@@ -9646,36 +10700,6 @@ var sinapsai = createSinapsAI;
  * 3. Optional LLM-as-a-judge verification for borderline assertions.
  * 4. Grounding verification score calculation (0.0 to 1.0).
  * 5. Automatic remediation & hedged retry on low faithfulness scores.
- *
- * @author Roedy Rustam <roedyrustam.id@gmail.com>
- * @copyright 2026 Roedy Rustam
- * @license MIT
- */
-/**
- * SinapsAI - In-Process AI Gateway & Control Plane
- * In-Process Hybrid RAG Engine (BM25 + Dense Cosine + Reciprocal Rank Fusion)
- *
- * Implements:
- * 1. Semantic paragraph chunker with configurable max token / size and overlap.
- * 2. Pure in-memory Okapi BM25 inverted index for lexical keyword precision.
- * 3. Dense vector cosine similarity for deep semantic understanding.
- * 4. Reciprocal Rank Fusion (RRF) combining sparse + dense rank lists.
- * 5. Zero external dependencies, pure Web Standards.
- *
- * @author Roedy Rustam <roedyrustam.id@gmail.com>
- * @copyright 2026 Roedy Rustam
- * @license MIT
- */
-/**
- * SinapsAI - In-Process AI Gateway & Control Plane
- * In-Process Knowledge Graph & GraphRAG Traversal Engine
- *
- * Implements:
- * 1. Zero-dependency in-memory graph representation (Adjacency List).
- * 2. Triples extraction (Subject - Predicate - Object).
- * 3. Multi-Hop BFS / DFS graph traversal and path scoring.
- * 4. Subgraph synthesis formatted for LLM system prompt injection.
- * 5. Integration with Hybrid RAG for multi-hop relational retrieval.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
@@ -9706,6 +10730,38 @@ var sinapsai = createSinapsAI;
  * 4. Multi-Signal Complexity Analysis & Adaptive Model Cascading (Tier 1/2/3).
  * 5. Dynamic Thinking Budget Allocation & Output Token Optimization.
  * 6. FinOps Token & USD Savings Telemetry.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Autonomous API Schema Drift & Argument Self-Healer
+ *
+ * Implements:
+ * 1. Fuzzy parameter alias matching (e.g. `query` vs `q` vs `searchTerm`, `userId` vs `user_id`).
+ * 2. Deep recursive type coercion (numeric strings, booleans, stringified JSON objects/arrays).
+ * 3. Schema drift detection with automatic injection of default values for missing required properties.
+ * 4. Upstream LLM provider error code translation and self-healing recommendation generator.
+ * 5. Zero external dependencies, pure Web Standards.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Universal Model Context Protocol (MCP) Client Ingestion Connector
+ *
+ * Implements:
+ * 1. External MCP Server discovery and tool ingestion via JSON-RPC 2.0.
+ * 2. Multi-transport support:
+ *    - 'http' / 'sse': Standard Web-compliant JSON-RPC over HTTP/SSE (Edge & Serverless compatible).
+ *    - 'stdio': Subprocess transport over stdin/stdout for Node.js / Bun / Desktop environments.
+ * 3. Automatic bidirectional conversion from external MCP tool definitions into
+ *    SinapsAI / OpenAI ToolDefinition instances.
+ * 4. Automatic tool name namespace prefixing (e.g. `github_create_issue` or `postgres_query`).
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

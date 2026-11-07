@@ -534,4 +534,119 @@ describe('AgentSwarm', () => {
       AgentWalletExceededError,
     );
   });
+
+  it('runs multiple specialist agents in parallel with aggregator synthesis (Fan-Out / Fan-In)', async () => {
+    // Mock response for Agent A (Security), Agent B (Performance), and Aggregator (Lead Architect)
+    let callIndex = 0;
+    const provider = {
+      id: 'mock-parallel',
+      name: 'Mock Parallel Provider',
+      isAvailable: async () => true,
+      calculateCost: () => 0.001,
+      generateContent: async () => {
+        callIndex++;
+        if (callIndex === 1) {
+          return {
+            id: 'res-security',
+            model: 'default',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    'Security Check: SQL injection and XSS defenses verified.',
+                },
+                finishReason: 'stop',
+              },
+            ],
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 15,
+              total_tokens: 25,
+            },
+          };
+        } else if (callIndex === 2) {
+          return {
+            id: 'res-perf',
+            model: 'default',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Perf Check: P99 latency is below 15ms.',
+                },
+                finishReason: 'stop',
+              },
+            ],
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 12,
+              total_tokens: 22,
+            },
+          };
+        } else {
+          return {
+            id: 'res-aggregator',
+            model: 'default',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    'Final Synthesis: System meets both strict security standards and 15ms P99 performance targets.',
+                },
+                finishReason: 'stop',
+              },
+            ],
+            usage: {
+              prompt_tokens: 40,
+              completion_tokens: 20,
+              total_tokens: 60,
+            },
+          };
+        }
+      },
+    };
+
+    const client = new SinapsClient({
+      providers: [provider as unknown as Provider],
+    });
+
+    const swarm = client.swarm({
+      agents: [
+        {
+          id: 'sec_agent',
+          name: 'Security Specialist',
+          role: 'AppSec',
+          instructions: 'Audit security.',
+        },
+        {
+          id: 'perf_agent',
+          name: 'Performance Specialist',
+          role: 'SRE',
+          instructions: 'Audit latency.',
+        },
+        {
+          id: 'lead_architect',
+          name: 'Lead Architect',
+          role: 'Architect',
+          instructions: 'Synthesize reports.',
+        },
+      ],
+    });
+
+    const parallelResult = await swarm.runParallel({
+      tasks: ['sec_agent', 'perf_agent'],
+      prompt: 'Review system design.',
+      aggregatorAgentId: 'lead_architect',
+    });
+
+    expect(parallelResult.branches.length).toBe(2);
+    expect(parallelResult.branches[0].status).toBe('success');
+    expect(parallelResult.branches[1].status).toBe('success');
+    expect(parallelResult.aggregated).toBe(true);
+    expect(parallelResult.aggregatorAgentId).toBe('lead_architect');
+    expect(parallelResult.content).toContain('Final Synthesis');
+    expect(parallelResult.totalSteps).toBe(3);
+  });
 });
