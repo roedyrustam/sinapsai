@@ -162,6 +162,7 @@ async function main() {
                 content:
                   'Recommendation: Deploy SQLite with Write-Ahead Logging (WAL) and Litestream replication for edge persistence.',
               },
+              finishReason: 'stop',
             },
           ],
         };
@@ -178,6 +179,7 @@ async function main() {
                 content:
                   'We recommend SQLite with WAL mode and continuous streaming replication to S3 via Litestream.',
               },
+              finishReason: 'stop',
             },
           ],
         };
@@ -194,6 +196,7 @@ async function main() {
                 content:
                   'Recommendation: Deploy a managed multi-node Spanner database cluster with globally distributed consensus.',
               },
+              finishReason: 'stop',
             },
           ],
         };
@@ -209,6 +212,7 @@ async function main() {
               content:
                 'Synthesized Verdict: For edge environments, SQLite WAL with Litestream delivers optimal latency and zero operational overhead, while acknowledging Spanner as an alternative for global multi-region write scale.',
             },
+            finishReason: 'stop',
           },
         ],
       };
