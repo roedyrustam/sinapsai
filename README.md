@@ -1586,6 +1586,144 @@ console.log('Grounding passed:', grounding.passed);        // true
 console.log('Escalated:', grounding.escalated);            // false if passed on first try
 ```
 
+### 41. AWS Bedrock & Azure OpenAI Enterprise Cloud Providers
+
+Native zero-dependency enterprise cloud integrations with automatic tool mapping, streaming, and IAM/Entra ID authentication:
+
+```typescript
+import { SinapsClient, AwsBedrockProvider, AzureOpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    // AWS Bedrock: Pure SigV4 signing over Web Crypto (crypto.subtle)
+    new AwsBedrockProvider({
+      region: 'us-east-1',
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      defaultModel: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+    }),
+    // Azure OpenAI: Custom deployments & Entra ID or API key auth
+    new AzureOpenAiProvider({
+      resourceName: 'my-company-azure',
+      deploymentId: 'gpt-4o-deployment',
+      apiKey: process.env.AZURE_OPENAI_API_KEY!,
+    }),
+  ],
+});
+
+const res = await client.chat.completions.create({
+  model: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+  messages: [{ role: 'user', content: 'Hello enterprise cloud LLM!' }],
+});
+console.log(res.choices[0].message.content);
+```
+
+### 42. Steganography Firewall 2.0 & Hidden Injection Neutralization
+
+Neutralizes invisible prompt injection attacks using Zero-Width characters, ASCII tag smuggling, and Bidi direction overrides with automatic NFKC normalization:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  securityGuardrails: {
+    enabled: true,
+    action: 'block', // 'block' | 'sanitize' | 'warn'
+  },
+});
+
+// A prompt with invisible zero-width spaces (\u200B) or hidden tag codes (\uE0001)
+// is intercepted, normalized, or blocked before reaching the upstream LLM.
+```
+
+### 43. Parallel Multi-Agent Swarm with Atomic Deep-Merge
+
+Execute specialist subagents in parallel with deterministic context deep-merge, preventing state collision during concurrent fan-out:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+});
+
+const swarm = client.swarm({
+  agents: [
+    { id: 'researcher', name: 'Researcher', instructions: 'Research topics.' },
+    { id: 'coder', name: 'Coder', instructions: 'Write clean code.' },
+  ],
+});
+
+const result = await swarm.runParallel({
+  tasks: [
+    { agentId: 'researcher', prompt: 'Analyze requirements for caching.' },
+    { agentId: 'coder', prompt: 'Implement caching interface.' },
+  ],
+  arrayStrategy: 'union', // Deduplicates arrays across branches
+});
+
+console.log(result.synthesizedContent);
+```
+
+### 44. Actor-Critic Self-Correcting Consensus Swarm Loop
+
+Automated iterative self-refinement where a worker agent drafts a solution and a reviewer agent critiques and grades it until approved:
+
+```typescript
+import { SinapsClient, AnthropicProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+
+const swarm = client.swarm({
+  agents: [
+    { id: 'worker', name: 'Worker', instructions: 'Implement robust code.' },
+    { id: 'reviewer', name: 'Reviewer', instructions: 'Review against strict requirements and score 0-100.' },
+  ],
+});
+
+const result = await swarm.runActorCritic({
+  workerAgentId: 'worker',
+  criticAgentId: 'reviewer',
+  task: 'Write a zero-dependency Luhn algorithm validator in TypeScript.',
+  minScore: 90,
+  maxIterations: 3,
+  onIteration: (iteration, draft, review) => {
+    console.log(`[Cycle ${iteration}] Score: ${review.score}/100 - Approved: ${review.approved}`);
+  },
+});
+
+console.log('Final Solution:\n', result.finalSolution);
+```
+
+### 45. Streaming Durable Workflows & Checkpoint Deletion (GDPR / UU PDP)
+
+Subscribe to live workflow execution steps and permanently purge state to comply with Right-to-be-Forgotten regulations:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+});
+
+// 1. Subscribe to live workflow step events (streaming over WebSockets/SSE)
+client.workflows.onStep((event) => {
+  console.log(`[Workflow ${event.workflowId}] Step: ${event.step.name} (${event.step.status})`);
+});
+
+// 2. Start durable workflow
+const state = await client.workflows.startWorkflow('user-session-123', { userId: 'u_999' });
+
+// 3. Right-to-be-Forgotten: Purge workflow checkpoint permanently from storage
+await client.workflows.deleteWorkflow('user-session-123');
+```
+
 ---
 
 ## 🤖 AI & LLM Code Generation Guidelines
@@ -1597,13 +1735,14 @@ When generating code or scaffolding projects using **SinapsAI**, AI models and c
    - Never hallucinate subpackages like `@sinapsai/core`, `sinapsai/router`, or `sinapsai-proxy`.
 2. **Standard Client Instantiation**:
    - Instantiate `new SinapsClient({ providers: [ ... ], strategy?: 'adaptive' })`.
-   - Provide concrete native provider classes: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
+   - Provide concrete native provider classes: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `AwsBedrockProvider`, `AzureOpenAiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
 3. **Execution Methods**:
    - Non-Streaming: `const res = await client.chat.completions.create({ model, messages })`.
    - Streaming: `const stream = await client.chat.completions.create({ model, messages, stream: true })` and consume via `for await (const chunk of stream)`.
    - Embeddings: `const emb = await client.embeddings.create({ model, input })`.
    - Autonomous Agents: `await client.runWithTools({ model, messages, tools, maxSteps })`.
    - Multi-Agent Swarms: `client.swarm({ agents: [ ... ] })`.
+   - Actor-Critic Swarms: `client.swarm.runActorCritic({ workerAgentId, criticAgentId, task })`.
 4. **Zero-Dependency Guarantee**:
    - SinapsAI is 100% in-process. Do NOT tell users to start a Docker container, Python proxy, or external Redis unless they explicitly choose distributed storage.
 
@@ -1616,6 +1755,8 @@ When generating code or scaffolding projects using **SinapsAI**, AI models and c
 | **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `promptCaching`, `thinkingBudget` (`number \| 'auto'`) |
 | **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget` (`number \| 'auto'`), `cachedContent`, `googleSearch`, `codeExecution`, `enableAvailabilityFallback`, `GEMINI_MODELS`, `fetchAvailableModels()` |
+| **AWS Bedrock** | `AwsBedrockProvider` | `region`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` (Converse API + pure SigV4 signer) |
+| **Azure OpenAI** | `AzureOpenAiProvider` | `resourceName`, `deploymentId`, `apiKey`, `entraToken`, `apiVersion`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning tokens (`reasoning_content`) |
 | **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `thinkingBudget` (`number \| 'auto'`), `XAI_MODELS` |
 | **Cohere** | `CohereProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `COHERE_MODELS` |

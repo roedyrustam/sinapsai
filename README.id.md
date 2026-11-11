@@ -1590,6 +1590,144 @@ console.log('Lulus grounding:', grounding.passed);     // true
 console.log('Tereskalasi:', grounding.escalated);       // false jika berhasil di percobaan pertama
 ```
 
+### 41. AWS Bedrock & Azure OpenAI Enterprise Cloud Providers
+
+Integrasi cloud enterprise native zero-dependency dengan pemetaan tool otomatis, streaming SSE, dan autentikasi IAM/Entra ID:
+
+```typescript
+import { SinapsClient, AwsBedrockProvider, AzureOpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    // AWS Bedrock: Penandatanganan murni SigV4 dengan Web Crypto (crypto.subtle)
+    new AwsBedrockProvider({
+      region: 'us-east-1',
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      defaultModel: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+    }),
+    // Azure OpenAI: Deployment kustom & autentikasi Entra ID atau API key
+    new AzureOpenAiProvider({
+      resourceName: 'my-company-azure',
+      deploymentId: 'gpt-4o-deployment',
+      apiKey: process.env.AZURE_OPENAI_API_KEY!,
+    }),
+  ],
+});
+
+const res = await client.chat.completions.create({
+  model: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+  messages: [{ role: 'user', content: 'Halo cloud LLM enterprise!' }],
+});
+console.log(res.choices[0].message.content);
+```
+
+### 42. Steganography Firewall 2.0 & Netralisasi Injeksi Tersembunyi
+
+Menetralisir serangan prompt injection tak kasat mata menggunakan karakter Zero-Width, penyelundupan tag ASCII, dan pembalikan arah teks Bidi dengan normalisasi otomatis Unicode NFKC:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+  securityGuardrails: {
+    enabled: true,
+    action: 'block', // 'block' | 'sanitize' | 'warn'
+  },
+});
+
+// Prompt dengan spasi tak terlihat (\u200B) atau tag tersembunyi (\uE0001)
+// dicegat, dinormalisasi, atau diblokir sebelum mencapai model upstream.
+```
+
+### 43. Multi-Agent Swarm Paralel dengan Deep-Merge Atomik
+
+Mengeksekusi sub-agen spesialis secara paralel serentak dengan deep-merge konteks deterministik, mencegah tabrakan mutasi state bersama:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+});
+
+const swarm = client.swarm({
+  agents: [
+    { id: 'researcher', name: 'Researcher', instructions: 'Riset topik.' },
+    { id: 'coder', name: 'Coder', instructions: 'Tulis kode bersih.' },
+  ],
+});
+
+const result = await swarm.runParallel({
+  tasks: [
+    { agentId: 'researcher', prompt: 'Analisis kebutuhan sistem caching.' },
+    { agentId: 'coder', prompt: 'Implementasikan interface caching.' },
+  ],
+  arrayStrategy: 'union', // Deduplikasi array antar cabang paralel
+});
+
+console.log(result.synthesizedContent);
+```
+
+### 44. Loop Swarm Konsensus Koreksi-Mandiri Actor-Critic
+
+Pola iterasi kolaboratif mandiri di mana agen worker menyusun solusi awal dan agen critic/reviewer menguji serta memberikan skor kualitas hingga disetujui:
+
+```typescript
+import { SinapsClient, AnthropicProvider, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+});
+
+const swarm = client.swarm({
+  agents: [
+    { id: 'worker', name: 'Worker', instructions: 'Tulis kode tangguh dan bersih.' },
+    { id: 'reviewer', name: 'Reviewer', instructions: 'Review kepatuhan kode dan beri skor 0-100.' },
+  ],
+});
+
+const result = await swarm.runActorCritic({
+  workerAgentId: 'worker',
+  criticAgentId: 'reviewer',
+  task: 'Tulis fungsi validator algoritma Luhn zero-dependency di TypeScript.',
+  minScore: 90,
+  maxIterations: 3,
+  onIteration: (iteration, draft, review) => {
+    console.log(`[Siklus ${iteration}] Skor: ${review.score}/100 - Disetujui: ${review.approved}`);
+  },
+});
+
+console.log('Solusi Final:\n', result.finalSolution);
+```
+
+### 45. Streaming Durable Workflows & Penghapusan Checkpoint (UU PDP / GDPR)
+
+Berlangganan event langkah alur kerja live dan hapus permanen seluruh checkpoint untuk mematuhi regulasi hak penghapusan data:
+
+```typescript
+import { SinapsClient, OpenAiProvider } from 'sinapsai';
+
+const client = new SinapsClient({
+  providers: [new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! })],
+});
+
+// 1. Berlangganan event alur kerja real-time (streaming via WebSockets/SSE)
+client.workflows.onStep((event) => {
+  console.log(`[Workflow ${event.workflowId}] Langkah: ${event.step.name} (${event.step.status})`);
+});
+
+// 2. Mulai alur kerja tahan-restart
+const state = await client.workflows.startWorkflow('user-session-123', { userId: 'u_999' });
+
+// 3. Hak Hapus Data: Hapus checkpoint alur kerja permanen dari storage
+await client.workflows.deleteWorkflow('user-session-123');
+```
+
 ---
 
 ## 🤖 Panduan Pembuatan Kode untuk Model AI & Copilot
@@ -1601,13 +1739,14 @@ Saat menghasilkan kode atau membuat scaffold proyek menggunakan **SinapsAI**, mo
    - Jangan membuat subpackage yang tidak ada seperti `@sinapsai/core`, `sinapsai/router`, atau `sinapsai-proxy`.
 2. **Instansiasi Client Standar**:
    - Gunakan `new SinapsClient({ providers: [ ... ], strategy?: 'adaptive' })`.
-   - Gunakan kelas provider native: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
+   - Gunakan kelas provider native: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `AwsBedrockProvider`, `AzureOpenAiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
 3. **Metode Eksekusi**:
    - Non-Streaming: `const res = await client.chat.completions.create({ model, messages })`.
    - Streaming: `const stream = await client.chat.completions.create({ model, messages, stream: true })` dan konsumsi dengan `for await (const chunk of stream)`.
    - Embeddings: `const emb = await client.embeddings.create({ model, input })`.
    - Agen Otonom: `await client.runWithTools({ model, messages, tools, maxSteps })`.
    - Multi-Agent Swarm: `client.swarm({ agents: [ ... ] })`.
+   - Actor-Critic Swarm: `client.swarm.runActorCritic({ workerAgentId, criticAgentId, task })`.
 4. **Jaminan Zero-Dependency**:
    - SinapsAI berjalan 100% in-process. Jangan meminta pengguna menjalankan container Docker, proxy Python, atau Redis eksternal kecuali mereka secara eksplisit memilih penyimpanan terdistribusi.
 
@@ -1620,6 +1759,8 @@ Saat menghasilkan kode atau membuat scaffold proyek menggunakan **SinapsAI**, mo
 | **OpenAI** | `OpenAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **Anthropic Claude** | `AnthropicProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `promptCaching`, `thinkingBudget` (`number \| 'auto'`) |
 | **Google Gemini** | `GeminiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `safetySettings`, `thinkingBudget` (`number \| 'auto'`), `cachedContent`, `googleSearch`, `codeExecution`, `enableAvailabilityFallback`, `GEMINI_MODELS`, `fetchAvailableModels()` |
+| **AWS Bedrock** | `AwsBedrockProvider` | `region`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` (Converse API + pure SigV4 signer) |
+| **Azure OpenAI** | `AzureOpenAiProvider` | `resourceName`, `deploymentId`, `apiKey`, `entraToken`, `apiVersion`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
 | **DeepSeek** | `DeepSeekProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, token penalaran (`reasoning_content`) |
 | **xAI (Grok)** | `XAiProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `reasoningEffort`, `thinkingBudget` (`number \| 'auto'`), `XAI_MODELS` |
 | **Cohere** | `CohereProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, `COHERE_MODELS` |

@@ -178,6 +178,17 @@ run();
 1. **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'`)**: Skoring cerdas multi-faktor memadukan keandalan (Laplace-smoothed reliability), latensi bergerak (moving-average latency), dan estimasi biaya per request secara real-time.
 2. **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang menyamarkan data sensitif sebelum dikirim ke LLM dan secara otomatis mengembalikan nilai asli pada respons non-streaming.
 
+### Fitur Utama v3.2.0 (Actor-Critic Consensus Swarm, Streaming Workflows & Privacy Deletion)
+1. **Actor-Critic Self-Correcting Consensus Swarm Loop (`client.swarm.runActorCritic`, `AgentSwarm.runActorCritic`)**:
+   - Pola kolaborasi iteratif mandiri antara dua agen terspesialisasi: Agen Worker/Implementer menyusun draft solusi kode/teks awal, dan Agen Reviewer/Critic mengevaluasi kepatuhan kualitas serta memberikan skor kebenaran [0–100].
+   - Revisi berulang otomatis berpandukan umpan balik terstruktur hingga tercapai status `APPROVED` atau batas skor (`minScore`), dengan pelaporan event siklus live (`onIteration`).
+2. **Streaming Durable Workflows (`DurableWorkflowEngine.onStep`)**:
+   - Mekanisme langganan event asinkronus (`WorkflowStepEvent`) per langkah eksekusi alur kerja untuk penyiaran status real-time langsung ke WebSocket atau Server-Sent Events (SSE).
+3. **Pembersihan Checkpoint Permanen (`DurableWorkflowEngine.deleteWorkflow`)**:
+   - Penghapusan instan seluruh state dan jejak riwayat checkpoint dari `StateStorage` untuk kepatuhan penuh terhadap UU PDP No. 27/2022 dan GDPR Art. 17 (*Right to be Forgotten*).
+4. **Contoh 45 (`examples/45-actor-critic-consensus-swarm.ts`)**:
+   - Demonstrasi praktis pembuatan modul kalkulasi pajak dengan loop Actor-Critic dan langganan event alur kerja streaming.
+
 ### Fitur Utama v3.1.0 (Enterprise Cloud Providers, Steganography Firewall & Swarm Deep-Merge)
 1. **AWS Bedrock Provider (`AwsBedrockProvider`)**:
    - Integrasi Converse API (`/model/{modelId}/converse`) untuk Claude 3.7/3.5, Amazon Nova (Pro/Lite/Micro), Meta Llama 3.3/3.1, dan Mistral Large.
@@ -239,9 +250,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 573/573 unit & integration tests lulus di 55 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
+- **Pengujian Komprehensif:** 575/575 unit & integration tests lulus di 55 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Actor-Critic Swarm Loop, Streaming Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **44 Contoh Siap Pakai:** Seluruh 44 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
+- **45 Contoh Siap Pakai:** Seluruh 45 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

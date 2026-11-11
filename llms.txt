@@ -1,17 +1,20 @@
 # SinapsAI (In-Process AI Gateway & Control Plane)
 
-> Zero-dependency in-process AI Gateway and Control Plane for TypeScript, Node.js 18+, Bun, Deno, and Edge runtimes (Cloudflare Workers, Vercel Edge). Connects to 10 top LLM providers through a unified OpenAI-compatible API with in-memory circuit breakers, multi-strategy dynamic routing, speculative hedged requests, PII/security guardrails, KV-cache tracking, MCP tool bridge, and multi-agent swarm with A2A handoff.
+> Zero-dependency in-process AI Gateway and Control Plane for TypeScript, Node.js 18+, Bun, Deno, and Edge runtimes (Cloudflare Workers, Vercel Edge). Connects to 12 top LLM providers through a unified OpenAI-compatible API with in-memory circuit breakers, multi-strategy dynamic routing, speculative hedged requests, PII/security guardrails, KV-cache tracking, MCP tool bridge, and multi-agent swarm with A2A handoff.
 
 - **Author**: Roedy Rustam <roedyrustam.id@gmail.com>
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
 - **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits
-- **Test Suite**: 542 unit & integration tests passing across 49 test suites (100% pass rate)
+- **Test Suite**: 575 unit & integration tests passing across 55 test suites (100% pass rate)
 - **Quality**: 100% Biome Clean, TypeScript strict mode
 
 ## Core Capabilities
 
-- **10 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **12 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock (SigV4 Web Crypto), Azure OpenAI (Entra ID & API Key), DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **Actor-Critic Consensus Swarm Loop (`client.swarm.runActorCritic`)**: Automated self-refining loop between worker and reviewer agents with score thresholds and live cycle callbacks.
+- **Streaming Durable Workflows & Right-to-be-Forgotten Checkpoint Deletion (`client.workflows`)**: Real-time workflow step event streaming (`onStep`) and permanent checkpoint purging (`deleteWorkflow`) compliant with UU PDP No. 27/2022 and GDPR Art. 17.
+- **Steganography Firewall 2.0 (`securityGuardrails`)**: Real-time neutralization of hidden Zero-Width characters, ASCII tag smuggling, and Bidi text direction overrides with NFKC normalization.
 - **Embedded Web UI & Telemetry Dashboard (`client.dashboard` / `sinapsai dashboard`)**: Zero-dependency in-process HTTP dashboard on port 3140 with real-time KPI metrics, provider status, canary prober states, rolling request history, and REST API.
 - **Hallucination & Faithfulness Sentinel (`createGroundingVerified` / `client.sentinel`)**: In-process atomic claim extraction, RAG grounding verification gate, faithfulness scoring (0.0 to 1.0), and automatic escalation to stronger models.
 - **Active Canary Health Probing (`client.canary`)**: Background heartbeat probes preventing tail latency spikes by tripping circuit breakers before user traffic arrives.
@@ -20,7 +23,7 @@
 - **In-Process Episodic Vector Memory (`client.memory`)**: Long-term fact store with multi-tenant user isolation, subword n-gram cosine matching, and dynamic prompt injection (`injectIntoMessages`).
 - **In-Process Hybrid RAG (`client.rag`)**: Okapi BM25 keyword precision + dense vector cosine similarity combined via Reciprocal Rank Fusion (RRF) with semantic paragraph chunking.
 - **Real-Time Multimodal Voice & WebSocket Client (`client.realtime.connect`)**: Zero-dependency native WebSocket connectivity to OpenAI Realtime and Gemini Live with bi-directional audio/text delta streaming.
-- **Agent Swarm with Micro-Economy Wallets (`client.swarm`)**: Role-based autonomous specialists, A2A handoffs (`transfer_to_<agent>`), hard USD & token budget wallets per agent (`SwarmAgentWallet`), and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
+- **Agent Swarm with Micro-Economy Wallets (`client.swarm`)**: Role-based autonomous specialists, A2A handoffs (`transfer_to_<agent>`), parallel fan-out with atomic context deep-merge (`deepMergeContext`), hard USD & token budget wallets per agent (`SwarmAgentWallet`), and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
 - **Autonomous MCP Tool Self-Healing (`coerceToolArguments`, `selfHealingHint`)**: In-process Model Context Protocol tool registry, automatic argument coercion according to JSON Schema, and schema-guided self-healing error hints for autonomous agent loops (`runWithTools`, `runWithToolsStream`).
 - **6 Dynamic Routing Strategies**: `adaptive` (smart-hybrid multi-factor reliability/latency/cost), `lowest-cost` (dual-pricing prompt vs completion tokens), `lowest-latency` (moving average latency with auto-probing), `failover` (strict priority), `load-balance` (round-robin).
 - **In-Process Circuit Breaker**: Anti-cascading fault isolation (`CLOSED` -> `OPEN` -> `HALF_OPEN`) with anti-thundering-herd strict single canary probing.
@@ -38,7 +41,7 @@
   - Multi-signal complexity analysis & 3-tier model cascading (`tier1: fast/cheap`, `tier2: standard`, `tier3: deep reasoning`).
   - Dynamic thinking budget allocation & FinOps savings telemetry (`client.getMetrics().llmoMetrics`).
 - **Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Official `LanguageModelV1` and `EmbeddingModelV1` implementations supporting `streamText`, `generateText`, and `embed`.
-- **Telemetry Exporters**: Native Prometheus / OpenMetrics (`exportPrometheusMetrics`) and OpenTelemetry OTLP JSON (`exportOtelMetrics`).
+- **Telemetry Exporters**: Native Prometheus / OpenMetrics (`exportPrometheusMetrics`), OpenTelemetry OTLP JSON (`exportOtelMetrics`), and OpenTelemetry GenAI Semantic Conventions v1.30+ distributed traces (`exportOtelTraces`).
 
 ## Installation
 
@@ -111,4 +114,4 @@ for await (const chunk of stream) {
 - Complete English README: [README.md](README.md)
 - Complete Indonesian README: [README.id.md](README.id.md)
 - Version Roadmap: [ROADMAP.md](ROADMAP.md)
-- 31 Executable Examples: [examples/](examples/)
+- 45 Executable Examples: [examples/](examples/)

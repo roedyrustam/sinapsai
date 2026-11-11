@@ -1,4 +1,4 @@
-# Entity & Architecture Relationship Diagram — SinapsAI v3.0.0
+# Entity & Architecture Relationship Diagram — SinapsAI v3.2.0
 
 Karena SinapsAI berjalan secara in-process sebagai SDK/Paket NPM (tanpa ketergantungan database eksternal mandatory), diagram ini merepresentasikan topologi relasi antar-komponen modul inti (*Aggregate Roots & Bounded Contexts*), struktur manajemen memori kognitif (*In-Process State*), serta adaptasi penyimpanan terdistribusi.
 
@@ -31,6 +31,7 @@ classDiagram
         +runWithTools(options)
         +runWithToolsStream(options)
         +swarm(options)
+        +runActorCritic(options)
         +checkHealth(options)
         +getMetrics()
         +getCircuitBreakerStatus()
@@ -162,6 +163,7 @@ classDiagram
         +run(options)
         +runStream(options)
         +runParallel(options)
+        +runActorCritic(options)
         +exportAgentCards(baseUrl)
     }
 
@@ -177,10 +179,12 @@ classDiagram
         -StateStorage storage
         +startWorkflow(id, initialData)
         +recordStep(id, step)
+        +onStep(listener)
         +suspendForApproval(id, request)
         +resolveApproval(id, resolution)
         +resume(id)
         +getCheckpoint(id)
+        +deleteWorkflow(id)
     }
 
     class McpToolBridge {
@@ -217,6 +221,8 @@ classDiagram
     Provider <|.. OpenAiProvider : implements
     Provider <|.. AnthropicProvider : implements
     Provider <|.. GeminiProvider : implements
+    Provider <|.. AwsBedrockProvider : implements
+    Provider <|.. AzureOpenAiProvider : implements
     Provider <|.. DeepSeekProvider : implements
     Provider <|.. GroqProvider : implements
     Provider <|.. MistralProvider : implements

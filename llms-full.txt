@@ -1,6 +1,6 @@
 # SinapsAI — Comprehensive Technical Specification & Full LLM Reference (llms-full.txt)
 
-> **Version**: 2.12.0  
+> **Version**: 3.2.0  
 > **Author**: Roedy Rustam <roedyrustam.id@gmail.com>  
 > **Copyright**: 2026 Roedy Rustam. All Rights Reserved.  
 > **License**: MIT  
@@ -18,7 +18,7 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
 2. **Sub-5ms Execution Overhead**: In-memory routing, circuit breaker evaluation, guardrail scanning, and token estimation execute with <5ms overhead (<0.5ms for cache hits).
 3. **100% In-Process Privacy**: No payloads, system prompts, API keys, or telemetry data are ever routed through external third-party telemetry servers.
 4. **Resilience by Default**: Built-in automated failover, hierarchical model-level fallback chains, exponential retries with jitter, and speculative hedged requests to crush P99 tail latencies.
-5. **Universal Standardization**: Connects to 10 major LLM providers using standard OpenAI-compatible Chat Completions, Embeddings, and Function Calling format.
+5. **Universal Standardization**: Connects to 12 major LLM providers using standard OpenAI-compatible Chat Completions, Embeddings, and Function Calling format.
 
 ---
 
@@ -32,6 +32,7 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
   │              SinapsClient (Control Plane)              │
   ├────────────────────────────────────────────────────────┤
   │ 1. SecurityGuardrails (Injection, Jailbreak, ReDoS)    │
+  │    + Steganography Firewall 2.0 (Zero-Width, Tags)     │
   │ 2. PIIGuardrails (Reversible Tokenization Vault)       │
   │ 3. ContextCompressor (Sliding-Window / Middle-Out)     │
   │ 4. LlmOptimizer (LLMO: Minify, KV-Cache, Cascade)      │
@@ -58,12 +59,14 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
             ┌────────────────┴────────────────┐
             ▼                                 ▼
    [ Native Providers ]              [ Advanced Modules ]
-   - OpenAI                          - McpToolBridge (MCP JSON-RPC)
+   - OpenAI                          - McpToolBridge & DriftHealer
    - Anthropic Claude                - AgentSwarm & A2A Handoff
-   - Google Gemini                   - GeminiAgentBooster
-   - DeepSeek                        - sinapsai/ai-sdk Adapter
-   - Groq LPU                        - OpenTelemetry / Prometheus
-   - OpenRouter
+   - Google Gemini                   - Actor-Critic Swarm Loop
+   - AWS Bedrock (SigV4)             - CognitiveBrain (Tri-Memory)
+   - Azure OpenAI (Entra ID)         - DurableWorkflowEngine
+   - DeepSeek                        - GeminiAgentBooster
+   - Groq LPU                        - sinapsai/ai-sdk Adapter
+   - OpenRouter                      - OpenTelemetry / Prometheus
    - Mistral AI
    - Ollama Local
    - xAI Grok
@@ -399,35 +402,35 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 
 ---
 
-## 8. Catalog of All 31 Examples
+## 8. Catalog of All 45 Examples
 
 | Example File | Description |
 |---|---|
-| `examples/01-basic-chat.ts` | Basic Chat Completions with OpenAI-compatible interface |
-| `examples/02-streaming-chat.ts` | Real-time Server-Sent Events (SSE) streaming via async iterators |
-| `examples/03-multi-provider-failover.ts` | Circuit breaker tripping and automatic provider failover |
-| `examples/04-round-robin-load-balancer.ts` | Multi-key and multi-provider round-robin load balancing |
-| `examples/05-lowest-cost-routing.ts` | Dual-pricing cost optimization per input/output token |
-| `examples/06-tool-calling.ts` | OpenAI-compatible function calling & schema mapping |
-| `examples/07-structured-output.ts` | Strict JSON schema extraction and structured output validation |
-| `examples/08-edge-runtime-cloudflare.ts` | Deployment in Cloudflare Workers and Vercel Edge runtimes |
-| `examples/09-unified-embeddings.ts` | Vector embeddings with multi-provider failover and caching |
-| `examples/10-adaptive-rate-limiting.ts` | Proactive rate-limit throttling from response headers |
-| `examples/11-in-process-telemetry.ts` | Cumulative metrics, latency averages, and USD spend tracking |
+| `examples/01-failover-quickstart.ts` | Basic Chat Completions with OpenAI-compatible interface and failover |
+| `examples/02-streaming-sse.ts` | Real-time Server-Sent Events (SSE) streaming via async iterators |
+| `examples/03-load-balancing.ts` | Multi-key and multi-provider round-robin load balancing |
+| `examples/04-custom-provider-ollama.ts` | Custom provider implementation for Ollama local inference |
+| `examples/05-edge-cloudflare-worker.ts` | Deployment in Cloudflare Workers and Vercel Edge runtimes |
+| `examples/06-deepseek-reasoner.ts` | DeepSeek-R1 deep reasoning token extraction (`reasoning_content`) |
+| `examples/07-embeddings-failover.ts` | Vector embeddings with multi-provider failover and caching |
+| `examples/08-metrics-and-rate-limiting.ts` | Proactive rate-limit throttling from response headers |
+| `examples/09-circuit-breaker-and-mistral.ts` | Circuit breaker tripping and Mistral AI integration |
+| `examples/10-openrouter-free-tier.ts` | OpenRouter free models tier with $0 cost tracking |
+| `examples/11-gemini-models-and-thinking.ts` | Google Gemini models, thinking budget, and MRL embeddings |
 | `examples/12-groq-lightning-fast-reasoning.ts` | Groq LPU execution with deep reasoning extraction |
 | `examples/13-superintelligence-latency-and-reasoning.ts` | Dynamic lowest-latency routing and universal reasoning budget |
 | `examples/14-semantic-caching-and-fallbacks.ts` | Cosine similarity semantic caching and model fallbacks |
 | `examples/15-concurrent-batch-processing.ts` | Fail-soft high-throughput concurrent batch worker pool |
 | `examples/16-vercel-ai-sdk-adapter.ts` | Official Vercel AI SDK (`ai`) integration |
-| `examples/17-distributed-storage-adapters.ts` | Redis, Cloudflare KV, and Cloudflare D1 state synchronization |
+| `examples/17-distributed-storage-and-pii-guardrails.ts` | Redis, Cloudflare KV, and D1 state synchronization & PII redaction |
 | `examples/18-adaptive-smart-hybrid-routing.ts` | Multi-factor Laplace reliability, latency, and cost routing |
 | `examples/19-reversible-pii-vault.ts` | In-process PII detection and reversible tokenization vault |
-| `examples/20-security-guardrails-prompt-injection.ts` | Prompt injection, jailbreak, and delimiter hijacking defense |
-| `examples/21-virtual-model-aliases.ts` | Dynamic virtual model alias resolution (`fast`, `smart`) |
-| `examples/22-streaming-tool-accumulator.ts` | Reconstruction of streamed SSE chunks into complete objects |
-| `examples/23-context-compression-and-trimming.ts` | Dynamic conversation pruning with atomic tool preservation |
-| `examples/24-finops-budget-guardrails.ts` | Hard USD and token spending caps with blocking errors |
-| `examples/25-speculative-hedged-requests.ts` | Speculative hedging to eliminate P99 tail latencies |
+| `examples/20-streaming-tool-accumulator-and-json.ts` | Reconstruction of streamed SSE chunks into complete objects & fault-tolerant JSON |
+| `examples/21-model-aliases-and-health-checks.ts` | Dynamic virtual model alias resolution (`fast`, `smart`) and health probes |
+| `examples/22-security-prompt-injection-defense.ts` | Prompt injection, jailbreak, and delimiter hijacking defense |
+| `examples/23-context-compression-and-budget.ts` | Dynamic conversation pruning with atomic tool preservation & FinOps budget |
+| `examples/24-xai-and-cohere-providers.ts` | First-class integration for xAI Grok and Cohere v2 |
+| `examples/25-hedged-requests-tail-latency.ts` | Speculative hedging to eliminate P99 tail latencies |
 | `examples/26-gateway-rate-limiting-and-metrics-export.ts` | Sliding-window RPM/TPM and Prometheus/OpenTelemetry export |
 | `examples/27-mcp-tool-bridge-and-agent-loop.ts` | In-process MCP tool bridge and autonomous agent loop |
 | `examples/28-gemini-agent-booster-and-streaming-agent.ts` | Dynamic thinking budget allocation & streaming MCP agent |
@@ -438,13 +441,23 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 | `examples/33-episodic-memory-and-context-injection.ts` | Long-term episodic vector memory with tenant isolation and prompt enrichment |
 | `examples/34-hybrid-rag-bm25-and-vector.ts` | In-process Hybrid RAG with Okapi BM25, dense vector cosine, and Reciprocal Rank Fusion |
 | `examples/35-realtime-voice-and-websocket.ts` | Realtime multimodal voice and WebSocket client for OpenAI Realtime and Gemini Live |
+| `examples/36-schema-builder-and-type-safe-tools.ts` | Zero-dependency type-safe schema builder (`s`) and automatic JSON schema mapping |
+| `examples/37-in-process-graph-rag.ts` | In-process Knowledge Graph, triple extraction, and GraphRAG multi-hop retrieval |
+| `examples/38-durable-agent-workflows.ts` | Resilient durable agent workflows with checkpoints and Human-in-the-Loop suspension |
+| `examples/39-llm-evals-and-faithfulness.ts` | In-process LLM evals, claim faithfulness scoring, and toxicity auditing |
+| `examples/40-cognitive-brain-and-parallel-swarm.ts` | Unified Cognitive Brain (Tri-Memory Fusion) and parallel subagent swarm with Map-Reduce |
+| `examples/41-mcp-client-ingestion-and-drift-healer.ts` | Universal external MCP client ingestion and autonomous schema drift healer |
+| `examples/42-opentelemetry-genai-tracing-and-confidence-cascading.ts` | OpenTelemetry GenAI Semantic Conventions v1.30+ distributed tracing and confidence cascading |
+| `examples/43-aws-bedrock-and-azure-openai.ts` | Enterprise cloud providers: AWS Bedrock SigV4 Converse API and Azure OpenAI Service |
+| `examples/44-steganography-firewall-and-parallel-merge.ts` | Steganography Firewall 2.0 (Zero-Width, ASCII tags) and parallel context deep-merge |
+| `examples/45-actor-critic-consensus-swarm.ts` | Actor-Critic self-correcting consensus swarm loop and streaming durable workflows |
 
 ---
 
 ## 9. Verification & Quality Metrics
 
-- **Total Test Suites**: 40
-- **Total Unit & Integration Tests**: 461 passing (100% pass rate)
+- **Total Test Suites**: 55
+- **Total Unit & Integration Tests**: 575 passing (100% pass rate)
 - **Linter Status**: 100% compliant with Biome v2 (0 errors, 0 warnings)
 - **TypeScript**: Strict mode with declarations emitted
 - **Runtime Dependencies**: `0` (Zero external dependencies)
