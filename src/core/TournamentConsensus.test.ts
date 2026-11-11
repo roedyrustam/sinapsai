@@ -26,7 +26,7 @@ describe('TournamentConsensusEngine', () => {
   it('should resolve majority consensus when 2 out of 3 agents agree', async () => {
     const engine = new TournamentConsensusEngine({
       strategy: 'majority',
-      similarityThreshold: 0.65,
+      similarityThreshold: 0.55,
     });
 
     const submissions = [

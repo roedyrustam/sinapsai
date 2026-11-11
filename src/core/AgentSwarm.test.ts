@@ -872,4 +872,112 @@ describe('AgentSwarm', () => {
     expect(dpoRecords[0].scoreRejected).toBe(0.3);
     expect(dpoRecords[0].critique).toContain('subtracts instead of adding');
   });
+
+  it('runs multi-model tournament deliberation with voting and synthesis', async () => {
+    const responses: UnifiedApiResponse[] = [
+      // 1. agent_a output
+      {
+        id: 'resp-1',
+        model: 'model-a',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content:
+                'Use PostgreSQL with pgvector for high performance vector search and relational queries.',
+            },
+          },
+        ],
+        usage: { promptTokens: 20, completionTokens: 15, totalTokens: 35 },
+      },
+      // 2. agent_b output (aligned with agent_a)
+      {
+        id: 'resp-2',
+        model: 'model-b',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content:
+                'PostgreSQL with pgvector extension is the recommended solution for hybrid vector search.',
+            },
+          },
+        ],
+        usage: { promptTokens: 20, completionTokens: 15, totalTokens: 35 },
+      },
+      // 3. agent_c output (dissenting minority view)
+      {
+        id: 'resp-3',
+        model: 'model-c',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content:
+                'Store all vectors in flat JSON files on disk without any database.',
+            },
+          },
+        ],
+        usage: { promptTokens: 20, completionTokens: 12, totalTokens: 32 },
+      },
+      // 4. synthesizer output
+      {
+        id: 'resp-synth',
+        model: 'model-synth',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content:
+                'Consensus decision: Use PostgreSQL with pgvector for enterprise vector search, while caching small lookup arrays.',
+            },
+          },
+        ],
+        usage: { promptTokens: 40, completionTokens: 20, totalTokens: 60 },
+      },
+    ];
+
+    const client = new SinapsClient({
+      providers: [createMockProvider(responses)],
+    });
+
+    const swarm = client.swarm({
+      agents: [
+        { id: 'db_lead', name: 'Database Lead', role: 'Architect', instructions: 'Recommend databases.' },
+        { id: 'infra_eng', name: 'Infra Engineer', role: 'DevOps', instructions: 'Recommend databases.' },
+        { id: 'minimalist', name: 'Minimalist', role: 'Dev', instructions: 'Recommend lightweight solutions.' },
+        { id: 'synthesizer', name: 'Synthesizer', role: 'Judge', instructions: 'Synthesize consensus.' },
+      ],
+    });
+
+    const progressPhases: string[] = [];
+    const tournament = await swarm.runTournament({
+      agentIds: ['db_lead', 'infra_eng', 'minimalist'],
+      task: 'Recommend the best vector search database architecture for production.',
+      votingStrategy: 'borda',
+      similarityThreshold: 0.55,
+      synthesizerAgentId: 'synthesizer',
+      onVoteProgress: (p) => {
+        progressPhases.push(p.phase);
+      },
+    });
+
+    expect(tournament.strategy).toBe('borda');
+    expect(['db_lead', 'infra_eng']).toContain(tournament.winningAgentId);
+    expect(tournament.confidence).toBeGreaterThanOrEqual(0.6);
+    expect(tournament.clusters.length).toBe(2);
+    expect(tournament.dissentingViews.length).toBe(1);
+    expect(tournament.dissentingViews[0].agentId).toBe('minimalist');
+    expect(tournament.synthesizedContent).toContain('Consensus decision: Use PostgreSQL with pgvector');
+    expect(progressPhases).toContain('fan_out');
+    expect(progressPhases).toContain('clustering');
+    expect(progressPhases).toContain('tallying');
+    expect(progressPhases).toContain('synthesis');
+
+    // Verify automatic DPO pair recording
+    const dpoRecords = client.distiller.getDpoRecords();
+    expect(dpoRecords.length).toBe(1);
+    expect(dpoRecords[0].chosen).toContain('Consensus decision: Use PostgreSQL with pgvector');
+    expect(dpoRecords[0].rejected).toContain('flat JSON files');
+  });
 });

@@ -24,6 +24,14 @@ import type {
   UnifiedApiStreamChunk,
 } from '../types/index.js';
 import type { SinapsClient } from './SinapsClient.js';
+import {
+  type DissentingView,
+  type TournamentAgentScore,
+  type TournamentCluster,
+  TournamentConsensusEngine,
+  type TournamentSubmission,
+  type TournamentVotingStrategy,
+} from './TournamentConsensus.js';
 
 /**
  * Standard A2A Skill definition for capability discovery
@@ -567,6 +575,73 @@ export interface ActorCriticResult {
   totalCostUsd: number;
   actorAgentId: string;
   criticAgentId: string;
+  history: ChatMessage[];
+  sharedContext: Record<string, unknown>;
+}
+
+/**
+ * Options for multi-model tournament and voting consensus
+ */
+export interface TournamentOptions {
+  /**
+   * The task or prompt given to all participating agents
+   */
+  task: string | ChatMessage[];
+  /**
+   * List of agent IDs participating in the tournament deliberation
+   */
+  agentIds: string[];
+  /**
+   * Voting strategy: 'borda' (ranked choice), 'majority' (most votes), or 'weighted' (agent capability weights)
+   * Default: 'borda'
+   */
+  votingStrategy?: TournamentVotingStrategy;
+  /**
+   * Optional custom weights per agent ID (e.g. { 'lead_architect': 2.0 })
+   */
+  weights?: Record<string, number>;
+  /**
+   * Cosine similarity threshold for grouping submissions into consensus clusters (default: 0.58)
+   */
+  similarityThreshold?: number;
+  /**
+   * Optional synthesizer agent ID to formulate a final unified response resolving consensus and dissent
+   */
+  synthesizerAgentId?: string;
+  /**
+   * Optional shared initial context
+   */
+  context?: Record<string, unknown>;
+  /**
+   * When true (default if distiller is configured), automatically records the winning
+   * solution as chosen and the top dissenting view as rejected in client.distiller
+   */
+  recordDpo?: boolean;
+  /**
+   * Optional progress callback during tournament execution phases
+   */
+  onVoteProgress?: (progress: {
+    phase: 'fan_out' | 'clustering' | 'tallying' | 'synthesis';
+    completedAgents?: number;
+    totalAgents?: number;
+  }) => void;
+}
+
+/**
+ * Result of a multi-model tournament consensus deliberation
+ */
+export interface TournamentResult {
+  winningSolution: string;
+  winningAgentId: string;
+  strategy: TournamentVotingStrategy;
+  confidence: number;
+  clusters: TournamentCluster[];
+  dissentingViews: DissentingView[];
+  scores: Record<string, TournamentAgentScore>;
+  totalCostUsd: number;
+  totalSubmissions: number;
+  synthesizedContent?: string;
+  submissions: Record<string, { content: string; costUsd: number }>;
   history: ChatMessage[];
   sharedContext: Record<string, unknown>;
 }
@@ -1505,6 +1580,189 @@ CRITIQUE: <concise, actionable feedback explaining why it passed or what needs i
       totalCostUsd: Number(totalCostUsd.toFixed(6)),
       actorAgentId: options.actorAgentId,
       criticAgentId: options.criticAgentId,
+      history: conversationHistory,
+      sharedContext: sharedContext.getAll(),
+    };
+  }
+
+  /**
+   * Executes a multi-model tournament deliberation across participating specialist agents,
+   * applying semantic response clustering, majority/Borda voting, and dissent analysis.
+   */
+  public async runTournament(
+    options: TournamentOptions,
+  ): Promise<TournamentResult> {
+    if (!options.agentIds || options.agentIds.length === 0) {
+      throw new Error(
+        'Tournament deliberation requires at least one participating agentId.',
+      );
+    }
+
+    for (const agentId of options.agentIds) {
+      if (!this.getAgent(agentId)) {
+        throw new Error(`Tournament agent "${agentId}" not found in swarm.`);
+      }
+    }
+
+    if (
+      options.synthesizerAgentId &&
+      !this.getAgent(options.synthesizerAgentId)
+    ) {
+      throw new Error(
+        `Synthesizer agent "${options.synthesizerAgentId}" not found in swarm.`,
+      );
+    }
+
+    options.onVoteProgress?.({
+      phase: 'fan_out',
+      completedAgents: 0,
+      totalAgents: options.agentIds.length,
+    });
+
+    const sharedContext = new SwarmContext(options.context);
+    const submissions: Record<string, { content: string; costUsd: number }> =
+      {};
+    const tournamentSubmissions: TournamentSubmission[] = [];
+    const conversationHistory: ChatMessage[] = [];
+    let totalCostUsd = 0;
+    let completed = 0;
+
+    // Phase 1: Fan-out execution across all candidate agents in parallel
+    const agentPromises = options.agentIds.map(async (agentId) => {
+      const runResult = await this.run({
+        initialAgentId: agentId,
+        task: options.task,
+        context: sharedContext.getAll(),
+      });
+
+      completed++;
+      options.onVoteProgress?.({
+        phase: 'fan_out',
+        completedAgents: completed,
+        totalAgents: options.agentIds.length,
+      });
+
+      return {
+        agentId,
+        result: runResult,
+      };
+    });
+
+    const results = await Promise.all(agentPromises);
+
+    for (const { agentId, result } of results) {
+      totalCostUsd += result.totalCostUsd;
+      conversationHistory.push(...result.history);
+      sharedContext.merge(result.sharedContext);
+      submissions[agentId] = {
+        content: result.content,
+        costUsd: result.totalCostUsd,
+      };
+      tournamentSubmissions.push({
+        agentId,
+        content: result.content,
+        costUsd: result.totalCostUsd,
+      });
+    }
+
+    // Phase 2: Semantic Clustering & Consensus Tallying
+    options.onVoteProgress?.({ phase: 'clustering' });
+    const engine = new TournamentConsensusEngine({
+      strategy: options.votingStrategy,
+      similarityThreshold: options.similarityThreshold,
+      weights: options.weights,
+    });
+
+    options.onVoteProgress?.({ phase: 'tallying' });
+    const consensus = await engine.evaluate(tournamentSubmissions);
+
+    // Phase 3: Optional Synthesis Agent
+    let synthesizedContent: string | undefined;
+    if (options.synthesizerAgentId) {
+      options.onVoteProgress?.({ phase: 'synthesis' });
+      const taskStr =
+        typeof options.task === 'string'
+          ? options.task
+          : options.task
+              .map((m) =>
+                typeof m.content === 'string'
+                  ? m.content
+                  : JSON.stringify(m.content),
+              )
+              .join('\n');
+
+      const dissentSection =
+        consensus.dissentingViews.length > 0
+          ? `\n\n[DISSENTING PERSPECTIVES / MINORITY VIEWS]:\n${consensus.dissentingViews
+              .map(
+                (d, idx) =>
+                  `Perspective ${idx + 1} (Agent: ${d.agentId}, Vote Share: ${(d.voteShare * 100).toFixed(1)}%):\n${d.content}`,
+              )
+              .join('\n\n')}`
+          : '';
+
+      const synthPrompt = `You are the master consensus synthesizer for the swarm.
+[ORIGINAL OBJECTIVE]:
+${taskStr}
+
+[WINNING CONSENSUS PROPOSAL (Confidence: ${(consensus.confidence * 100).toFixed(1)}%)]:
+${consensus.winningSolution}
+${dissentSection}
+
+Formulate a definitive, cohesive final output that builds upon the winning consensus while incorporating valid insights and addressing concerns raised in any dissenting views. Provide a clean, production-ready solution.`;
+
+      const synthResult = await this.run({
+        initialAgentId: options.synthesizerAgentId,
+        task: synthPrompt,
+        context: sharedContext.getAll(),
+      });
+
+      totalCostUsd += synthResult.totalCostUsd;
+      conversationHistory.push(...synthResult.history);
+      sharedContext.merge(synthResult.sharedContext);
+      synthesizedContent = synthResult.content;
+    }
+
+    // Phase 4: Autonomous DPO Distillation
+    if (
+      options.recordDpo !== false &&
+      this.client?.distiller &&
+      consensus.dissentingViews.length > 0
+    ) {
+      const chosenText = synthesizedContent || consensus.winningSolution;
+      const rejectedText = consensus.dissentingViews[0]?.content;
+
+      if (chosenText && rejectedText && chosenText !== rejectedText) {
+        await this.client.distiller.recordDpo({
+          prompt: options.task,
+          chosen: chosenText,
+          rejected: rejectedText,
+          scoreChosen: consensus.confidence,
+          scoreRejected: Number((1.0 - consensus.confidence).toFixed(3)),
+          critique: `Dissenting minority view from agent "${consensus.dissentingViews[0].agentId}" with vote share ${(consensus.dissentingViews[0].voteShare * 100).toFixed(1)}%`,
+          metadata: {
+            tournamentStrategy: consensus.strategy,
+            winningAgentId: consensus.winningAgentId,
+            dissentingAgentId: consensus.dissentingViews[0].agentId,
+            totalSubmissions: consensus.totalSubmissions,
+            confidence: consensus.confidence,
+          },
+        });
+      }
+    }
+
+    return {
+      winningSolution: consensus.winningSolution,
+      winningAgentId: consensus.winningAgentId,
+      strategy: consensus.strategy,
+      confidence: consensus.confidence,
+      clusters: consensus.clusters,
+      dissentingViews: consensus.dissentingViews,
+      scores: consensus.scores,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      totalSubmissions: consensus.totalSubmissions,
+      synthesizedContent,
+      submissions,
       history: conversationHistory,
       sharedContext: sharedContext.getAll(),
     };
