@@ -2445,6 +2445,118 @@ ${b.status === "success" ? b.content : `Error: ${b.error}`}`
       sharedContext: sharedContext.getAll()
     };
   }
+  /**
+   * Runs an Actor-Critic self-correcting feedback loop between a worker agent and a reviewer agent.
+   */
+  async runActorCritic(options) {
+    const actor = this.getAgent(options.actorAgentId);
+    if (!actor) {
+      throw new Error(
+        `Actor agent "${options.actorAgentId}" not found in swarm.`
+      );
+    }
+    const critic = this.getAgent(options.criticAgentId);
+    if (!critic) {
+      throw new Error(
+        `Critic agent "${options.criticAgentId}" not found in swarm.`
+      );
+    }
+    const maxRevisions = options.maxRevisions ?? 3;
+    const minScore = options.minScore ?? 0.8;
+    const sharedContext = new SwarmContext(options.context);
+    const revisions = [];
+    const conversationHistory = [];
+    let totalCostUsd = 0;
+    let currentActorDraft = "";
+    let lastCriticFeedback = "";
+    let approved = false;
+    for (let iteration = 1; iteration <= maxRevisions; iteration++) {
+      let actorPrompt = "";
+      if (iteration === 1) {
+        actorPrompt = typeof options.task === "string" ? options.task : options.task.map(
+          (m) => typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+        ).join("\n");
+      } else {
+        actorPrompt = `Please revise your previous output based on the following critic evaluation:
+
+[CRITIC FEEDBACK]:
+${lastCriticFeedback}
+
+[PREVIOUS DRAFT]:
+${currentActorDraft}
+
+Please generate a revised, complete solution addressing all feedback points.`;
+      }
+      const actorResult = await this.run({
+        initialAgentId: options.actorAgentId,
+        task: actorPrompt,
+        context: sharedContext.getAll()
+      });
+      totalCostUsd += actorResult.totalCostUsd;
+      currentActorDraft = actorResult.content;
+      conversationHistory.push(...actorResult.history);
+      sharedContext.merge(actorResult.sharedContext);
+      const taskDescription = typeof options.task === "string" ? options.task : JSON.stringify(options.task);
+      const criticPrompt = `You are a strict, objective quality reviewer.
+[ORIGINAL OBJECTIVE]:
+${taskDescription}
+
+[SUBMISSION TO REVIEW]:
+${currentActorDraft}
+
+Evaluate the submission against the objective for accuracy, completeness, and production readiness.
+Format your response exactly as follows:
+STATUS: <APPROVED or NEEDS_REVISION>
+SCORE: <score between 0.0 and 1.0>
+CRITIQUE: <concise, actionable feedback explaining why it passed or what needs improvement>`;
+      const criticResult = await this.run({
+        initialAgentId: options.criticAgentId,
+        task: criticPrompt,
+        context: sharedContext.getAll()
+      });
+      totalCostUsd += criticResult.totalCostUsd;
+      lastCriticFeedback = criticResult.content;
+      conversationHistory.push(...criticResult.history);
+      sharedContext.merge(criticResult.sharedContext);
+      const statusMatch = /STATUS:\s*(APPROVED|NEEDS_REVISION)/i.exec(
+        criticResult.content
+      );
+      const scoreMatch = /SCORE:\s*([0-9.]+)/i.exec(criticResult.content);
+      const parsedScore = scoreMatch ? Number.parseFloat(scoreMatch[1]) : void 0;
+      const explicitApproved = statusMatch?.[1]?.toUpperCase() === "APPROVED" || parsedScore !== void 0 && parsedScore >= minScore;
+      approved = Boolean(explicitApproved);
+      const revision = {
+        iteration,
+        actorOutput: currentActorDraft,
+        criticFeedback: lastCriticFeedback,
+        score: parsedScore,
+        status: approved ? "approved" : "needs_revision",
+        timestamp: Date.now()
+      };
+      revisions.push(revision);
+      options.onIteration?.({
+        iteration,
+        actorOutput: currentActorDraft,
+        criticFeedback: lastCriticFeedback,
+        approved,
+        score: parsedScore
+      });
+      if (approved) {
+        break;
+      }
+    }
+    return {
+      finalContent: currentActorDraft,
+      approved,
+      totalRevisions: revisions.length,
+      revisions,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      actorAgentId: options.actorAgentId,
+      criticAgentId: options.criticAgentId,
+      history: conversationHistory,
+      sharedContext: sharedContext.getAll()
+    };
+  }
 };
 
 // src/core/BatchExecutor.ts
@@ -4844,10 +4956,37 @@ var DurableWorkflowEngine = class {
   storage;
   keyPrefix;
   defaultTtlSeconds;
+  stepListeners = /* @__PURE__ */ new Set();
   constructor(options = {}) {
     this.storage = options.storage || new InMemoryStorage();
     this.keyPrefix = options.keyPrefix || "sinapsai:wf:";
     this.defaultTtlSeconds = options.defaultTtlSeconds || 86400 * 7;
+  }
+  /**
+   * Subscribes a listener to workflow step execution events (real-time streaming).
+   * Returns an unsubscribe cleanup callback.
+   */
+  onStep(listener) {
+    this.stepListeners.add(listener);
+    return () => {
+      this.stepListeners.delete(listener);
+    };
+  }
+  notifyStep(workflowId, step, checkpoint) {
+    const event = { workflowId, step, checkpoint };
+    for (const listener of this.stepListeners) {
+      try {
+        listener(event);
+      } catch (_e) {
+      }
+    }
+  }
+  /**
+   * Permanently deletes a workflow checkpoint from state storage (compliance with data deletion).
+   */
+  async deleteWorkflow(workflowId) {
+    await this.storage.delete(this.getKey(workflowId));
+    return true;
   }
   getKey(workflowId) {
     return `${this.keyPrefix}${workflowId}`;
@@ -4909,6 +5048,7 @@ var DurableWorkflowEngine = class {
     cp.history.push(stepRecord);
     cp.updatedAt = now;
     await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    this.notifyStep(workflowId, stepRecord, cp);
     return cp;
   }
   /**
@@ -5002,6 +5142,8 @@ var DurableWorkflowEngine = class {
     });
     cp.updatedAt = now;
     await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    const stepRecord = cp.history[cp.history.length - 1];
+    this.notifyStep(workflowId, stepRecord, cp);
     return cp;
   }
   /**
@@ -5046,6 +5188,8 @@ var DurableWorkflowEngine = class {
     });
     cp.updatedAt = now;
     await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    const stepRecord = cp.history[cp.history.length - 1];
+    this.notifyStep(workflowId, stepRecord, cp);
     return cp;
   }
 };

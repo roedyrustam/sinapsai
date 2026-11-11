@@ -125,4 +125,43 @@ describe('Durable Agent Workflows & State Checkpoint Engine', () => {
     const postResume = await engine.resume('transfer_789');
     expect(postResume.canResume).toBe(true);
   });
+
+  it('streams workflow step events live and deletes checkpoints permanently', async () => {
+    const storage = new InMemoryStorage();
+    const engine = new DurableWorkflowEngine({ storage });
+
+    const streamedEvents: string[] = [];
+    const unsubscribe = engine.onStep((ev) => {
+      streamedEvents.push(`${ev.workflowId}:${ev.step.action}`);
+    });
+
+    await engine.createWorkflow({
+      workflowId: 'stream_wf_1',
+      initialAgent: 'Worker',
+    });
+
+    await engine.recordStep('stream_wf_1', {
+      action: 'tool_call',
+      output: 'result 1',
+    });
+
+    await engine.suspendForApproval('stream_wf_1', {
+      action: 'deploy_prod',
+      reason: 'Need manager signoff',
+    });
+
+    expect(streamedEvents).toEqual([
+      'stream_wf_1:tool_call',
+      'stream_wf_1:approval_request',
+    ]);
+
+    unsubscribe();
+
+    // Verify deleteWorkflow
+    const deleteSuccess = await engine.deleteWorkflow('stream_wf_1');
+    expect(deleteSuccess).toBe(true);
+
+    const cpAfterDelete = await engine.getCheckpoint('stream_wf_1');
+    expect(cpAfterDelete).toBeNull();
+  });
 });

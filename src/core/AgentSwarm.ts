@@ -498,6 +498,75 @@ export interface SwarmParallelResult {
 }
 
 /**
+ * Options for running an Actor-Critic consensus evaluation loop
+ */
+export interface ActorCriticOptions {
+  /**
+   * Specialist worker agent ID that generates the initial draft or code solution.
+   */
+  actorAgentId: string;
+  /**
+   * Specialist reviewer agent ID that audits and evaluates the submission.
+   */
+  criticAgentId: string;
+  /**
+   * The objective task or user prompt to solve.
+   */
+  task: string | ChatMessage[];
+  /**
+   * Maximum allowed revision iterations before returning best effort.
+   * Default: 3
+   */
+  maxRevisions?: number;
+  /**
+   * Minimum score (0.0 to 1.0) required to consider the submission approved.
+   * Default: 0.8
+   */
+  minScore?: number;
+  /**
+   * Optional initial shared context.
+   */
+  context?: Record<string, unknown>;
+  /**
+   * Live callback triggered on each iteration cycle.
+   */
+  onIteration?: (event: {
+    iteration: number;
+    actorOutput: string;
+    criticFeedback: string;
+    approved: boolean;
+    score?: number;
+  }) => void;
+}
+
+/**
+ * Record of an individual iteration in the Actor-Critic loop
+ */
+export interface ActorCriticRevision {
+  iteration: number;
+  actorOutput: string;
+  criticFeedback: string;
+  score?: number;
+  status: 'approved' | 'needs_revision';
+  timestamp: number;
+}
+
+/**
+ * Result returned after Actor-Critic loop finishes
+ */
+export interface ActorCriticResult {
+  finalContent: string;
+  approved: boolean;
+  totalRevisions: number;
+  revisions: ActorCriticRevision[];
+  totalCostUsd: number;
+  actorAgentId: string;
+  criticAgentId: string;
+  history: ChatMessage[];
+  sharedContext: Record<string, unknown>;
+}
+
+/**
  * In-Process Multi-Agent Swarm Orchestrator
  */
 export class AgentSwarm {
@@ -1269,6 +1338,145 @@ Please review all specialist findings and provide a comprehensive, unified, and 
       totalCostUsd: Number(totalCostUsd.toFixed(6)),
       totalSteps,
       durationMs,
+      sharedContext: sharedContext.getAll(),
+    };
+  }
+
+  /**
+   * Runs an Actor-Critic self-correcting feedback loop between a worker agent and a reviewer agent.
+   */
+  public async runActorCritic(
+    options: ActorCriticOptions,
+  ): Promise<ActorCriticResult> {
+    const actor = this.getAgent(options.actorAgentId);
+    if (!actor) {
+      throw new Error(
+        `Actor agent "${options.actorAgentId}" not found in swarm.`,
+      );
+    }
+    const critic = this.getAgent(options.criticAgentId);
+    if (!critic) {
+      throw new Error(
+        `Critic agent "${options.criticAgentId}" not found in swarm.`,
+      );
+    }
+
+    const maxRevisions = options.maxRevisions ?? 3;
+    const minScore = options.minScore ?? 0.8;
+    const sharedContext = new SwarmContext(options.context);
+    const revisions: ActorCriticRevision[] = [];
+    const conversationHistory: ChatMessage[] = [];
+
+    let totalCostUsd = 0;
+    let currentActorDraft = '';
+    let lastCriticFeedback = '';
+    let approved = false;
+
+    for (let iteration = 1; iteration <= maxRevisions; iteration++) {
+      // Step A: Actor Turn
+      let actorPrompt = '';
+      if (iteration === 1) {
+        actorPrompt =
+          typeof options.task === 'string'
+            ? options.task
+            : options.task
+                .map((m) =>
+                  typeof m.content === 'string'
+                    ? m.content
+                    : JSON.stringify(m.content),
+                )
+                .join('\n');
+      } else {
+        actorPrompt = `Please revise your previous output based on the following critic evaluation:\n\n[CRITIC FEEDBACK]:\n${lastCriticFeedback}\n\n[PREVIOUS DRAFT]:\n${currentActorDraft}\n\nPlease generate a revised, complete solution addressing all feedback points.`;
+      }
+
+      const actorResult = await this.run({
+        initialAgentId: options.actorAgentId,
+        task: actorPrompt,
+        context: sharedContext.getAll(),
+      });
+
+      totalCostUsd += actorResult.totalCostUsd;
+      currentActorDraft = actorResult.content;
+      conversationHistory.push(...actorResult.history);
+      sharedContext.merge(actorResult.sharedContext);
+
+      // Step B: Critic Turn
+      const taskDescription =
+        typeof options.task === 'string'
+          ? options.task
+          : JSON.stringify(options.task);
+      const criticPrompt = `You are a strict, objective quality reviewer.
+[ORIGINAL OBJECTIVE]:
+${taskDescription}
+
+[SUBMISSION TO REVIEW]:
+${currentActorDraft}
+
+Evaluate the submission against the objective for accuracy, completeness, and production readiness.
+Format your response exactly as follows:
+STATUS: <APPROVED or NEEDS_REVISION>
+SCORE: <score between 0.0 and 1.0>
+CRITIQUE: <concise, actionable feedback explaining why it passed or what needs improvement>`;
+
+      const criticResult = await this.run({
+        initialAgentId: options.criticAgentId,
+        task: criticPrompt,
+        context: sharedContext.getAll(),
+      });
+
+      totalCostUsd += criticResult.totalCostUsd;
+      lastCriticFeedback = criticResult.content;
+      conversationHistory.push(...criticResult.history);
+      sharedContext.merge(criticResult.sharedContext);
+
+      // Parse Critic output
+      const statusMatch = /STATUS:\s*(APPROVED|NEEDS_REVISION)/i.exec(
+        criticResult.content,
+      );
+      const scoreMatch = /SCORE:\s*([0-9.]+)/i.exec(criticResult.content);
+
+      const parsedScore = scoreMatch
+        ? Number.parseFloat(scoreMatch[1])
+        : undefined;
+      const explicitApproved =
+        statusMatch?.[1]?.toUpperCase() === 'APPROVED' ||
+        (parsedScore !== undefined && parsedScore >= minScore);
+
+      approved = Boolean(explicitApproved);
+
+      const revision: ActorCriticRevision = {
+        iteration,
+        actorOutput: currentActorDraft,
+        criticFeedback: lastCriticFeedback,
+        score: parsedScore,
+        status: approved ? 'approved' : 'needs_revision',
+        timestamp: Date.now(),
+      };
+      revisions.push(revision);
+
+      options.onIteration?.({
+        iteration,
+        actorOutput: currentActorDraft,
+        criticFeedback: lastCriticFeedback,
+        approved,
+        score: parsedScore,
+      });
+
+      if (approved) {
+        break;
+      }
+    }
+
+    return {
+      finalContent: currentActorDraft,
+      approved,
+      totalRevisions: revisions.length,
+      revisions,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      actorAgentId: options.actorAgentId,
+      criticAgentId: options.criticAgentId,
+      history: conversationHistory,
       sharedContext: sharedContext.getAll(),
     };
   }

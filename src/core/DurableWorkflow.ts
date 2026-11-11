@@ -76,6 +76,12 @@ export interface WorkflowCheckpoint {
   updatedAt: number;
 }
 
+export interface WorkflowStepEvent {
+  workflowId: string;
+  step: WorkflowStepRecord;
+  checkpoint: WorkflowCheckpoint;
+}
+
 export interface DurableWorkflowOptions {
   storage?: StateStorage;
   keyPrefix?: string;
@@ -86,11 +92,46 @@ export class DurableWorkflowEngine {
   private storage: StateStorage;
   private keyPrefix: string;
   private defaultTtlSeconds?: number;
+  private stepListeners = new Set<(event: WorkflowStepEvent) => void>();
 
   constructor(options: DurableWorkflowOptions = {}) {
     this.storage = options.storage || new InMemoryStorage();
     this.keyPrefix = options.keyPrefix || 'sinapsai:wf:';
     this.defaultTtlSeconds = options.defaultTtlSeconds || 86400 * 7; // 7 days default
+  }
+
+  /**
+   * Subscribes a listener to workflow step execution events (real-time streaming).
+   * Returns an unsubscribe cleanup callback.
+   */
+  public onStep(listener: (event: WorkflowStepEvent) => void): () => void {
+    this.stepListeners.add(listener);
+    return () => {
+      this.stepListeners.delete(listener);
+    };
+  }
+
+  private notifyStep(
+    workflowId: string,
+    step: WorkflowStepRecord,
+    checkpoint: WorkflowCheckpoint,
+  ): void {
+    const event: WorkflowStepEvent = { workflowId, step, checkpoint };
+    for (const listener of this.stepListeners) {
+      try {
+        listener(event);
+      } catch (_e) {
+        // fail-soft for listeners
+      }
+    }
+  }
+
+  /**
+   * Permanently deletes a workflow checkpoint from state storage (compliance with data deletion).
+   */
+  public async deleteWorkflow(workflowId: string): Promise<boolean> {
+    await this.storage.delete(this.getKey(workflowId));
+    return true;
   }
 
   private getKey(workflowId: string): string {
@@ -178,6 +219,7 @@ export class DurableWorkflowEngine {
     cp.updatedAt = now;
 
     await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    this.notifyStep(workflowId, stepRecord, cp);
     return cp;
   }
 
@@ -305,6 +347,8 @@ export class DurableWorkflowEngine {
 
     cp.updatedAt = now;
     await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    const stepRecord = cp.history[cp.history.length - 1];
+    this.notifyStep(workflowId, stepRecord, cp);
     return cp;
   }
 
@@ -364,6 +408,8 @@ export class DurableWorkflowEngine {
 
     cp.updatedAt = now;
     await this.storage.set(this.getKey(workflowId), cp, this.defaultTtlSeconds);
+    const stepRecord = cp.history[cp.history.length - 1];
+    this.notifyStep(workflowId, stepRecord, cp);
     return cp;
   }
 }

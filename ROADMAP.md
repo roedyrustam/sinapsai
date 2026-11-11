@@ -221,5 +221,15 @@
   - Algoritma `deepMergeContext` dan metode `SwarmContext.merge` menggabungkan mutasi state cabang agen paralel secara rekursif, dengan union dan deduplikasi array serta penanganan konflik kustom (`onContextConflict`).
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 43 (`examples/43-aws-bedrock-and-azure-openai.ts`) dan contoh 44 (`examples/44-steganography-firewall-and-parallel-merge.ts`); total 573/573 unit tests lulus di 55 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.1.0.
 
+## Phase 26: Actor-Critic Consensus Swarm, Streaming Workflows & Privacy Deletion (v3.2.0) - *Completed*
+- [x] **Actor-Critic Self-Correcting Consensus Swarm Loop (`client.swarm.runActorCritic`, `AgentSwarm.runActorCritic`)**:
+  - Alur iterasi perbaikan mandiri otomatis: Agen Worker/Implementer menyusun draft/solusi kode, Agen Reviewer/Critic mengevaluasi kepatuhan terhadap rubrik kualitas dan skor kebenaran.
+  - Perbaikan otomatis berkelanjutan hingga tercapai status `APPROVED` atau batas skor (`minScore`), dengan pelaporan siklus live (`onIteration`).
+- [x] **Streaming Durable Workflows (`DurableWorkflowEngine.onStep`)**:
+  - Langganan event live (`WorkflowStepEvent`) per langkah eksekusi alur kerja untuk penyiaran real-time ke WebSocket atau Server-Sent Events (SSE).
+- [x] **Permanent Checkpoint Deletion (`DurableWorkflowEngine.deleteWorkflow`)**:
+  - Penghapusan instan seluruh state dan riwayat checkpoint dari `StateStorage` untuk kepatuhan penuh terhadap UU PDP No. 27/2022 dan GDPR Art. 17 (*Right to be Forgotten*).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 45 (`examples/45-actor-critic-consensus-swarm.ts`); total 575/575 unit tests lulus di 55 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.2.0.
+
 
 

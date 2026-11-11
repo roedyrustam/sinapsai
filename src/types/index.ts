@@ -825,6 +825,9 @@ export type AgentStreamEvent =
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
 
 export type {
+  ActorCriticOptions,
+  ActorCriticResult,
+  ActorCriticRevision,
   ContextMergeOptions,
   SwarmParallelAgentTask,
   SwarmParallelBranchResult,
@@ -858,6 +861,14 @@ export {
 export type {
   ApprovalRecord,
   ApprovalRequest,
+  WorkflowStepEvent,
+} from '../core/DurableWorkflow.js';
+export {
+  DurableWorkflowEngine,
+  type DurableWorkflowOptions,
+  type WorkflowCheckpoint,
+  type WorkflowStatus,
+  type WorkflowStepRecord,
 } from '../core/DurableWorkflow.js';
 export {
   EpisodicMemory,

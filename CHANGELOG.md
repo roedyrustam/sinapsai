@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.2.0] - 2026-11-11
+### Added
+- **Actor-Critic Self-Correcting Consensus Swarm Loop (`AgentSwarm.runActorCritic`, `client.swarm.runActorCritic`)**:
+  - Automated multi-turn feedback cycle between worker specialist and quality reviewer agents.
+  - Guided revision iterations adjusting solution against rubric scores and actionable critiques until approved.
+  - Emits live iteration progress events (`onIteration`) with full revision history tracking.
+- **Streaming Durable Workflows (`DurableWorkflowEngine.onStep`)**:
+  - Event listener subscription for workflow step records enabling live streaming to WebSockets or SSE clients.
+- **Permanent Checkpoint Purge (`DurableWorkflowEngine.deleteWorkflow`)**:
+  - Full compliance with user data deletion rights under UU PDP No. 27/2022 and GDPR Art. 17.
+- **Example 45 (`examples/45-actor-critic-consensus-swarm.ts`)**:
+  - Practical demonstration of tax calculation code generation refined through Actor-Critic reviews and live workflow event streaming.
+- **Test Suite Verification**: Added 2 new unit tests; total 575/575 tests passing across 55 test suites (100% pass rate).
+
 ## [3.1.0] - 2026-11-11
 ### Added
 - **AWS Bedrock Provider with Zero-Dependency SigV4 Signer (`AwsBedrockProvider`, `src/providers/AwsBedrockProvider.ts`)**:

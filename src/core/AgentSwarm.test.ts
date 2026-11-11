@@ -747,4 +747,120 @@ describe('AgentSwarm', () => {
     expect(tags).toContain('database');
     expect(tags.filter((t) => t === 'security').length).toBe(1);
   });
+
+  it('runs Actor-Critic self-correcting feedback loop with revision iterations', async () => {
+    let callCount = 0;
+    const provider = {
+      id: 'mock-actor-critic',
+      name: 'Mock Actor-Critic Provider',
+      generateContent: async (_req: CreateChatCompletionRequest) => {
+        callCount++;
+
+        // 1. Initial Actor draft (imperfect)
+        if (callCount === 1) {
+          return {
+            id: 'actor-1',
+            model: 'test',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'def add(a, b): return a - b', // buggy
+                },
+              },
+            ],
+          };
+        }
+
+        // 2. Critic review 1 (rejects draft)
+        if (callCount === 2) {
+          return {
+            id: 'critic-1',
+            model: 'test',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    'STATUS: NEEDS_REVISION\nSCORE: 0.3\nCRITIQUE: The function subtracts instead of adding.',
+                },
+              },
+            ],
+          };
+        }
+
+        // 3. Actor revised draft (fixed)
+        if (callCount === 3) {
+          return {
+            id: 'actor-2',
+            model: 'test',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'def add(a, b): return a + b', // fixed
+                },
+              },
+            ],
+          };
+        }
+
+        // 4. Critic review 2 (approved)
+        return {
+          id: 'critic-2',
+          model: 'test',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content:
+                  'STATUS: APPROVED\nSCORE: 1.0\nCRITIQUE: The implementation is now correct and complete.',
+              },
+            },
+          ],
+        };
+      },
+    };
+
+    const client = new SinapsClient({
+      providers: [provider as unknown as Provider],
+    });
+
+    const swarm = client.swarm({
+      agents: [
+        {
+          id: 'coder',
+          name: 'Python Programmer',
+          role: 'Coder',
+          instructions: 'Write Python functions.',
+        },
+        {
+          id: 'qa_reviewer',
+          name: 'QA Code Reviewer',
+          role: 'Reviewer',
+          instructions: 'Evaluate code rigorously.',
+        },
+      ],
+    });
+
+    const iterationsLog: number[] = [];
+    const result = await swarm.runActorCritic({
+      actorAgentId: 'coder',
+      criticAgentId: 'qa_reviewer',
+      task: 'Write a Python function to add two numbers.',
+      maxRevisions: 3,
+      minScore: 0.8,
+      onIteration: (ev) => {
+        iterationsLog.push(ev.iteration);
+      },
+    });
+
+    expect(result.approved).toBe(true);
+    expect(result.totalRevisions).toBe(2);
+    expect(result.finalContent).toBe('def add(a, b): return a + b');
+    expect(result.revisions[0].status).toBe('needs_revision');
+    expect(result.revisions[1].status).toBe('approved');
+    expect(result.revisions[1].score).toBe(1.0);
+    expect(iterationsLog).toEqual([1, 2]);
+  });
 });
