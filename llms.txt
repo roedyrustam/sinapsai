@@ -6,12 +6,14 @@
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
 - **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits
-- **Test Suite**: 575 unit & integration tests passing across 55 test suites (100% pass rate)
+- **Test Suite**: 589 unit & integration tests passing across 57 test suites (100% pass rate)
 - **Quality**: 100% Biome Clean, TypeScript strict mode
 
 ## Core Capabilities
 
 - **12 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock (SigV4 Web Crypto), Azure OpenAI (Entra ID & API Key), DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **In-Process Semantic Prompt Router (`client.semanticRouter`, `SemanticRouter`)**: Sub-millisecond vector centroid classification (<0.5ms) and automatic model routing directly to specialized LLMs (`claude-3-7-sonnet`, `gemini-2.5-flash-lite`, etc.) using L2-normalized 128-dim character 3-gram and token hashing with stop-word dampening.
+- **Synthetic Dataset Distiller (`client.distiller`, `DatasetDistiller`)**: In-process curation and real-time generation of fine-tuning datasets from live production interactions, supporting HuggingFace/TRL DPO pairs (`recordDpo`) and OpenAI/Axolotl SFT conversations (`recordSft`) with integrated PII redaction (`PIIGuardrails`) and autonomous DPO pair recording in Actor-Critic swarm loops (`runActorCritic`).
 - **Actor-Critic Consensus Swarm Loop (`client.swarm.runActorCritic`)**: Automated self-refining loop between worker and reviewer agents with score thresholds and live cycle callbacks.
 - **Streaming Durable Workflows & Right-to-be-Forgotten Checkpoint Deletion (`client.workflows`)**: Real-time workflow step event streaming (`onStep`) and permanent checkpoint purging (`deleteWorkflow`) compliant with UU PDP No. 27/2022 and GDPR Art. 17.
 - **Steganography Firewall 2.0 (`securityGuardrails`)**: Real-time neutralization of hidden Zero-Width characters, ASCII tag smuggling, and Bidi text direction overrides with NFKC normalization.
@@ -114,4 +116,4 @@ for await (const chunk of stream) {
 - Complete English README: [README.md](README.md)
 - Complete Indonesian README: [README.id.md](README.id.md)
 - Version Roadmap: [ROADMAP.md](ROADMAP.md)
-- 45 Executable Examples: [examples/](examples/)
+- 46 Executable Examples: [examples/](examples/)

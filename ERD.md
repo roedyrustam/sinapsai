@@ -1,4 +1,4 @@
-# Entity & Architecture Relationship Diagram — SinapsAI v3.2.0
+# Entity & Architecture Relationship Diagram — SinapsAI v3.3.0
 
 Karena SinapsAI berjalan secara in-process sebagai SDK/Paket NPM (tanpa ketergantungan database eksternal mandatory), diagram ini merepresentasikan topologi relasi antar-komponen modul inti (*Aggregate Roots & Bounded Contexts*), struktur manajemen memori kognitif (*In-Process State*), serta adaptasi penyimpanan terdistribusi.
 
@@ -25,6 +25,8 @@ classDiagram
         +LlmEvals evals
         +ConsensusEngine consensus
         +RealtimeClient realtime
+        +SemanticRouter semanticRouter
+        +DatasetDistiller distiller
         +chat.completions.create(request)
         +embeddings.create(request)
         +batch.chat(requests, options)
@@ -213,6 +215,31 @@ classDiagram
         +getUrl()
     }
 
+    class SemanticRouter {
+        -List~SemanticRoute~ routes
+        -number defaultThreshold
+        -Function embedder
+        +classify(input, options)
+        +addRoute(route)
+        +addRoutes(routes)
+        +removeRoute(name)
+        +getRoutes()
+        +clearRoutes()
+    }
+
+    class DatasetDistiller {
+        -List~DpoDatasetPair~ dpoPairs
+        -List~SftDatasetSample~ sftSamples
+        -PIIGuardrails piiGuardrails
+        -StateStorage storage
+        +recordDpo(pair)
+        +recordSft(sample)
+        +exportDpoJsonl(options)
+        +exportSftJsonl(options)
+        +getStats()
+        +clear()
+    }
+
     StateStorage <|.. InMemoryStorage : implements
     StateStorage <|.. CloudflareKVStorage : implements
     StateStorage <|.. RedisStorage : implements
@@ -246,3 +273,7 @@ classDiagram
     Router "1" *-- "1" CircuitBreaker : protects with
     SinapsClient "1" *-- "0..1" CanaryProber : active probing
     SinapsClient "1" *-- "0..1" DashboardServer : serves web UI
+    SinapsClient "1" *-- "0..1" SemanticRouter : classifies prompts
+    SinapsClient "1" *-- "1" DatasetDistiller : curates fine-tuning datasets
+    AgentSwarm "1" o-- "1" DatasetDistiller : records DPO pairs from actor-critic
+    DatasetDistiller "1" o-- "1" PIIGuardrails : sanitizes PII

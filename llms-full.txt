@@ -1,6 +1,6 @@
 # SinapsAI — Comprehensive Technical Specification & Full LLM Reference (llms-full.txt)
 
-> **Version**: 3.2.0  
+> **Version**: 3.3.0  
 > **Author**: Roedy Rustam <roedyrustam.id@gmail.com>  
 > **Copyright**: 2026 Roedy Rustam. All Rights Reserved.  
 > **License**: MIT  
@@ -402,7 +402,7 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 
 ---
 
-## 8. Catalog of All 45 Examples
+## 8. Catalog of All 46 Examples
 
 | Example File | Description |
 |---|---|
@@ -451,13 +451,14 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 | `examples/43-aws-bedrock-and-azure-openai.ts` | Enterprise cloud providers: AWS Bedrock SigV4 Converse API and Azure OpenAI Service |
 | `examples/44-steganography-firewall-and-parallel-merge.ts` | Steganography Firewall 2.0 (Zero-Width, ASCII tags) and parallel context deep-merge |
 | `examples/45-actor-critic-consensus-swarm.ts` | Actor-Critic self-correcting consensus swarm loop and streaming durable workflows |
+| `examples/46-semantic-router-and-dataset-distiller.ts` | In-process semantic prompt routing (<0.5ms) and synthetic dataset distillation (DPO & SFT) with PII redaction |
 
 ---
 
 ## 9. Verification & Quality Metrics
 
-- **Total Test Suites**: 55
-- **Total Unit & Integration Tests**: 575 passing (100% pass rate)
+- **Total Test Suites**: 57
+- **Total Unit & Integration Tests**: 589 passing (100% pass rate)
 - **Linter Status**: 100% compliant with Biome v2 (0 errors, 0 warnings)
 - **TypeScript**: Strict mode with declarations emitted
 - **Runtime Dependencies**: `0` (Zero external dependencies)

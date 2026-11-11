@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.3.0] - 2026-11-11
+### Added
+- **In-Process Semantic Prompt Router (`SemanticRouter`, `client.semanticRouter`, `src/core/SemanticRouter.ts`)**:
+  - Sub-millisecond vector centroid classification and automatic model routing directly to specialized LLMs (`claude-3-7-sonnet`, `gemini-2.5-flash-lite`, `o3-mini`, etc.) without LLM classifier roundtrips.
+  - L2-normalized 128-dimensional character 3-gram and token hashing vectorizer with stop-word dampening, pre-computed route centroids, and exemplar sample vectors.
+  - Dual scoring algorithm evaluating both exemplar cosine similarity and route centroid distance with configurable confidence thresholds.
+  - Native integration with `SinapsClient` via `semanticRouter` option, automated query classification in `chat.completions.create`, and `onSemanticRouteMatch` lifecycle event hook.
+- **Synthetic Dataset Distiller (`DatasetDistiller`, `client.distiller`, `src/core/DatasetDistiller.ts`)**:
+  - In-process curation and real-time generation of fine-tuning datasets from live production interactions and multi-agent trajectories.
+  - DPO (Direct Preference Optimization) pair recording (`recordDpo`) exporting HuggingFace/TRL compatible JSONL format (`prompt`, `chosen`, `rejected`).
+  - SFT (Supervised Fine-Tuning) multi-turn conversation recording (`recordSft`) exporting standard OpenAI / Axolotl format (`messages: ChatMessage[]`).
+  - Integrated PII redaction via `PIIGuardrails` sanitizing names, emails, phones, API keys, and credit cards before export.
+  - Optional `StateStorage` persistence with metadata filtering, tag search, and token volume estimation.
+- **Autonomous DPO Pair Recording in Swarm Loops (`AgentSwarm.runActorCritic`)**:
+  - Built-in `recordDpo` option inside `runActorCritic` automatically pairing initial flawed drafts as `rejected` and actor-critic approved revisions as `chosen` directly into `client.distiller`.
+- **Example 46 (`examples/46-semantic-router-and-dataset-distiller.ts`)**:
+  - Runnable end-to-end demonstration featuring sub-millisecond semantic routing across coding, math, and customer support queries, automatic DPO pair recording via Actor-Critic swarm, and HuggingFace/TRL JSONL dataset export.
+- **Test Suite Expansion**: Added 14 new unit tests across 2 new test suites (`SemanticRouter.test.ts`, `DatasetDistiller.test.ts`), plus client and swarm integration assertions; total **589/589 tests passing across 57 test suites (100% pass rate)**.
+
 ## [3.2.0] - 2026-11-11
 ### Added
 - **Actor-Critic Self-Correcting Consensus Swarm Loop (`AgentSwarm.runActorCritic`, `client.swarm.runActorCritic`)**:

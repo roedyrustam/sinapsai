@@ -178,6 +178,23 @@ run();
 1. **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'`)**: Skoring cerdas multi-faktor memadukan keandalan (Laplace-smoothed reliability), latensi bergerak (moving-average latency), dan estimasi biaya per request secara real-time.
 2. **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang menyamarkan data sensitif sebelum dikirim ke LLM dan secara otomatis mengembalikan nilai asli pada respons non-streaming.
 
+### Fitur Utama v3.3.0 (In-Process Semantic Prompt Router & Synthetic Dataset Distiller)
+1. **In-Process Semantic Prompt Router (`SemanticRouter`, `client.semanticRouter`)**:
+   - Perutean semantik sub-milidetik (<0.5ms) mengklasifikasikan prompt ke model target spesifik (`coding`, `math`, `support`, dll.) tanpa overhead roundtrip LLM classifier.
+   - Vektorisasi L2-normalized 128-dimensi berbasis n-gram karakter dan hashing token dengan peredaman stop-word untuk memisahkan domain secara akurat.
+   - Evaluasi kemiripan ganda menggabungkan jarak centroid rute dan kemiripan kosinus maksimum sampel acuan.
+   - Terintegrasi otomatis pada `SinapsClient` via opsi `semanticRouter`, auto-klasifikasi dalam `chat.completions.create`, dan lifecycle hook `onSemanticRouteMatch`.
+2. **Synthetic Dataset Distiller (`DatasetDistiller`, `client.distiller`)**:
+   - Kurasi in-process dan ekstraksi dataset fine-tuning otomatis dari interaksi pengguna dan trajektori multi-agen.
+   - Perekaman pasangan preferensi DPO (`recordDpo`) berformat standar HuggingFace/TRL (`prompt`, `chosen`, `rejected`).
+   - Perekaman percakapan multi-turn SFT (`recordSft`) berformat standar OpenAI / Axolotl (`messages: ChatMessage[]`).
+   - Sanitasi PII otomatis terintegrasi menggunakan `PIIGuardrails` (membersihkan email, telepon, API key, dan kartu kredit) sebelum diekspor.
+   - Estimasi volume token per set data dan persistensi opsional ke `StateStorage`.
+3. **Perekaman DPO Otonom pada Multi-Agent Swarm (`AgentSwarm.runActorCritic`)**:
+   - Opsi terintegrasi `recordDpo` dalam siklus Actor-Critic yang secara otomatis memetakan draft awal sebagai `rejected` dan revisi tervalidasi sebagai `chosen` langsung ke `client.distiller`.
+4. **Contoh 46 (`examples/46-semantic-router-and-dataset-distiller.ts`)**:
+   - Demonstrasi praktis perutean semantik sub-milidetik, kurasi otomatis pasangan DPO dari loop Actor-Critic, dan ekspor dataset JSONL.
+
 ### Fitur Utama v3.2.0 (Actor-Critic Consensus Swarm, Streaming Workflows & Privacy Deletion)
 1. **Actor-Critic Self-Correcting Consensus Swarm Loop (`client.swarm.runActorCritic`, `AgentSwarm.runActorCritic`)**:
    - Pola kolaborasi iteratif mandiri antara dua agen terspesialisasi: Agen Worker/Implementer menyusun draft solusi kode/teks awal, dan Agen Reviewer/Critic mengevaluasi kepatuhan kualitas serta memberikan skor kebenaran [0–100].
@@ -250,9 +267,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 575/575 unit & integration tests lulus di 55 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Actor-Critic Swarm Loop, Streaming Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
+- **Pengujian Komprehensif:** 589/589 unit & integration tests lulus di 57 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Semantic Router, Synthetic Dataset Distiller, Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Actor-Critic Swarm Loop, Streaming Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **45 Contoh Siap Pakai:** Seluruh 45 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
+- **46 Contoh Siap Pakai:** Seluruh 46 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

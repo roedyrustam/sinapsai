@@ -231,5 +231,21 @@
   - Penghapusan instan seluruh state dan riwayat checkpoint dari `StateStorage` untuk kepatuhan penuh terhadap UU PDP No. 27/2022 dan GDPR Art. 17 (*Right to be Forgotten*).
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 45 (`examples/45-actor-critic-consensus-swarm.ts`); total 575/575 unit tests lulus di 55 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.2.0.
 
+## Phase 27: In-Process Semantic Prompt Router, Synthetic Dataset Distiller & Swarm DPO Pipeline (v3.3.0) - *Completed*
+- [x] **In-Process Semantic Prompt Router (`SemanticRouter`, `client.semanticRouter`)**:
+  - Routing semantik sub-milidetik (<0.5ms) menggunakan klasifikasi centroid vektor dan perbandingan kosinus sampel acuan tanpa latensi LLM classifier.
+  - Vektorisasi L2-normalized 128-dimensi berbasis n-gram karakter dan hashing token dengan peredaman stop-word untuk memisahkan domain secara akurat.
+  - Integrasi otomatis pada `SinapsClient` via opsi `semanticRouter`, auto-klasifikasi pada `chat.completions.create`, dan hook lifecycle `onSemanticRouteMatch`.
+- [x] **Synthetic Dataset Distiller (`DatasetDistiller`, `client.distiller`)**:
+  - Kurasi in-process dan ekstraksi dataset fine-tuning otomatis dari interaksi pengguna dan trajektori multi-agen.
+  - Perekaman pasangan preferensi DPO (`recordDpo`) yang diekspor ke format JSONL standar HuggingFace/TRL (`prompt`, `chosen`, `rejected`).
+  - Perekaman percakapan multi-turn SFT (`recordSft`) dengan format standar OpenAI / Axolotl (`messages: ChatMessage[]`).
+  - Sanitasi PII otomatis menggunakan `PIIGuardrails` (redaksi nama, email, nomor telepon, API key, dan kartu kredit) sebelum diekspor.
+  - Estimasi volume token per set data dan persistensi opsional ke `StateStorage`.
+- [x] **Autonomous DPO Pair Recording in Swarm Loops (`AgentSwarm.runActorCritic`)**:
+  - Opsi terintegrasi `recordDpo` dalam siklus Actor-Critic yang secara otomatis memetakan draft awal sebagai `rejected` dan revisi tervalidasi sebagai `chosen` ke dalam `client.distiller`.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 46 (`examples/46-semantic-router-and-dataset-distiller.ts`); total 589/589 unit tests lulus di 57 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.3.0.
+
+
 
 

@@ -537,6 +537,11 @@ export interface ActorCriticOptions {
     approved: boolean;
     score?: number;
   }) => void;
+  /**
+   * When true (default if distiller is configured), automatically records the
+   * initial draft (rejected) and approved final solution (chosen) as a DPO preference pair.
+   */
+  recordDpo?: boolean;
 }
 
 /**
@@ -1465,6 +1470,30 @@ CRITIQUE: <concise, actionable feedback explaining why it passed or what needs i
 
       if (approved) {
         break;
+      }
+    }
+
+    if (options.recordDpo !== false && this.client?.distiller) {
+      const firstDraft = revisions[0]?.actorOutput;
+      if (firstDraft && currentActorDraft) {
+        await this.client.distiller.recordDpo({
+          prompt: options.task,
+          chosen: currentActorDraft,
+          rejected:
+            firstDraft !== currentActorDraft
+              ? firstDraft
+              : revisions[0]?.criticFeedback || firstDraft,
+          scoreChosen:
+            revisions[revisions.length - 1]?.score ?? (approved ? 1.0 : 0.5),
+          scoreRejected: revisions[0]?.score ?? 0.4,
+          critique: revisions[0]?.criticFeedback,
+          metadata: {
+            actorAgentId: options.actorAgentId,
+            criticAgentId: options.criticAgentId,
+            totalRevisions: revisions.length,
+            approved,
+          },
+        });
       }
     }
 

@@ -862,5 +862,14 @@ describe('AgentSwarm', () => {
     expect(result.revisions[1].status).toBe('approved');
     expect(result.revisions[1].score).toBe(1.0);
     expect(iterationsLog).toEqual([1, 2]);
+
+    // Verifies automatic DPO dataset curation in DatasetDistiller
+    const dpoRecords = client.distiller.getDpoRecords();
+    expect(dpoRecords.length).toBe(1);
+    expect(dpoRecords[0].chosen).toBe('def add(a, b): return a + b');
+    expect(dpoRecords[0].rejected).toBe('def add(a, b): return a - b');
+    expect(dpoRecords[0].scoreChosen).toBe(1.0);
+    expect(dpoRecords[0].scoreRejected).toBe(0.3);
+    expect(dpoRecords[0].critique).toContain('subtracts instead of adding');
   });
 });

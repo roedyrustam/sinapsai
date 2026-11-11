@@ -435,6 +435,10 @@ export interface SinapsEventHooks {
   ) => void;
   onHedgeWon?: (winnerProvider: Provider, elapsedMs: number) => void;
   onGatewayRateLimitWarning?: (violation: GatewayRateLimitViolation) => void;
+  onSemanticRouteMatch?: (
+    match: import('../core/SemanticRouter.js').SemanticMatchResult,
+    request: CreateChatCompletionRequest | UnifiedApiRequest,
+  ) => void;
 }
 
 export interface BatchProgress {
@@ -858,6 +862,13 @@ export {
   calculatePairwiseSimilarity,
   computeTermFrequencyVector,
 } from '../core/ConsensusEngine.js';
+export {
+  DatasetDistiller,
+  type DatasetDistillerOptions,
+  type DistillerStats,
+  type DpoRecord,
+  type SftRecord,
+} from '../core/DatasetDistiller.js';
 export type {
   ApprovalRecord,
   ApprovalRequest,
@@ -942,6 +953,14 @@ export {
   RealtimeSession,
 } from '../core/RealtimeClient.js';
 export type { RouterOptions } from '../core/Router.js';
+export {
+  createFastSemanticEmbedding,
+  type SemanticMatchResult,
+  type SemanticRoute,
+  SemanticRouter,
+  type SemanticRouterConfig,
+  type SemanticRouterOptions,
+} from '../core/SemanticRouter.js';
 export type {
   ExtendedPIIGuardrailsOptions,
   SinapsClientOptions,

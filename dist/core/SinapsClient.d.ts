@@ -16,6 +16,7 @@ import { CognitiveBrain, type CognitiveBrainOptions } from './CognitiveBrain.js'
 import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
 import { DashboardServer, type DashboardServerOptions } from './DashboardServer.js';
+import { DatasetDistiller, type DatasetDistillerOptions } from './DatasetDistiller.js';
 import { DurableWorkflowEngine, type DurableWorkflowOptions } from './DurableWorkflow.js';
 import { EpisodicMemory, type EpisodicMemoryOptions } from './EpisodicMemory.js';
 import { FaithfulnessSentinel, type FaithfulnessSentinelOptions, type GroundingVerificationResult, type GroundingVerifiedRequest } from './FaithfulnessSentinel.js';
@@ -30,6 +31,7 @@ import { GatewayRateLimiter } from './RateLimiter.js';
 import { RealtimeClient } from './RealtimeClient.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import { SecurityGuardrails } from './SecurityGuardrails.js';
+import { SemanticRouter, type SemanticRouterConfig } from './SemanticRouter.js';
 import type { StateStorage } from './StateStorage.js';
 export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
     /**
@@ -138,6 +140,16 @@ export interface SinapsClientOptions {
      * Optional unified in-process cognitive brain configuration (Tri-Memory Fusion: Episodic + Graph + RAG).
      */
     brain?: CognitiveBrainOptions;
+    /**
+     * Optional in-process semantic prompt router configuration.
+     * Directs incoming prompts to target models based on centroid similarity.
+     */
+    semanticRouter?: SemanticRouterConfig | boolean;
+    /**
+     * Optional in-process synthetic dataset distiller configuration.
+     * Captures and sanitizes trajectories and Actor-Critic feedback loops into DPO/SFT JSONL.
+     */
+    distiller?: DatasetDistillerOptions;
 }
 export declare class SinapsClient {
     private router;
@@ -158,6 +170,9 @@ export declare class SinapsClient {
     readonly workflows: DurableWorkflowEngine;
     readonly evals: LlmEvals;
     readonly brain: CognitiveBrain;
+    readonly semanticRouter: SemanticRouter;
+    readonly distiller: DatasetDistiller;
+    private semanticRouterEnabled;
     readonly realtime: RealtimeClient;
     readonly consensus: {
         create: (options: ConsensusOptions) => Promise<ConsensusResult>;

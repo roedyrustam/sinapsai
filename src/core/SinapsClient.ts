@@ -88,6 +88,10 @@ import {
   type DashboardServerOptions,
 } from './DashboardServer.js';
 import {
+  DatasetDistiller,
+  type DatasetDistillerOptions,
+} from './DatasetDistiller.js';
+import {
   DurableWorkflowEngine,
   type DurableWorkflowOptions,
 } from './DurableWorkflow.js';
@@ -125,6 +129,7 @@ import {
   SecurityGuardrailError,
   SecurityGuardrails,
 } from './SecurityGuardrails.js';
+import { SemanticRouter, type SemanticRouterConfig } from './SemanticRouter.js';
 import type { StateStorage } from './StateStorage.js';
 
 export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
@@ -235,6 +240,16 @@ export interface SinapsClientOptions {
    * Optional unified in-process cognitive brain configuration (Tri-Memory Fusion: Episodic + Graph + RAG).
    */
   brain?: CognitiveBrainOptions;
+  /**
+   * Optional in-process semantic prompt router configuration.
+   * Directs incoming prompts to target models based on centroid similarity.
+   */
+  semanticRouter?: SemanticRouterConfig | boolean;
+  /**
+   * Optional in-process synthetic dataset distiller configuration.
+   * Captures and sanitizes trajectories and Actor-Critic feedback loops into DPO/SFT JSONL.
+   */
+  distiller?: DatasetDistillerOptions;
 }
 
 export class SinapsClient {
@@ -256,6 +271,9 @@ export class SinapsClient {
   public readonly workflows: DurableWorkflowEngine;
   public readonly evals: LlmEvals;
   public readonly brain: CognitiveBrain;
+  public readonly semanticRouter: SemanticRouter;
+  public readonly distiller: DatasetDistiller;
+  private semanticRouterEnabled: boolean;
   public readonly realtime = new RealtimeClient();
   public readonly consensus: {
     create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -362,6 +380,22 @@ export class SinapsClient {
       graph: options.graph,
       rag: options.rag,
       ...options.brain,
+    });
+
+    // Initialize In-Process Semantic Prompt Router
+    const semConfig =
+      typeof options.semanticRouter === 'object'
+        ? options.semanticRouter
+        : undefined;
+    this.semanticRouter = new SemanticRouter(semConfig);
+    this.semanticRouterEnabled =
+      options.semanticRouter === true || semConfig?.enabled === true;
+
+    // Initialize In-Process Synthetic Dataset Distiller
+    this.distiller = new DatasetDistiller({
+      storage: this.storage,
+      piiGuardrails: this.guardrails,
+      ...options.distiller,
     });
 
     // Initialize Speculative Multi-Draft Consensus
@@ -477,6 +511,24 @@ export class SinapsClient {
         let tools = request.tools;
         let thinkingBudget = request.thinkingBudget;
         let requestedModel = request.model;
+
+        // Apply Semantic Router classification if enabled or if requestedModel === 'auto'
+        if (
+          (this.semanticRouterEnabled || requestedModel === 'auto') &&
+          this.semanticRouter.getRoutes().length > 0
+        ) {
+          const match = await this.semanticRouter.classify(messages);
+          if (match.matched && match.route) {
+            requestedModel = match.route.targetModel;
+            this.hooks?.onSemanticRouteMatch?.(match, request);
+            if (match.route.systemPromptModifier) {
+              messages = [
+                { role: 'system', content: match.route.systemPromptModifier },
+                ...messages,
+              ];
+            }
+          }
+        }
 
         // Apply LLM Optimization (LLMO) if configured
         if (this.llmo) {

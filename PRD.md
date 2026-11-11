@@ -1,7 +1,7 @@
-# Product Requirements Document (PRD) — SinapsAI v3.2.0
+# Product Requirements Document (PRD) — SinapsAI v3.3.0
 
 ## 1. Visi Produk
-Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM package (TypeScript/Node.js) yang menjembatani aplikasi pengembang dengan 200+ model LLM melalui satu *Unified API*. Dirancang dengan prinsip **Zero Runtime Dependencies** guna meminimalisir *downtime* dengan otomatisasi failover, retries, load balancing, perlindungan privasi (PII Reversible Vault), pertahanan injeksi prompt & steganografi (Steganography Firewall 2.0), optimasi latensi ekor (Hedged Requests), memori kognitif terpadu (Cognitive Brain Tri-Memory), orkestrasi agen paralel (Map-Reduce Swarm dengan Deep-Merge atomik), loop konsensus koreksi-mandiri (Actor-Critic Swarm Loop), alur kerja tangguh (Streaming Durable Workflows dengan HITL dan pembersihan checkpoint permanen), penelusuran terdistribusi OpenTelemetry GenAI v1.30+, serta integrasi enterprise cloud (AWS Bedrock SigV4 & Azure OpenAI) dan MCP eksternal yang mampu memulihkan drift skema secara otonom.
+Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM package (TypeScript/Node.js) yang menjembatani aplikasi pengembang dengan 200+ model LLM melalui satu *Unified API*. Dirancang dengan prinsip **Zero Runtime Dependencies** guna meminimalisir *downtime* dengan otomatisasi failover, retries, load balancing, perutean semantik sub-milidetik (Semantic Router), kurasi dataset fine-tuning otomatis (Synthetic Dataset Distiller), perlindungan privasi (PII Reversible Vault), pertahanan injeksi prompt & steganografi (Steganography Firewall 2.0), optimasi latensi ekor (Hedged Requests), memori kognitif terpadu (Cognitive Brain Tri-Memory), orkestrasi agen paralel (Map-Reduce Swarm dengan Deep-Merge atomik), loop konsensus koreksi-mandiri (Actor-Critic Swarm Loop dengan DPO otomatis), alur kerja tangguh (Streaming Durable Workflows dengan HITL dan pembersihan checkpoint permanen), penelusuran terdistribusi OpenTelemetry GenAI v1.30+, serta integrasi enterprise cloud (AWS Bedrock SigV4 & Azure OpenAI) dan MCP eksternal yang mampu memulihkan drift skema secara otonom.
 
 ## 2. Lingkup Produk (Scope)
 - **Target Pengguna**: Pengembang Backend/Fullstack, AI Engineers, Tim DevOps, Multi-Agent Swarm Designers, dan Enterprise AI Platform.
@@ -93,13 +93,26 @@ Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM 
 - **Zero-Dependency Type-Safe Schema Builder (`s`, `client.s`)**:
   - Builder skema deklaratif fluent bergaya Zod dengan validasi runtime dan kompilasi otomatis ke JSON Schema.
 
+### F. In-Process Semantic Prompt Routing & Synthetic Dataset Distillation (v3.3.0)
+- **In-Process Semantic Prompt Router (`SemanticRouter`, `client.semanticRouter`, `src/core/SemanticRouter.ts`)**:
+  - Routing semantik sub-milidetik (<0.5ms) mengklasifikasikan prompt ke model target spesifik (`coding`, `math`, `support`, dll.) tanpa memanggil LLM classifier.
+  - Vektorisasi L2-normalized 128-dimensi berbasis n-gram karakter dan hashing token dengan stop-word filtering cerdas.
+  - Perhitungan dual-similarity menggabungkan jarak centroid rute dan kemiripan maksimum terhadap sample exemplar acuan.
+  - Integrasi otomatis pada `SinapsClient` via opsi `semanticRouter`, auto-klasifikasi dalam `chat.completions.create`, dan lifecycle hook `onSemanticRouteMatch`.
+- **Synthetic Dataset Distiller (`DatasetDistiller`, `client.distiller`, `src/core/DatasetDistiller.ts`)**:
+  - Kurasi in-process dan ekstraksi dataset fine-tuning otomatis dari interaksi pengguna dan trajektori multi-agen.
+  - Perekaman pasangan preferensi DPO (`recordDpo`) yang diekspor ke format JSONL standar HuggingFace/TRL (`prompt`, `chosen`, `rejected`).
+  - Perekaman percakapan multi-turn SFT (`recordSft`) dengan format standar OpenAI / Axolotl (`messages: ChatMessage[]`).
+  - Redaksi PII otomatis terintegrasi menggunakan `PIIGuardrails` (membersihkan email, telepon, API key, dan kartu kredit) sebelum diekspor.
+  - Integrasi autonomous DPO recording pada siklus evaluasi `AgentSwarm.runActorCritic` (`recordDpo: true`).
+
 ---
 
 ## 4. Kepatuhan Hukum, Privasi & Trio Legal Wajib (Legal Trio Invariant)
 Sesuai amanat UU No. 27/2022 tentang Pelindungan Data Pribadi (UU PDP), EU GDPR Art. 17 (*Right to be Forgotten*), dan kebijakan Apple App Store / Google Play, SinapsAI dirancang dengan prinsip *Privacy-by-Design*:
 1. **Kebijakan Privasi (/privacy)**: SinapsAI beroperasi 100% in-process. Tidak ada data pengguna, API key, atau konten percakapan yang dikirim ke server pusat pihak ketiga.
 2. **Syarat & Ketentuan (/terms)**: Lisensi MIT terbuka, tanggung jawab kepatuhan kunci API penyedia LLM berada di tangan developer pengguna.
-3. **Alur & Endpoint Penghapusan Data (/delete-account & /data-deletion)**: API terpadu `client.clearCache()`, `client.brain.memory.delete(id)`, dan `client.workflows.delete(workflowId)` menjamin seluruh memori episodik, jejak audit, state alur kerja, dan penyimpanan lokal/terdistribusi dapat dihapus secara permanen seketika.
+3. **Alur & Endpoint Penghapusan Data (/delete-account & /data-deletion)**: API terpadu `client.clearCache()`, `client.brain.memory.delete(id)`, `client.distiller.clear()`, dan `client.workflows.delete(workflowId)` menjamin seluruh memori episodik, jejak audit, dataset kurasi, state alur kerja, dan penyimpanan lokal/terdistribusi dapat dihapus secara permanen seketika.
 
 ---
 
@@ -108,4 +121,4 @@ Sesuai amanat UU No. 27/2022 tentang Pelindungan Data Pribadi (UU PDP), EU GDPR 
 - **Zero Runtime Dependencies**: Murni memanfaatkan standar runtime web (`fetch`, Web Streams, EventSource SSE, Web Crypto, Node HTTP).
 - **Edge Runtime Certified**: Kompatibel 100% di Node.js 18+, Bun, Deno, dan Cloudflare Workers.
 - **Type Safety**: TypeScript strict mode dengan isolated declarations dan types definition lengkap (`dist/index.d.ts`).
-- **Verifikasi Kualitas**: 575/575 unit & integration tests lulus di 55 test suites (100% pass rate), 100% Biome clean (0 error, 0 warning), dan 45 contoh siap pakai di `examples/`.
+- **Verifikasi Kualitas**: 589/589 unit & integration tests lulus di 57 test suites (100% pass rate), 100% Biome clean (0 error, 0 warning), dan 46 contoh siap pakai di `examples/`.

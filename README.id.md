@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-575%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-589%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -100,6 +100,12 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [38. Standard Schema v1 & Zod Direct Resolver (createStructured)](#38-standard-schema-v1--zod-direct-resolver-createstructured)
   - [39. Embedded Local Web UI & Telemetry Dashboard (sinapsai dashboard)](#39-embedded-local-web-ui--telemetry-dashboard-sinapsai-dashboard)
   - [40. Hallucination & Faithfulness Sentinel (createGroundingVerified)](#40-hallucination--faithfulness-sentinel-creategroundingverified)
+  - [41. AWS Bedrock & Azure OpenAI Enterprise Cloud Providers](#41-aws-bedrock--azure-openai-enterprise-cloud-providers)
+  - [42. Steganography Firewall 2.0 & Netralisasi Injeksi Tersembunyi](#42-steganography-firewall-20--netralisasi-injeksi-tersembunyi)
+  - [43. Multi-Agent Swarm Paralel dengan Deep-Merge Atomik](#43-multi-agent-swarm-paralel-dengan-deep-merge-atomik)
+  - [44. Loop Swarm Konsensus Koreksi-Mandiri Actor-Critic](#44-loop-swarm-konsensus-koreksi-mandiri-actor-critic)
+  - [45. Streaming Durable Workflows & Penghapusan Checkpoint (UU PDP / GDPR)](#45-streaming-durable-workflows--penghapusan-checkpoint-uu-pdp--gdpr)
+  - [46. In-Process Semantic Prompt Router & Synthetic Dataset Distiller](#46-in-process-semantic-prompt-router--synthetic-dataset-distiller)
 - [🤖 Panduan Pembuatan Kode untuk Model AI & Copilot](#-panduan-pembuatan-kode-untuk-model-ai--copilot)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
@@ -1728,6 +1734,64 @@ const state = await client.workflows.startWorkflow('user-session-123', { userId:
 await client.workflows.deleteWorkflow('user-session-123');
 ```
 
+### 46. In-Process Semantic Prompt Router & Synthetic Dataset Distiller
+
+Perutean domain prompt sub-milidetik ke model LLM spesifik dan kurasi dataset terdistilasi otomatis (DPO & SFT) dengan sanitasi PII:
+
+```typescript
+import {
+  SinapsClient,
+  OpenAiProvider,
+  AnthropicProvider,
+  SemanticRouter,
+  DatasetDistiller,
+} from 'sinapsai';
+
+// 1. Konfigurasi router semantik in-process (<0.5ms klasifikasi centroid vektor)
+const semanticRouter = new SemanticRouter({
+  routes: [
+    {
+      name: 'coding',
+      model: 'claude-3-7-sonnet',
+      description: 'Pemrograman, TypeScript, algoritma, dan perbaikan bug',
+      samples: ['Bagaimana cara membuat binary search tree di TypeScript?', 'Perbaiki null pointer exception'],
+    },
+    {
+      name: 'support',
+      model: 'gpt-4o-mini',
+      description: 'Tagihan akun, pembatalan langganan, dan FAQ',
+      samples: ['Bagaimana cara membatalkan langganan dan meminta refund?', 'Ubah alamat penagihan'],
+    },
+  ],
+});
+
+// 2. Inisialisasi klien dengan perutean semantik & penyulingan dataset
+const client = new SinapsClient({
+  providers: [
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+  semanticRouter,
+  distiller: new DatasetDistiller(),
+});
+
+// 3. Prompt otomatis diarahkan ke 'claude-3-7-sonnet' berdasarkan domain semantik
+const response = await client.chat.completions.create({
+  messages: [{ role: 'user', content: 'Bantu saya mengoptimalkan algoritma Fibonacci rekursif di TS' }],
+});
+
+// 4. Rekam interaksi sebagai pasangan preferensi DPO dengan redaksi PII otomatis
+client.distiller.recordDpo({
+  prompt: 'Buatkan template email untuk roedy@example.com',
+  chosen: 'Yth. Roedy, permohonan Anda telah kami konfirmasi.',
+  rejected: 'Email saya di roedy@example.com jika ada pertanyaan.',
+});
+
+// 5. Ekspor dataset DPO berformat JSONL standar HuggingFace/TRL
+const dpoJsonl = client.distiller.exportDpoJsonl();
+console.log('Dataset DPO Terekspor:\n', dpoJsonl);
+```
+
 ---
 
 ## 🤖 Panduan Pembuatan Kode untuk Model AI & Copilot
@@ -1925,6 +1989,8 @@ const swarm = client.swarm({
 | `llmo` | `LlmOptimizationOptions \| boolean` | `undefined` | Mesin optimasi LLM universal (`minifyPrompts`, `deduplicateSystem`, `alignKvCachePrefix`, `autoCascadeModel`, `cascadeTiers`, `dynamicThinking`) |
 | `memory` | `EpisodicMemoryOptions` | `undefined` | Memori vektor episodik in-process dengan isolasi user/tenant dan injeksi prompt otomatis |
 | `rag` | `HybridRagOptions` | `undefined` | Mesin pencarian hybrid in-process BM25 + vektor dense dengan Reciprocal Rank Fusion |
+| `semanticRouter` | `SemanticRouter` | `undefined` | Pengklasifikasi prompt dan router model semantik in-process sub-milidetik |
+| `distiller` | `DatasetDistiller` | `new DatasetDistiller()` | Generator dataset fine-tuning sintetis (DPO & SFT) in-process dengan redaksi PII |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
 
 ### `CircuitBreakerOptions`

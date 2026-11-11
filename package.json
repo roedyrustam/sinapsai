@@ -1,6 +1,6 @@
 {
   "name": "sinapsai",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Zero-dependency in-process AI Gateway & Control Plane with Cognitive Brain, Multi-Agent Swarm, A2A Handoff Protocol, Universal MCP Ingestion, OpenTelemetry Tracing, Autonomous Agent Loop, Circuit Breaker, Rate Limiting, PII/Security Guardrails, and Unified LLM API for Node.js, Edge & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",

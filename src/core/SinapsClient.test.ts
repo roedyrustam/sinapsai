@@ -1225,4 +1225,102 @@ describe('SinapsClient', () => {
       );
     });
   });
+
+  describe('SemanticRouter & DatasetDistiller Integration', () => {
+    it('automatically routes prompt via SemanticRouter when model is auto or semanticRouter is enabled', async () => {
+      const mockResponse: UnifiedApiResponse = {
+        id: 'resp-semantic',
+        model: 'claude-3-7-sonnet',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Here is the code' },
+            finishReason: 'stop',
+          },
+        ],
+      };
+
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn().mockResolvedValue(mockResponse),
+      };
+
+      const matchedHook = vi.fn();
+
+      const client = new SinapsClient({
+        providers: [mockProvider],
+        hooks: {
+          onSemanticRouteMatch: matchedHook,
+        },
+        semanticRouter: {
+          enabled: true,
+          routes: [
+            {
+              name: 'coding',
+              targetModel: 'claude-3-7-sonnet',
+              samples: [
+                'write a function to parse json in typescript',
+                'implement quicksort algorithm',
+              ],
+              threshold: 0.35,
+              systemPromptModifier: 'You are an elite coding expert.',
+            },
+          ],
+        },
+      });
+
+      const response = await client.chat.completions.create({
+        model: 'auto',
+        messages: [
+          {
+            role: 'user',
+            content: 'Implement quicksort algorithm in TypeScript',
+          },
+        ],
+      });
+
+      expect(response).toBe(mockResponse);
+      expect(matchedHook).toHaveBeenCalled();
+      expect(mockProvider.generateContent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'claude-3-7-sonnet',
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'system',
+              content: 'You are an elite coding expert.',
+            }),
+          ]),
+        }),
+      );
+    });
+
+    it('exposes DatasetDistiller on client and records DPO/SFT pairs', async () => {
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn(),
+      };
+
+      const client = new SinapsClient({
+        providers: [mockProvider],
+      });
+
+      expect(client.distiller).toBeDefined();
+
+      await client.distiller.recordDpo({
+        prompt: 'Calculate tax deduction for home office.',
+        chosen:
+          'Home office deduction is calculated using simplified $5/sqft method.',
+        rejected: 'You can deduct whatever you spend.',
+        scoreChosen: 0.95,
+        scoreRejected: 0.2,
+      });
+
+      const jsonl = client.distiller.exportDpoJsonl();
+      expect(jsonl).toContain('simplified $5/sqft method');
+
+      const stats = client.distiller.getStats();
+      expect(stats.dpoCount).toBe(1);
+    });
+  });
 });

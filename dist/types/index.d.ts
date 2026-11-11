@@ -341,6 +341,7 @@ export interface SinapsEventHooks {
     onHedgeFired?: (primaryProvider: Provider, backupProvider: Provider, delayMs: number) => void;
     onHedgeWon?: (winnerProvider: Provider, elapsedMs: number) => void;
     onGatewayRateLimitWarning?: (violation: GatewayRateLimitViolation) => void;
+    onSemanticRouteMatch?: (match: import('../core/SemanticRouter.js').SemanticMatchResult, request: CreateChatCompletionRequest | UnifiedApiRequest) => void;
 }
 export interface BatchProgress {
     /**
@@ -694,6 +695,7 @@ export { AgentWalletExceededError, deepMergeContext, type SwarmAgentWallet, } fr
 export { AutonomousDriftHealer, type DriftHealResult, type ProviderErrorRemediation, } from '../core/AutonomousDriftHealer.js';
 export { CognitiveBrain, type CognitiveBrainOptions, type CognitiveContextResult, type CognitiveRetrieveOptions, } from '../core/CognitiveBrain.js';
 export { type ConsensusDraftResult, ConsensusEngine, type ConsensusOptions, type ConsensusResult, calculatePairwiseSimilarity, computeTermFrequencyVector, } from '../core/ConsensusEngine.js';
+export { DatasetDistiller, type DatasetDistillerOptions, type DistillerStats, type DpoRecord, type SftRecord, } from '../core/DatasetDistiller.js';
 export type { ApprovalRecord, ApprovalRequest, WorkflowStepEvent, } from '../core/DurableWorkflow.js';
 export { DurableWorkflowEngine, type DurableWorkflowOptions, type WorkflowCheckpoint, type WorkflowStatus, type WorkflowStepRecord, } from '../core/DurableWorkflow.js';
 export { EpisodicMemory, type EpisodicMemoryOptions, type MemoryRecallOptions, type MemoryRecallResult, type MemoryRecord, type MemoryStoreOptions, } from '../core/EpisodicMemory.js';
@@ -705,6 +707,7 @@ export { type ExternalMcpServerConfig, McpClientConnector, } from '../core/McpCl
 export { GatewayRateLimitError, GatewayRateLimiter, } from '../core/RateLimiter.js';
 export { RealtimeClient, type RealtimeConnectOptions, type RealtimeProviderType, RealtimeSession, } from '../core/RealtimeClient.js';
 export type { RouterOptions } from '../core/Router.js';
+export { createFastSemanticEmbedding, type SemanticMatchResult, type SemanticRoute, SemanticRouter, type SemanticRouterConfig, type SemanticRouterOptions, } from '../core/SemanticRouter.js';
 export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';
 export { exportOtelTraces, type GenAiSpan, type GenAiSpanAttribute, generateSpanId, generateTraceId, type OtelTraceExportOptions, type OtelTracePayload, toOtelTracePayload, } from '../utils/tracingExporter.js';
 //# sourceMappingURL=index.d.ts.map

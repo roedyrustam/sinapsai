@@ -2545,6 +2545,25 @@ CRITIQUE: <concise, actionable feedback explaining why it passed or what needs i
         break;
       }
     }
+    if (options.recordDpo !== false && this.client?.distiller) {
+      const firstDraft = revisions[0]?.actorOutput;
+      if (firstDraft && currentActorDraft) {
+        await this.client.distiller.recordDpo({
+          prompt: options.task,
+          chosen: currentActorDraft,
+          rejected: firstDraft !== currentActorDraft ? firstDraft : revisions[0]?.criticFeedback || firstDraft,
+          scoreChosen: revisions[revisions.length - 1]?.score ?? (approved ? 1 : 0.5),
+          scoreRejected: revisions[0]?.score ?? 0.4,
+          critique: revisions[0]?.criticFeedback,
+          metadata: {
+            actorAgentId: options.actorAgentId,
+            criticAgentId: options.criticAgentId,
+            totalRevisions: revisions.length,
+            approved
+          }
+        });
+      }
+    }
     return {
       finalContent: currentActorDraft,
       approved,
@@ -4879,6 +4898,190 @@ var DashboardServer = class {
       "Cache-Control": "no-cache"
     });
     res.end(html);
+  }
+};
+
+// src/core/DatasetDistiller.ts
+var DatasetDistiller = class {
+  storage;
+  maxRecords;
+  autoSanitizePii;
+  piiGuardrails;
+  minScoreForSft;
+  minScoreForDpo;
+  dpoRecords = [];
+  sftRecords = [];
+  constructor(options) {
+    this.storage = options?.storage;
+    this.maxRecords = options?.maxRecords ?? 1e3;
+    this.autoSanitizePii = options?.autoSanitizePii ?? true;
+    this.piiGuardrails = options?.piiGuardrails;
+    this.minScoreForSft = options?.minScoreForSft ?? 0.8;
+    this.minScoreForDpo = options?.minScoreForDpo ?? 0.7;
+  }
+  sanitizeText(text) {
+    if (!this.autoSanitizePii || !this.piiGuardrails || !text) {
+      return text;
+    }
+    return this.piiGuardrails.redact(text);
+  }
+  sanitizeMessages(messages) {
+    if (!this.autoSanitizePii || !this.piiGuardrails || !messages) {
+      return messages;
+    }
+    return messages.map((m) => {
+      if (typeof m.content === "string") {
+        return { ...m, content: this.sanitizeText(m.content) };
+      }
+      return m;
+    });
+  }
+  /**
+   * Records a Direct Preference Optimization (DPO) preference pair.
+   * Format: { prompt, chosen, rejected }
+   */
+  async recordDpo(entry) {
+    const rawPromptText = typeof entry.prompt === "string" ? entry.prompt : extractPromptText(entry.prompt);
+    const prompt = this.sanitizeText(rawPromptText);
+    const chosen = this.sanitizeText(entry.chosen);
+    const rejected = this.sanitizeText(entry.rejected);
+    const record = {
+      id: entry.id || `dpo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      prompt,
+      chosen,
+      rejected,
+      scoreChosen: entry.scoreChosen,
+      scoreRejected: entry.scoreRejected,
+      critique: entry.critique ? this.sanitizeText(entry.critique) : void 0,
+      timestamp: entry.timestamp || Date.now(),
+      metadata: entry.metadata
+    };
+    this.dpoRecords.push(record);
+    if (this.dpoRecords.length > this.maxRecords) {
+      this.dpoRecords.shift();
+    }
+    if (this.storage) {
+      await this.storage.set(
+        `distiller:dpo:${record.id}`,
+        JSON.stringify(record),
+        86400 * 30
+        // 30 days retention
+      );
+    }
+    return record;
+  }
+  /**
+   * Records a Supervised Fine-Tuning (SFT) trajectory.
+   * Format: { messages }
+   */
+  async recordSft(entry) {
+    const sanitizedMessages = this.sanitizeMessages(entry.messages);
+    const sanitizedSystem = entry.systemPrompt ? this.sanitizeText(entry.systemPrompt) : void 0;
+    const record = {
+      id: entry.id || `sft_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      messages: sanitizedMessages,
+      systemPrompt: sanitizedSystem,
+      score: entry.score,
+      timestamp: entry.timestamp || Date.now(),
+      metadata: entry.metadata
+    };
+    this.sftRecords.push(record);
+    if (this.sftRecords.length > this.maxRecords) {
+      this.sftRecords.shift();
+    }
+    if (this.storage) {
+      await this.storage.set(
+        `distiller:sft:${record.id}`,
+        JSON.stringify(record),
+        86400 * 30
+        // 30 days retention
+      );
+    }
+    return record;
+  }
+  /**
+   * Exports all recorded DPO pairs in standard HuggingFace / TRL / Unsloth JSONL format.
+   * Each line: {"prompt": "...", "chosen": "...", "rejected": "..."}
+   */
+  exportDpoJsonl(options) {
+    const minScore = options?.minScore ?? this.minScoreForDpo;
+    let records = this.dpoRecords;
+    if (minScore !== void 0) {
+      records = records.filter(
+        (r) => r.scoreChosen === void 0 || r.scoreChosen >= minScore
+      );
+    }
+    if (options?.limit && options.limit > 0) {
+      records = records.slice(-options.limit);
+    }
+    return records.map(
+      (r) => JSON.stringify({
+        prompt: r.prompt,
+        chosen: r.chosen,
+        rejected: r.rejected
+      })
+    ).join("\n");
+  }
+  /**
+   * Exports all recorded SFT conversations in standard OpenAI / ShareGPT / Axolotl JSONL format.
+   * Each line: {"messages": [...]}
+   */
+  exportSftJsonl(options) {
+    const minScore = options?.minScore ?? this.minScoreForSft;
+    let records = this.sftRecords;
+    if (minScore !== void 0) {
+      records = records.filter(
+        (r) => r.score === void 0 || r.score >= minScore
+      );
+    }
+    if (options?.limit && options.limit > 0) {
+      records = records.slice(-options.limit);
+    }
+    return records.map(
+      (r) => JSON.stringify({
+        messages: r.messages
+      })
+    ).join("\n");
+  }
+  /**
+   * Returns all active DPO records
+   */
+  getDpoRecords() {
+    return [...this.dpoRecords];
+  }
+  /**
+   * Returns all active SFT records
+   */
+  getSftRecords() {
+    return [...this.sftRecords];
+  }
+  /**
+   * Returns distillation telemetry and estimated token volume
+   */
+  getStats() {
+    let charCount = 0;
+    for (const r of this.dpoRecords) {
+      charCount += r.prompt.length + r.chosen.length + r.rejected.length;
+    }
+    for (const r of this.sftRecords) {
+      for (const m of r.messages) {
+        if (typeof m.content === "string") {
+          charCount += m.content.length;
+        }
+      }
+    }
+    return {
+      dpoCount: this.dpoRecords.length,
+      sftCount: this.sftRecords.length,
+      totalEstimatedTokens: Math.round(charCount / 4)
+    };
+  }
+  /**
+   * Clears all in-memory records
+   */
+  async clear() {
+    this.dpoRecords = [];
+    this.sftRecords = [];
   }
 };
 
@@ -7604,6 +7807,260 @@ var RealtimeClient = class {
   }
 };
 
+// src/core/SemanticRouter.ts
+var DEFAULT_STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "has",
+  "he",
+  "in",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "that",
+  "the",
+  "to",
+  "was",
+  "were",
+  "will",
+  "with",
+  "i",
+  "me",
+  "my",
+  "myself",
+  "we",
+  "our",
+  "you",
+  "your",
+  "do",
+  "does",
+  "did",
+  "how",
+  "what",
+  "where",
+  "when",
+  "why",
+  "can",
+  "could",
+  "would",
+  "should",
+  "please",
+  "help",
+  "tell",
+  "need",
+  "want",
+  "this"
+]);
+function createFastSemanticEmbedding(text, dimensions = 128) {
+  const vec = new Array(dimensions).fill(0);
+  const clean = text.toLowerCase().replace(/[^\w\s]/g, " ");
+  const rawWords = clean.split(/\s+/).filter((w) => w.length > 0);
+  const words = rawWords.filter((w) => !DEFAULT_STOP_WORDS.has(w));
+  const tokensToProcess = words.length > 0 ? words : rawWords;
+  for (const word of tokensToProcess) {
+    let hash = 0;
+    for (let i = 0; i < word.length; i++) {
+      hash = (hash << 5) - hash + word.charCodeAt(i);
+      hash |= 0;
+    }
+    const bucket = Math.abs(hash) % dimensions;
+    vec[bucket] += 3;
+    if (word.length >= 3) {
+      for (let j = 0; j <= word.length - 3; j++) {
+        const trigram = word.substring(j, j + 3);
+        let triHash = 0;
+        for (let k = 0; k < trigram.length; k++) {
+          triHash = (triHash << 5) - triHash + trigram.charCodeAt(k);
+          triHash |= 0;
+        }
+        vec[Math.abs(triHash) % dimensions] += 1;
+      }
+    }
+  }
+  const norm = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
+  if (norm > 0) {
+    for (let i = 0; i < dimensions; i++) {
+      vec[i] /= norm;
+    }
+  }
+  return vec;
+}
+var SemanticRouter = class {
+  routes = /* @__PURE__ */ new Map();
+  defaultThreshold;
+  customEmbed;
+  dimensions;
+  constructor(options) {
+    this.defaultThreshold = options?.defaultThreshold ?? 0.35;
+    this.customEmbed = options?.customEmbed;
+    this.dimensions = options?.dimensions ?? 128;
+    if (options?.routes && options.routes.length > 0) {
+      for (const route of options.routes) {
+        const { centroid, sampleVectors } = this.computeVectorsSync(
+          route.samples
+        );
+        this.routes.set(route.name, { route, centroid, sampleVectors });
+      }
+    }
+  }
+  computeVectorsSync(samples) {
+    if (samples.length === 0) {
+      return {
+        centroid: new Array(this.dimensions).fill(0),
+        sampleVectors: []
+      };
+    }
+    const sampleVectors = [];
+    const centroid = new Array(this.dimensions).fill(0);
+    for (const sample of samples) {
+      const vec = createFastSemanticEmbedding(sample, this.dimensions);
+      sampleVectors.push(vec);
+      for (let i = 0; i < this.dimensions; i++) {
+        centroid[i] += vec[i];
+      }
+    }
+    const norm = Math.sqrt(centroid.reduce((sum, val) => sum + val * val, 0));
+    if (norm > 0) {
+      for (let i = 0; i < this.dimensions; i++) {
+        centroid[i] /= norm;
+      }
+    }
+    return { centroid, sampleVectors };
+  }
+  async computeVectorsAsync(samples) {
+    if (samples.length === 0) {
+      return {
+        centroid: new Array(this.dimensions).fill(0),
+        sampleVectors: []
+      };
+    }
+    if (!this.customEmbed) {
+      return this.computeVectorsSync(samples);
+    }
+    const sampleVectors = [];
+    for (const sample of samples) {
+      const vec = await this.customEmbed(sample);
+      sampleVectors.push(vec);
+    }
+    const dims = sampleVectors[0].length;
+    const centroid = new Array(dims).fill(0);
+    for (const vec of sampleVectors) {
+      for (let i = 0; i < dims; i++) {
+        centroid[i] += vec[i];
+      }
+    }
+    const norm = Math.sqrt(centroid.reduce((sum, val) => sum + val * val, 0));
+    if (norm > 0) {
+      for (let i = 0; i < dims; i++) {
+        centroid[i] /= norm;
+      }
+    }
+    return { centroid, sampleVectors };
+  }
+  /**
+   * Registers a new semantic route with pre-computed exemplar vectors
+   */
+  async addRoute(route) {
+    const { centroid, sampleVectors } = await this.computeVectorsAsync(
+      route.samples
+    );
+    this.routes.set(route.name, { route, centroid, sampleVectors });
+  }
+  /**
+   * Registers multiple semantic routes in parallel
+   */
+  async addRoutes(routes) {
+    await Promise.all(routes.map((r) => this.addRoute(r)));
+  }
+  /**
+   * Removes a semantic route by name
+   */
+  removeRoute(name) {
+    return this.routes.delete(name);
+  }
+  /**
+   * Retrieves a route by name
+   */
+  getRoute(name) {
+    return this.routes.get(name)?.route;
+  }
+  /**
+   * Checks if a route exists
+   */
+  hasRoute(name) {
+    return this.routes.has(name);
+  }
+  /**
+   * Returns all registered routes
+   */
+  getRoutes() {
+    return Array.from(this.routes.values()).map((c) => c.route);
+  }
+  /**
+   * Clears all registered routes
+   */
+  clearRoutes() {
+    this.routes.clear();
+  }
+  /**
+   * Classifies an input prompt or chat messages and matches against registered routes.
+   * Runs in <1ms when using native vectorization.
+   */
+  async classify(input) {
+    const startTime = performance.now();
+    const queryText = typeof input === "string" ? input : extractPromptText(input);
+    if (this.routes.size === 0 || !queryText.trim()) {
+      return {
+        matched: false,
+        confidence: 0,
+        latencyMs: Math.max(0.01, performance.now() - startTime),
+        scores: []
+      };
+    }
+    const queryVector = this.customEmbed ? await this.customEmbed(queryText) : createFastSemanticEmbedding(queryText, this.dimensions);
+    const scores = [];
+    let bestRoute;
+    let highestScore = -1;
+    for (const [routeName, cached] of this.routes.entries()) {
+      let routeMaxSimilarity = -1;
+      for (const sampleVec of cached.sampleVectors) {
+        const sim = cosineSimilarity(queryVector, sampleVec);
+        if (sim > routeMaxSimilarity) {
+          routeMaxSimilarity = sim;
+        }
+      }
+      const centroidSim = cosineSimilarity(queryVector, cached.centroid);
+      const aggregatedScore = routeMaxSimilarity > -1 ? Math.max(routeMaxSimilarity, centroidSim) : centroidSim;
+      const roundedScore = Math.round(aggregatedScore * 1e3) / 1e3;
+      scores.push({ routeName, score: roundedScore });
+      const threshold = cached.route.threshold ?? this.defaultThreshold;
+      if (aggregatedScore >= threshold && aggregatedScore > highestScore) {
+        highestScore = aggregatedScore;
+        bestRoute = cached.route;
+      }
+    }
+    scores.sort((a, b) => b.score - a.score);
+    const latencyMs = Math.round((performance.now() - startTime) * 100) / 100;
+    return {
+      matched: bestRoute !== void 0,
+      route: bestRoute,
+      confidence: highestScore > -1 ? Math.round(highestScore * 1e3) / 1e3 : scores[0]?.score ?? 0,
+      latencyMs: Math.max(0.01, latencyMs),
+      scores
+    };
+  }
+};
+
 // src/types/index.ts
 var BudgetExceededError = class extends Error {
   currentCostUsd;
@@ -9385,6 +9842,9 @@ var SinapsClient = class {
   workflows;
   evals;
   brain;
+  semanticRouter;
+  distiller;
+  semanticRouterEnabled;
   realtime = new RealtimeClient();
   consensus;
   isReversiblePII = false;
@@ -9463,6 +9923,14 @@ var SinapsClient = class {
       graph: options.graph,
       rag: options.rag,
       ...options.brain
+    });
+    const semConfig = typeof options.semanticRouter === "object" ? options.semanticRouter : void 0;
+    this.semanticRouter = new SemanticRouter(semConfig);
+    this.semanticRouterEnabled = options.semanticRouter === true || semConfig?.enabled === true;
+    this.distiller = new DatasetDistiller({
+      storage: this.storage,
+      piiGuardrails: this.guardrails,
+      ...options.distiller
     });
     this.consensus = {
       create: async (consensusOptions) => {
@@ -9556,6 +10024,19 @@ var SinapsClient = class {
         let tools = request.tools;
         let thinkingBudget = request.thinkingBudget;
         let requestedModel = request.model;
+        if ((this.semanticRouterEnabled || requestedModel === "auto") && this.semanticRouter.getRoutes().length > 0) {
+          const match = await this.semanticRouter.classify(messages);
+          if (match.matched && match.route) {
+            requestedModel = match.route.targetModel;
+            this.hooks?.onSemanticRouteMatch?.(match, request);
+            if (match.route.systemPromptModifier) {
+              messages = [
+                { role: "system", content: match.route.systemPromptModifier },
+                ...messages
+              ];
+            }
+          }
+        }
         if (this.llmo) {
           const opt = this.llmo.optimize(
             {
@@ -10942,6 +11423,18 @@ var sinapsai = createSinapsAI;
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Synthetic Dataset Distiller & DPO Pair Curation
+ *
+ * Automatically captures, curates, and sanitizes production trajectories,
+ * Actor-Critic feedback cycles, and high-scoring completions into standard JSONL
+ * datasets for SFT and Direct Preference Optimization (DPO) fine-tuning.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Durable Agent Workflows & State Checkpoint Engine
  *
  * Implements:
@@ -11061,6 +11554,18 @@ var sinapsai = createSinapsAI;
  * 2. Unified bidirectional session lifecycle (session.connect, sendText, sendAudio, close).
  * 3. Real-time audio and text delta event dispatching.
  * 4. In-process connection resilience and automatic failover.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * In-Process Semantic Prompt Router & Intent Classifier
+ *
+ * Provides sub-millisecond semantic intent classification using vector centroid
+ * matching over fast character n-grams or dense embeddings, routing incoming prompts
+ * directly to optimal specialized models without LLM classification roundtrips.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam

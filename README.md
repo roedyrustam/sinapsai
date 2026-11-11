@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-575%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-589%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -98,6 +98,12 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [38. Standard Schema v1 & Zod Direct Resolver (createStructured)](#38-standard-schema-v1--zod-direct-resolver-createstructured)
   - [39. Embedded Local Web UI & Telemetry Dashboard (sinapsai dashboard)](#39-embedded-local-web-ui--telemetry-dashboard-sinapsai-dashboard)
   - [40. Hallucination & Faithfulness Sentinel (createGroundingVerified)](#40-hallucination--faithfulness-sentinel-creategroundingverified)
+  - [41. AWS Bedrock & Azure OpenAI Enterprise Cloud Providers](#41-aws-bedrock--azure-openai-enterprise-cloud-providers)
+  - [42. Steganography Firewall 2.0 & Hidden Injection Neutralization](#42-steganography-firewall-20--hidden-injection-neutralization)
+  - [43. Parallel Multi-Agent Swarm with Atomic Deep-Merge](#43-parallel-multi-agent-swarm-with-atomic-deep-merge)
+  - [44. Actor-Critic Self-Correcting Consensus Swarm Loop](#44-actor-critic-self-correcting-consensus-swarm-loop)
+  - [45. Streaming Durable Workflows & Checkpoint Deletion (GDPR / UU PDP)](#45-streaming-durable-workflows--checkpoint-deletion-gdpr--uu-pdp)
+  - [46. In-Process Semantic Prompt Router & Synthetic Dataset Distiller](#46-in-process-semantic-prompt-router--synthetic-dataset-distiller)
 - [🤖 AI & LLM Code Generation Guidelines](#-ai--llm-code-generation-guidelines)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
@@ -1724,6 +1730,64 @@ const state = await client.workflows.startWorkflow('user-session-123', { userId:
 await client.workflows.deleteWorkflow('user-session-123');
 ```
 
+### 46. In-Process Semantic Prompt Router & Synthetic Dataset Distiller
+
+Sub-millisecond prompt domain routing to specialized LLMs and automated PII-sanitized dataset curation (DPO & SFT) for fine-tuning:
+
+```typescript
+import {
+  SinapsClient,
+  OpenAiProvider,
+  AnthropicProvider,
+  SemanticRouter,
+  DatasetDistiller,
+} from 'sinapsai';
+
+// 1. Configure in-process semantic router (<0.5ms vector centroid classification)
+const semanticRouter = new SemanticRouter({
+  routes: [
+    {
+      name: 'coding',
+      model: 'claude-3-7-sonnet',
+      description: 'Programming, TypeScript, algorithms, and bug fixing',
+      samples: ['How do I write a binary search tree in TypeScript?', 'Fix null pointer exception'],
+    },
+    {
+      name: 'support',
+      model: 'gpt-4o-mini',
+      description: 'Account billing, subscription cancellation, and FAQs',
+      samples: ['How do I cancel my subscription and get a refund?', 'Update billing address'],
+    },
+  ],
+});
+
+// 2. Initialize client with semantic routing & dataset distillation
+const client = new SinapsClient({
+  providers: [
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+  ],
+  semanticRouter,
+  distiller: new DatasetDistiller(),
+});
+
+// 3. Prompt automatically routes to 'claude-3-7-sonnet' based on semantic domain
+const response = await client.chat.completions.create({
+  messages: [{ role: 'user', content: 'Help me optimize this recursive Fibonacci algorithm in TS' }],
+});
+
+// 4. Record interaction as DPO preference pair with automatic PII redaction
+client.distiller.recordDpo({
+  prompt: 'Write an email template for roedy@example.com',
+  chosen: 'Dear Roedy, your request has been confirmed.',
+  rejected: 'Email me at roedy@example.com for questions.',
+});
+
+// 5. Export HuggingFace/TRL compatible DPO JSONL dataset
+const dpoJsonl = client.distiller.exportDpoJsonl();
+console.log('Exported DPO Dataset:\n', dpoJsonl);
+```
+
 ---
 
 ## 🤖 AI & LLM Code Generation Guidelines
@@ -1921,6 +1985,8 @@ const swarm = client.swarm({
 | `llmo` | `LlmOptimizationOptions \| boolean` | `undefined` | Universal LLM Optimization engine (`minifyPrompts`, `deduplicateSystem`, `alignKvCachePrefix`, `autoCascadeModel`, `cascadeTiers`, `dynamicThinking`) |
 | `memory` | `EpisodicMemoryOptions` | `undefined` | In-process long-term episodic vector memory with tenant/user isolation and dynamic prompt injection |
 | `rag` | `HybridRagOptions` | `undefined` | In-process Okapi BM25 + dense vector hybrid retrieval engine with Reciprocal Rank Fusion |
+| `semanticRouter` | `SemanticRouter` | `undefined` | In-process sub-millisecond semantic prompt classifier and model router |
+| `distiller` | `DatasetDistiller` | `new DatasetDistiller()` | In-process synthetic fine-tuning dataset generator (DPO & SFT) with PII redaction |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |
 
 ### `CircuitBreakerOptions`
