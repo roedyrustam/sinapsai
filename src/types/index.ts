@@ -136,6 +136,11 @@ export interface UnifiedApiRequest {
    */
   llmo?: import('../core/LlmOptimizer.js').LlmRequestOptimizationOptions;
   /**
+   * Optional KV-cache prefix pinning: relocates volatile timestamps from system prompt to tail
+   * and canonicalizes tool schemas to maximize provider prompt caching discounts.
+   */
+  pinKvCache?: boolean;
+  /**
    * A unique identifier representing your end-user, useful for tracking abuse and rate limiting.
    */
   user?: string;
@@ -437,6 +442,10 @@ export interface SinapsEventHooks {
   onGatewayRateLimitWarning?: (violation: GatewayRateLimitViolation) => void;
   onSemanticRouteMatch?: (
     match: import('../core/SemanticRouter.js').SemanticMatchResult,
+    request: CreateChatCompletionRequest | UnifiedApiRequest,
+  ) => void;
+  onKvCachePartition?: (
+    partitioned: import('../core/KvCacheOptimizer.js').PartitionedPrompt,
     request: CreateChatCompletionRequest | UnifiedApiRequest,
   ) => void;
 }
@@ -842,12 +851,22 @@ export {
   AgentWalletExceededError,
   deepMergeContext,
   type SwarmAgentWallet,
+  type TournamentOptions,
+  type TournamentResult,
 } from '../core/AgentSwarm.js';
 export {
   AutonomousDriftHealer,
   type DriftHealResult,
   type ProviderErrorRemediation,
 } from '../core/AutonomousDriftHealer.js';
+export {
+  type ClusterCentroid,
+  type ClusteredCacheEntry,
+  type ClusteredCacheHit,
+  type ClusteredCacheStats,
+  ClusteredSemanticCache,
+  type ClusteredSemanticCacheOptions,
+} from '../core/ClusteredSemanticCache.js';
 export {
   CognitiveBrain,
   type CognitiveBrainOptions,
@@ -908,6 +927,12 @@ export {
   reciprocalRankFusion,
 } from '../core/HybridRag.js';
 export {
+  type CacheSavingsPrediction,
+  KvCacheOptimizer,
+  type KvPartitionOptions,
+  type PartitionedPrompt,
+} from '../core/KvCacheOptimizer.js';
+export {
   canonicalizeTools,
   DEFAULT_CASCADE_TIERS,
   deduplicateSystemInstructions,
@@ -965,6 +990,16 @@ export type {
   ExtendedPIIGuardrailsOptions,
   SinapsClientOptions,
 } from '../core/SinapsClient.js';
+export {
+  type DissentingView,
+  type TournamentAgentScore,
+  type TournamentCluster,
+  TournamentConsensusEngine,
+  type TournamentConsensusOptions,
+  type TournamentConsensusResult,
+  type TournamentSubmission,
+  type TournamentVotingStrategy,
+} from '../core/TournamentConsensus.js';
 export {
   exportOtelTraces,
   type GenAiSpan,

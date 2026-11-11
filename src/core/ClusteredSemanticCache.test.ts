@@ -47,12 +47,24 @@ describe('ClusteredSemanticCache', () => {
     });
 
     // Topic 1: Coding
-    await cache.set('How to fix a null pointer exception in Java?', 'Check null checks.');
-    await cache.set('Fixing undefined error in JavaScript code', 'Use optional chaining.');
+    await cache.set(
+      'How to fix a null pointer exception in Java?',
+      'Check null checks.',
+    );
+    await cache.set(
+      'Fixing undefined error in JavaScript code',
+      'Use optional chaining.',
+    );
 
     // Topic 2: Cooking
-    await cache.set('How to make traditional Italian spaghetti carbonara?', 'Use pecorino, eggs, and guanciale.');
-    await cache.set('Pasta carbonara authentic recipe steps', 'Do not use cream in carbonara.');
+    await cache.set(
+      'How to make traditional Italian spaghetti carbonara?',
+      'Use pecorino, eggs, and guanciale.',
+    );
+    await cache.set(
+      'Pasta carbonara authentic recipe steps',
+      'Do not use cream in carbonara.',
+    );
 
     const stats = cache.getStats();
     expect(stats.totalEntries).toBe(4);
@@ -117,7 +129,9 @@ describe('ClusteredSemanticCache', () => {
 
   it('should delete entries by key or prompt', async () => {
     const cache = new ClusteredSemanticCache<string>();
-    await cache.set('Delete me please', 'To be deleted', { key: 'custom_del_key' });
+    await cache.set('Delete me please', 'To be deleted', {
+      key: 'custom_del_key',
+    });
 
     expect(cache.getTotalEntries()).toBe(1);
 
@@ -164,4 +178,3 @@ describe('ClusteredSemanticCache', () => {
     expect(stats.clusterCount).toBeGreaterThanOrEqual(1);
   });
 });
-

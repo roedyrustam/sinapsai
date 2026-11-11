@@ -943,10 +943,30 @@ describe('AgentSwarm', () => {
 
     const swarm = client.swarm({
       agents: [
-        { id: 'db_lead', name: 'Database Lead', role: 'Architect', instructions: 'Recommend databases.' },
-        { id: 'infra_eng', name: 'Infra Engineer', role: 'DevOps', instructions: 'Recommend databases.' },
-        { id: 'minimalist', name: 'Minimalist', role: 'Dev', instructions: 'Recommend lightweight solutions.' },
-        { id: 'synthesizer', name: 'Synthesizer', role: 'Judge', instructions: 'Synthesize consensus.' },
+        {
+          id: 'db_lead',
+          name: 'Database Lead',
+          role: 'Architect',
+          instructions: 'Recommend databases.',
+        },
+        {
+          id: 'infra_eng',
+          name: 'Infra Engineer',
+          role: 'DevOps',
+          instructions: 'Recommend databases.',
+        },
+        {
+          id: 'minimalist',
+          name: 'Minimalist',
+          role: 'Dev',
+          instructions: 'Recommend lightweight solutions.',
+        },
+        {
+          id: 'synthesizer',
+          name: 'Synthesizer',
+          role: 'Judge',
+          instructions: 'Synthesize consensus.',
+        },
       ],
     });
 
@@ -968,7 +988,9 @@ describe('AgentSwarm', () => {
     expect(tournament.clusters.length).toBe(2);
     expect(tournament.dissentingViews.length).toBe(1);
     expect(tournament.dissentingViews[0].agentId).toBe('minimalist');
-    expect(tournament.synthesizedContent).toContain('Consensus decision: Use PostgreSQL with pgvector');
+    expect(tournament.synthesizedContent).toContain(
+      'Consensus decision: Use PostgreSQL with pgvector',
+    );
     expect(progressPhases).toContain('fan_out');
     expect(progressPhases).toContain('clustering');
     expect(progressPhases).toContain('tallying');
@@ -977,7 +999,9 @@ describe('AgentSwarm', () => {
     // Verify automatic DPO pair recording
     const dpoRecords = client.distiller.getDpoRecords();
     expect(dpoRecords.length).toBe(1);
-    expect(dpoRecords[0].chosen).toContain('Consensus decision: Use PostgreSQL with pgvector');
+    expect(dpoRecords[0].chosen).toContain(
+      'Consensus decision: Use PostgreSQL with pgvector',
+    );
     expect(dpoRecords[0].rejected).toContain('flat JSON files');
   });
 });

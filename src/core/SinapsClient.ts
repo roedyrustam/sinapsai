@@ -71,6 +71,10 @@ import {
   type CircuitBreakerOptions,
 } from './CircuitBreaker.js';
 import {
+  ClusteredSemanticCache,
+  type ClusteredSemanticCacheOptions,
+} from './ClusteredSemanticCache.js';
+import {
   CognitiveBrain,
   type CognitiveBrainOptions,
 } from './CognitiveBrain.js';
@@ -113,6 +117,10 @@ import {
   KnowledgeGraph,
   type KnowledgeGraphOptions,
 } from './KnowledgeGraph.js';
+import {
+  KvCacheOptimizer,
+  type KvPartitionOptions,
+} from './KvCacheOptimizer.js';
 import { LlmEvals, type LlmEvalsOptions } from './LlmEvals.js';
 import {
   type LlmOptimizationOptions,
@@ -250,6 +258,17 @@ export interface SinapsClientOptions {
    * Captures and sanitizes trajectories and Actor-Critic feedback loops into DPO/SFT JSONL.
    */
   distiller?: DatasetDistillerOptions;
+  /**
+   * Optional in-process clustered semantic cache configuration.
+   * Clusters embeddings into K centroids for sub-0.08ms lookup scaling.
+   */
+  clusteredCache?: ClusteredSemanticCacheOptions | boolean;
+  /**
+   * Optional KV-cache prefix pinning & partitioning optimizer.
+   * Separates static system instructions, canonicalizes tools, and moves volatile
+   * timestamps to the tail to maximize provider prompt caching hit rates.
+   */
+  kvCache?: KvPartitionOptions | boolean;
 }
 
 export class SinapsClient {
@@ -273,6 +292,9 @@ export class SinapsClient {
   public readonly brain: CognitiveBrain;
   public readonly semanticRouter: SemanticRouter;
   public readonly distiller: DatasetDistiller;
+  public readonly clusteredCache: ClusteredSemanticCache;
+  public readonly kvCache: KvCacheOptimizer;
+  private kvCacheEnabled = false;
   private semanticRouterEnabled: boolean;
   public readonly realtime = new RealtimeClient();
   public readonly consensus: {
@@ -397,6 +419,28 @@ export class SinapsClient {
       piiGuardrails: this.guardrails,
       ...options.distiller,
     });
+
+    // Initialize In-Process Clustered Semantic Cache
+    if (typeof options.clusteredCache === 'object') {
+      this.clusteredCache = new ClusteredSemanticCache({
+        storage: this.storage,
+        ...options.clusteredCache,
+      });
+    } else {
+      this.clusteredCache = new ClusteredSemanticCache({
+        storage: this.storage,
+      });
+    }
+
+    // Initialize KV-Cache Prefix Pinning & Partitioning Optimizer
+    if (options.kvCache) {
+      this.kvCacheEnabled = true;
+      this.kvCache = new KvCacheOptimizer(
+        typeof options.kvCache === 'object' ? options.kvCache : {},
+      );
+    } else {
+      this.kvCache = new KvCacheOptimizer();
+    }
 
     // Initialize Speculative Multi-Draft Consensus
     this.consensus = {
@@ -547,6 +591,16 @@ export class SinapsClient {
           if (opt.cascadeModel) {
             requestedModel = opt.cascadeModel;
           }
+        }
+
+        // Apply KV-Cache Prefix Pinning & Partitioning if requested or configured
+        if (request.pinKvCache || this.kvCacheEnabled) {
+          const partitioned = this.kvCache.partition(messages, tools);
+          messages = partitioned.messages;
+          if (partitioned.tools) {
+            tools = partitioned.tools;
+          }
+          this.hooks?.onKvCachePartition?.(partitioned, request);
         }
 
         const resolvedModel = this.resolveModel(requestedModel);

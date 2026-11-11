@@ -1629,11 +1629,19 @@ CRITIQUE: <concise, actionable feedback explaining why it passed or what needs i
 
     // Phase 1: Fan-out execution across all candidate agents in parallel
     const agentPromises = options.agentIds.map(async (agentId) => {
-      const runResult = await this.run({
-        initialAgentId: agentId,
-        task: options.task,
-        context: sharedContext.getAll(),
-      });
+      const runParams =
+        typeof options.task === 'string'
+          ? {
+              initialAgentId: agentId,
+              task: options.task,
+              context: sharedContext.getAll(),
+            }
+          : {
+              initialAgentId: agentId,
+              messages: options.task,
+              context: sharedContext.getAll(),
+            };
+      const runResult = await this.run(runParams);
 
       completed++;
       options.onVoteProgress?.({

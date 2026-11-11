@@ -1322,5 +1322,98 @@ describe('SinapsClient', () => {
       const stats = client.distiller.getStats();
       expect(stats.dpoCount).toBe(1);
     });
+
+    it('exposes ClusteredSemanticCache on client and caches responses with centroid indexing', async () => {
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn(),
+      };
+
+      const client = new SinapsClient({
+        providers: [mockProvider],
+        clusteredCache: { similarityThreshold: 0.6, k: 3 },
+      });
+
+      expect(client.clusteredCache).toBeDefined();
+
+      await client.clusteredCache.set(
+        'How to implement quicksort in TypeScript?',
+        'Quicksort is a divide and conquer sorting algorithm.',
+      );
+
+      const hit = await client.clusteredCache.get(
+        'quicksort implementation in TypeScript',
+      );
+      expect(hit).not.toBeNull();
+      expect(hit?.value).toBe(
+        'Quicksort is a divide and conquer sorting algorithm.',
+      );
+      expect(client.clusteredCache.getStats().hits).toBe(1);
+    });
+
+    it('applies KV-cache prefix pinning and partitions messages when pinKvCache is true', async () => {
+      const mockResponse: UnifiedApiResponse = {
+        id: 'chatcmpl-pinned',
+        model: 'gpt-4o',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Response from pinned cache',
+            },
+            finishReason: 'stop',
+          },
+        ],
+      };
+
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn().mockResolvedValue(mockResponse),
+      };
+
+      const onKvPartition = vi.fn();
+      const client = new SinapsClient({
+        providers: [mockProvider],
+        hooks: {
+          onKvCachePartition: onKvPartition,
+        },
+      });
+
+      expect(client.kvCache).toBeDefined();
+
+      const response = await client.chat.completions.create({
+        model: 'gpt-4o',
+        pinKvCache: true,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a banking assistant. Current time: 2026-11-11T16:32:25Z.',
+          },
+          { role: 'user', content: 'Check account balance' },
+        ],
+      });
+
+      expect(response).toBe(mockResponse);
+      expect(onKvPartition).toHaveBeenCalled();
+      expect(mockProvider.generateContent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'system',
+              content: 'You are a banking assistant.', // Timestamp stripped to preserve byte prefix
+            }),
+            expect.objectContaining({
+              role: 'user',
+              content: expect.stringContaining(
+                '[RUNTIME_CONTEXT]: Current time: 2026-11-11T16:32:25Z',
+              ),
+            }),
+          ]),
+        }),
+      );
+    });
   });
 });

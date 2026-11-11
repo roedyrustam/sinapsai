@@ -13,9 +13,10 @@
  * @license MIT
  */
 
-import type { ChatMessage, StateStorage } from '../types/index.js';
+import type { ChatMessage } from '../types/index.js';
 import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import { createFastSemanticEmbedding } from './SemanticRouter.js';
+import type { StateStorage } from './StateStorage.js';
 
 export interface ClusteredCacheEntry<T = unknown> {
   id: string;
@@ -59,7 +60,7 @@ export interface ClusteredCacheStats {
   averageLookupLatencyMs: number;
 }
 
-export interface ClusteredSemanticCacheOptions<T = unknown> {
+export interface ClusteredSemanticCacheOptions<_T = unknown> {
   /**
    * Target number of centroid clusters (default: 8, minimum: 1)
    */
@@ -650,4 +651,3 @@ export class ClusteredSemanticCache<T = unknown> {
     this.misses++;
   }
 }
-
