@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-589%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-608%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -104,6 +104,7 @@ Most AI gateways (LiteLLM, Portkey, Helicone) require deploying separate Docker 
   - [44. Actor-Critic Self-Correcting Consensus Swarm Loop](#44-actor-critic-self-correcting-consensus-swarm-loop)
   - [45. Streaming Durable Workflows & Checkpoint Deletion (GDPR / UU PDP)](#45-streaming-durable-workflows--checkpoint-deletion-gdpr--uu-pdp)
   - [46. In-Process Semantic Prompt Router & Synthetic Dataset Distiller](#46-in-process-semantic-prompt-router--synthetic-dataset-distiller)
+  - [47. Clustered Semantic Cache, Swarm Tournament Consensus & KV-Cache Prefix Pinning](#47-clustered-semantic-cache-swarm-tournament-consensus--kv-cache-prefix-pinning)
 - [🤖 AI & LLM Code Generation Guidelines](#-ai--llm-code-generation-guidelines)
 - [Supported Providers](#-supported-providers)
   - [Creating a Custom Provider (e.g. Ollama)](#creating-a-custom-provider-eg-ollama)
@@ -1788,6 +1789,73 @@ const dpoJsonl = client.distiller.exportDpoJsonl();
 console.log('Exported DPO Dataset:\n', dpoJsonl);
 ```
 
+### 47. Clustered Semantic Cache, Swarm Tournament Consensus & KV-Cache Prefix Pinning
+
+Sub-0.1ms spherical K-means clustered semantic cache, multi-model swarm tournament consensus with minority dissent analysis, and 3-tier KV-cache prefix pinning with automatic timestamp relocation:
+
+```typescript
+import {
+  SinapsClient,
+  OpenAiProvider,
+  AnthropicProvider,
+  GeminiProvider,
+  ClusteredSemanticCache,
+  KvCacheOptimizer,
+} from 'sinapsai';
+
+// 1. Initialize high-performance Clustered Semantic Cache (O(K + N/K) spherical K-means)
+const clusteredCache = new ClusteredSemanticCache({
+  numClusters: 8,
+  similarityThreshold: 0.65,
+  maxEntries: 1000,
+});
+
+// 2. Initialize KV-Cache Prefix Pinning Optimizer (3-tier partitioning & timestamp relocation)
+const kvCache = new KvCacheOptimizer();
+
+const client = new SinapsClient({
+  providers: [
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! }),
+  ],
+  clusteredCache,
+  kvCache,
+});
+
+// 3. Multi-Model Swarm Tournament & Voting Consensus
+const swarm = client.swarm({
+  agents: [
+    { id: 'claude', name: 'Claude Architect', model: 'claude-3-7-sonnet', instructions: 'Analyze scalability' },
+    { id: 'gpt', name: 'GPT Implementer', model: 'gpt-4o', instructions: 'Analyze memory efficiency' },
+    { id: 'gemini', name: 'Gemini Critic', model: 'gemini-2.5-flash', instructions: 'Analyze throughput' },
+  ],
+});
+
+const tournament = await swarm.runTournament({
+  task: 'Evaluate Raft vs Paxos for high-throughput distributed transaction logging.',
+  strategy: 'weighted',
+  weights: { claude: 1.2, gpt: 1.0, gemini: 0.9 },
+  recordDpo: true, // Automatically pairs consensus winner as chosen and dissenter as rejected
+});
+
+console.log('Tournament Winner:', tournament.winnerId);
+console.log('Consensus Confidence:', tournament.confidence);
+console.log('Minority Dissenters:', tournament.dissenters);
+
+// 4. KV-Cache Prefix Pinning with timestamp relocation
+const partitioned = client.kvCache.partition(
+  [
+    { role: 'system', content: `You are a financial advisor. Current timestamp: ${new Date().toISOString()}` },
+    { role: 'user', content: 'What is the optimal dollar-cost averaging strategy?' },
+  ]
+);
+
+// Volatile timestamp is relocated to the tail [RUNTIME_CONTEXT], guaranteeing byte-identical system prefix hits
+console.log('Optimized Prefix Tokens:', partitioned.estimatedStaticPrefixTokens);
+console.log('Predicted Cache Hit:', client.kvCache.predictHit([], { messages: partitioned.messages }));
+```
+
 ---
 
 ## 🤖 AI & LLM Code Generation Guidelines
@@ -1987,6 +2055,8 @@ const swarm = client.swarm({
 | `rag` | `HybridRagOptions` | `undefined` | In-process Okapi BM25 + dense vector hybrid retrieval engine with Reciprocal Rank Fusion |
 | `semanticRouter` | `SemanticRouter` | `undefined` | In-process sub-millisecond semantic prompt classifier and model router |
 | `distiller` | `DatasetDistiller` | `new DatasetDistiller()` | In-process synthetic fine-tuning dataset generator (DPO & SFT) with PII redaction |
+| `clusteredCache` | `ClusteredSemanticCache` | `undefined` | High-performance spherical K-means clustered semantic cache (<0.08ms lookup) |
+| `kvCache` | `KvCacheOptimizer` | `undefined` | Deterministic 3-tier KV-cache prefix pinning optimizer with timestamp relocation |
 | `hooks` | `SinapsEventHooks` | `{}` | Lifecycle event listeners for observability |
 
 ### `CircuitBreakerOptions`

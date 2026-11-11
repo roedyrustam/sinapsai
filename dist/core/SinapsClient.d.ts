@@ -12,6 +12,7 @@ import { type GenAiSpan, type OtelTraceExportOptions, type OtelTracePayload } fr
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
+import { ClusteredSemanticCache, type ClusteredSemanticCacheOptions } from './ClusteredSemanticCache.js';
 import { CognitiveBrain, type CognitiveBrainOptions } from './CognitiveBrain.js';
 import { type ConsensusOptions, type ConsensusResult } from './ConsensusEngine.js';
 import { type ContextCompressionOptions, ContextCompressor } from './ContextCompressor.js';
@@ -23,6 +24,7 @@ import { FaithfulnessSentinel, type FaithfulnessSentinelOptions, type GroundingV
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
 import { KnowledgeGraph, type KnowledgeGraphOptions } from './KnowledgeGraph.js';
+import { KvCacheOptimizer, type KvPartitionOptions } from './KvCacheOptimizer.js';
 import { LlmEvals, type LlmEvalsOptions } from './LlmEvals.js';
 import { type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions } from './LlmOptimizer.js';
 import { McpToolBridge } from './McpBridge.js';
@@ -150,6 +152,17 @@ export interface SinapsClientOptions {
      * Captures and sanitizes trajectories and Actor-Critic feedback loops into DPO/SFT JSONL.
      */
     distiller?: DatasetDistillerOptions;
+    /**
+     * Optional in-process clustered semantic cache configuration.
+     * Clusters embeddings into K centroids for sub-0.08ms lookup scaling.
+     */
+    clusteredCache?: ClusteredSemanticCacheOptions | boolean;
+    /**
+     * Optional KV-cache prefix pinning & partitioning optimizer.
+     * Separates static system instructions, canonicalizes tools, and moves volatile
+     * timestamps to the tail to maximize provider prompt caching hit rates.
+     */
+    kvCache?: KvPartitionOptions | boolean;
 }
 export declare class SinapsClient {
     private router;
@@ -172,6 +185,9 @@ export declare class SinapsClient {
     readonly brain: CognitiveBrain;
     readonly semanticRouter: SemanticRouter;
     readonly distiller: DatasetDistiller;
+    readonly clusteredCache: ClusteredSemanticCache;
+    readonly kvCache: KvCacheOptimizer;
+    private kvCacheEnabled;
     private semanticRouterEnabled;
     readonly realtime: RealtimeClient;
     readonly consensus: {

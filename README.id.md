@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-589%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-608%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -106,6 +106,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
   - [44. Loop Swarm Konsensus Koreksi-Mandiri Actor-Critic](#44-loop-swarm-konsensus-koreksi-mandiri-actor-critic)
   - [45. Streaming Durable Workflows & Penghapusan Checkpoint (UU PDP / GDPR)](#45-streaming-durable-workflows--penghapusan-checkpoint-uu-pdp--gdpr)
   - [46. In-Process Semantic Prompt Router & Synthetic Dataset Distiller](#46-in-process-semantic-prompt-router--synthetic-dataset-distiller)
+  - [47. Clustered Semantic Cache, Swarm Tournament Consensus & KV-Cache Prefix Pinning](#47-clustered-semantic-cache-swarm-tournament-consensus--kv-cache-prefix-pinning)
 - [🤖 Panduan Pembuatan Kode untuk Model AI & Copilot](#-panduan-pembuatan-kode-untuk-model-ai--copilot)
 - [Penyedia yang Didukung (Providers)](#-penyedia-yang-didukung-providers)
   - [Membuat Provider Kustom](#membuat-provider-kustom-contoh-ollama)
@@ -1792,6 +1793,73 @@ const dpoJsonl = client.distiller.exportDpoJsonl();
 console.log('Dataset DPO Terekspor:\n', dpoJsonl);
 ```
 
+### 47. Clustered Semantic Cache, Swarm Tournament Consensus & KV-Cache Prefix Pinning
+
+Cache semantik terkelompok spherical K-means sub-0.1ms, konsensus turnamen musyawarah multi-model swarm dengan analisis disenter minoritas, dan partisi prefix KV-cache 3-tingkat dengan relokasi timestamp otomatis:
+
+```typescript
+import {
+  SinapsClient,
+  OpenAiProvider,
+  AnthropicProvider,
+  GeminiProvider,
+  ClusteredSemanticCache,
+  KvCacheOptimizer,
+} from 'sinapsai';
+
+// 1. Inisialisasi Clustered Semantic Cache performa tinggi (O(K + N/K) spherical K-means)
+const clusteredCache = new ClusteredSemanticCache({
+  numClusters: 8,
+  similarityThreshold: 0.65,
+  maxEntries: 1000,
+});
+
+// 2. Inisialisasi Pengoptimal Pinning Prefix KV-Cache (partisi 3-tingkat & relokasi timestamp)
+const kvCache = new KvCacheOptimizer();
+
+const client = new SinapsClient({
+  providers: [
+    new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY! }),
+    new OpenAiProvider({ apiKey: process.env.OPENAI_API_KEY! }),
+    new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! }),
+  ],
+  clusteredCache,
+  kvCache,
+});
+
+// 3. Turnamen Musyawarah Multi-Model Swarm & Konsensus Voting
+const swarm = client.swarm({
+  agents: [
+    { id: 'claude', name: 'Claude Architect', model: 'claude-3-7-sonnet', instructions: 'Analisis skalabilitas' },
+    { id: 'gpt', name: 'GPT Implementer', model: 'gpt-4o', instructions: 'Analisis efisiensi memori' },
+    { id: 'gemini', name: 'Gemini Critic', model: 'gemini-2.5-flash', instructions: 'Analisis throughput' },
+  ],
+});
+
+const tournament = await swarm.runTournament({
+  task: 'Evaluasi Raft vs Paxos untuk logging transaksi terdistribusi throughput tinggi.',
+  strategy: 'weighted',
+  weights: { claude: 1.2, gpt: 1.0, gemini: 0.9 },
+  recordDpo: true, // Otomatis pasangkan pemenang konsensus sebagai chosen dan dissenter sebagai rejected
+});
+
+console.log('Pemenang Turnamen:', tournament.winnerId);
+console.log('Tingkat Keyakinan Konsensus:', tournament.confidence);
+console.log('Disenter Minoritas:', tournament.dissenters);
+
+// 4. Pinning Prefix KV-Cache dengan relokasi timestamp
+const partitioned = client.kvCache.partition(
+  [
+    { role: 'system', content: `Anda adalah penasihat keuangan. Waktu saat ini: ${new Date().toISOString()}` },
+    { role: 'user', content: 'Apa strategi dollar-cost averaging yang optimal?' },
+  ]
+);
+
+// Timestamp dinamis direlokasi ke ekor [RUNTIME_CONTEXT], menjamin cache hit prefix sistem byte-identik
+console.log('Token Prefix Teroptimasi:', partitioned.estimatedStaticPrefixTokens);
+console.log('Prediksi Cache Hit:', client.kvCache.predictHit([], { messages: partitioned.messages }));
+```
+
 ---
 
 ## 🤖 Panduan Pembuatan Kode untuk Model AI & Copilot
@@ -1991,6 +2059,8 @@ const swarm = client.swarm({
 | `rag` | `HybridRagOptions` | `undefined` | Mesin pencarian hybrid in-process BM25 + vektor dense dengan Reciprocal Rank Fusion |
 | `semanticRouter` | `SemanticRouter` | `undefined` | Pengklasifikasi prompt dan router model semantik in-process sub-milidetik |
 | `distiller` | `DatasetDistiller` | `new DatasetDistiller()` | Generator dataset fine-tuning sintetis (DPO & SFT) in-process dengan redaksi PII |
+| `clusteredCache` | `ClusteredSemanticCache` | `undefined` | Cache semantik terkelompok spherical K-means performa tinggi (<0.08ms lookup) |
+| `kvCache` | `KvCacheOptimizer` | `undefined` | Pengoptimal partisi prefix KV-cache deterministik 3-tingkat dengan relokasi timestamp |
 | `hooks` | `SinapsEventHooks` | `{}` | Handler event monitoring dan logging |
 
 ### `CircuitBreakerOptions`

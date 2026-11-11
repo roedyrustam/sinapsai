@@ -118,6 +118,11 @@ export interface UnifiedApiRequest {
      */
     llmo?: import('../core/LlmOptimizer.js').LlmRequestOptimizationOptions;
     /**
+     * Optional KV-cache prefix pinning: relocates volatile timestamps from system prompt to tail
+     * and canonicalizes tool schemas to maximize provider prompt caching discounts.
+     */
+    pinKvCache?: boolean;
+    /**
      * A unique identifier representing your end-user, useful for tracking abuse and rate limiting.
      */
     user?: string;
@@ -342,6 +347,7 @@ export interface SinapsEventHooks {
     onHedgeWon?: (winnerProvider: Provider, elapsedMs: number) => void;
     onGatewayRateLimitWarning?: (violation: GatewayRateLimitViolation) => void;
     onSemanticRouteMatch?: (match: import('../core/SemanticRouter.js').SemanticMatchResult, request: CreateChatCompletionRequest | UnifiedApiRequest) => void;
+    onKvCachePartition?: (partitioned: import('../core/KvCacheOptimizer.js').PartitionedPrompt, request: CreateChatCompletionRequest | UnifiedApiRequest) => void;
 }
 export interface BatchProgress {
     /**
@@ -691,8 +697,9 @@ export type AgentStreamEvent = {
 };
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
 export type { ActorCriticOptions, ActorCriticResult, ActorCriticRevision, ContextMergeOptions, SwarmParallelAgentTask, SwarmParallelBranchResult, SwarmParallelOptions, SwarmParallelResult, } from '../core/AgentSwarm.js';
-export { AgentWalletExceededError, deepMergeContext, type SwarmAgentWallet, } from '../core/AgentSwarm.js';
+export { AgentWalletExceededError, deepMergeContext, type SwarmAgentWallet, type TournamentOptions, type TournamentResult, } from '../core/AgentSwarm.js';
 export { AutonomousDriftHealer, type DriftHealResult, type ProviderErrorRemediation, } from '../core/AutonomousDriftHealer.js';
+export { type ClusterCentroid, type ClusteredCacheEntry, type ClusteredCacheHit, type ClusteredCacheStats, ClusteredSemanticCache, type ClusteredSemanticCacheOptions, } from '../core/ClusteredSemanticCache.js';
 export { CognitiveBrain, type CognitiveBrainOptions, type CognitiveContextResult, type CognitiveRetrieveOptions, } from '../core/CognitiveBrain.js';
 export { type ConsensusDraftResult, ConsensusEngine, type ConsensusOptions, type ConsensusResult, calculatePairwiseSimilarity, computeTermFrequencyVector, } from '../core/ConsensusEngine.js';
 export { DatasetDistiller, type DatasetDistillerOptions, type DistillerStats, type DpoRecord, type SftRecord, } from '../core/DatasetDistiller.js';
@@ -701,6 +708,7 @@ export { DurableWorkflowEngine, type DurableWorkflowOptions, type WorkflowCheckp
 export { EpisodicMemory, type EpisodicMemoryOptions, type MemoryRecallOptions, type MemoryRecallResult, type MemoryRecord, type MemoryStoreOptions, } from '../core/EpisodicMemory.js';
 export { type ContextCacheEligibility, canonicalizeJsonValue, GeminiAgentBooster, type ThinkingBudgetTier, type ThinkingComplexityAnalysis, } from '../core/GeminiAgentBooster.js';
 export { Bm25Index, type ChunkOptions, chunkDocument, type DocumentChunk, HybridRagEngine, type HybridRagOptions, type RagSearchOptions, type RagSearchResult, reciprocalRankFusion, } from '../core/HybridRag.js';
+export { type CacheSavingsPrediction, KvCacheOptimizer, type KvPartitionOptions, type PartitionedPrompt, } from '../core/KvCacheOptimizer.js';
 export { canonicalizeTools, DEFAULT_CASCADE_TIERS, deduplicateSystemInstructions, estimateTextTokens, type LlmCascadeTiers, type LlmComplexityAnalysis, type LlmComplexityTier, type LlmOptimizationMetrics, type LlmOptimizationOptions, type LlmOptimizationResult, LlmOptimizer, type LlmRequestOptimizationOptions, minifyProsePreservingCode, } from '../core/LlmOptimizer.js';
 export { coerceToolArguments, type McpContent, type McpImageContent, type McpJsonRpcRequest, type McpJsonRpcResponse, type McpResourceContent, type McpTextContent, type McpTool, McpToolBridge, type McpToolContext, type McpToolDefinition, type McpToolHandler, type McpToolInputSchema, type McpToolResult, } from '../core/McpBridge.js';
 export { type ExternalMcpServerConfig, McpClientConnector, } from '../core/McpClientConnector.js';
@@ -709,5 +717,6 @@ export { RealtimeClient, type RealtimeConnectOptions, type RealtimeProviderType,
 export type { RouterOptions } from '../core/Router.js';
 export { createFastSemanticEmbedding, type SemanticMatchResult, type SemanticRoute, SemanticRouter, type SemanticRouterConfig, type SemanticRouterOptions, } from '../core/SemanticRouter.js';
 export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';
+export { type DissentingView, type TournamentAgentScore, type TournamentCluster, TournamentConsensusEngine, type TournamentConsensusOptions, type TournamentConsensusResult, type TournamentSubmission, type TournamentVotingStrategy, } from '../core/TournamentConsensus.js';
 export { exportOtelTraces, type GenAiSpan, type GenAiSpanAttribute, generateSpanId, generateTraceId, type OtelTraceExportOptions, type OtelTracePayload, toOtelTracePayload, } from '../utils/tracingExporter.js';
 //# sourceMappingURL=index.d.ts.map

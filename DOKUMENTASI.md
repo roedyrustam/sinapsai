@@ -178,6 +178,25 @@ run();
 1. **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'`)**: Skoring cerdas multi-faktor memadukan keandalan (Laplace-smoothed reliability), latensi bergerak (moving-average latency), dan estimasi biaya per request secara real-time.
 2. **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang menyamarkan data sensitif sebelum dikirim ke LLM dan secara otomatis mengembalikan nilai asli pada respons non-streaming.
 
+### Fitur Utama v3.4.0 (Clustered Semantic Cache, Swarm Tournament & KV-Cache Prefix Pinning)
+1. **In-Process Clustered Semantic Cache (`ClusteredSemanticCache`, `client.clusteredCache`)**:
+   - Pengindeksan centroid spherical K-means in-memory yang memangkas lookup cache dari $O(N)$ pemindaian linear menjadi $O(K + N/K)$ (<0.08ms lookup) untuk repositori cache prompt besar.
+   - Pembaruan centroid online bertahap saat penyisipan, pemeringkatan jarak cluster kandidat, pencarian terbalik antar cluster dengan fallback, dan eviksi LRU deterministik berbasis penghitung sekuensial monotonik.
+   - Integrasi native pada `SinapsClient` via opsi `clusteredCache` lengkap dengan metrik hit/miss real-time (`getStats()`).
+2. **Swarm Multi-Model Tournament & Voting Consensus (`TournamentConsensusEngine`, `AgentSwarm.runTournament`)**:
+   - Musyawarah multi-agen lintas model LLM heterogen dengan komputasi matriks kesamaan kosinus berpasangan dan pengelompokan semantik respon.
+   - Strategi konsensus fleksibel: Plurality Majority Voting, Borda-count Positional Ranking, dan Reliability-Weighted Scoring dengan estimasi interval keyakinan [0.0–1.0].
+   - Ekstraksi pandangan minoritas yang berbeda pendapat (*minority dissent*) dan eskalasi opsional ke Master Synthesizer.
+   - Distilasi dataset Direct Preference Optimization (DPO) otomatis memetakan pemenang konsensus sebagai `chosen` dan disenter minoritas utama sebagai `rejected` langsung ke `client.distiller`.
+3. **KV-Cache Prefix Pinning Optimizer (`KvCacheOptimizer`, `client.kvCache`, `request.pinKvCache`)**:
+   - Partisi pesan 3-tingkat: Static Prefix (instruksi sistem, definisi peran), Stable Memory (memori episodik, triple knowledge graph), dan Volatile Tail (kueri pengguna, konteks runtime).
+   - Relokasi otomatis timestamp ISO dinamis dari instruksi sistem ke header standar `[RUNTIME_CONTEXT]` di bagian ekor kueri untuk menjaga prefix byte-identik.
+   - Kanonikalisasi leksikografis deterministik skema fungsi dan tool untuk menjamin kecocokan prompt cache byte-identik pada Claude 3.7/3.5, Gemini 4/2.5, dan GPT-4.1.
+   - Prediksi ketercapaian cache hit, perhitungan token prefix stabil, dan estimasi penghematan biaya USD prompt cache secara real-time.
+   - Lifecycle hook `onKvCachePartition` yang melaporkan batas token partisi dan status kelayakan cache hit.
+4. **Contoh 47 (`examples/47-clustered-cache-tournament-and-prefix-pinning.ts`)**:
+   - Demonstrasi praktis cache semantik terkelompok, turnamen musyawarah multi-model swarm dengan distilasi DPO, dan pinning prefix KV-cache 3-tingkat.
+
 ### Fitur Utama v3.3.0 (In-Process Semantic Prompt Router & Synthetic Dataset Distiller)
 1. **In-Process Semantic Prompt Router (`SemanticRouter`, `client.semanticRouter`)**:
    - Perutean semantik sub-milidetik (<0.5ms) mengklasifikasikan prompt ke model target spesifik (`coding`, `math`, `support`, dll.) tanpa overhead roundtrip LLM classifier.
@@ -267,9 +286,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 589/589 unit & integration tests lulus di 57 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Semantic Router, Synthetic Dataset Distiller, Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Actor-Critic Swarm Loop, Streaming Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
+- **Pengujian Komprehensif:** 608/608 unit & integration tests lulus di 60 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Clustered Semantic Cache, Swarm Tournament Consensus, KV-Cache Prefix Pinning, Semantic Router, Synthetic Dataset Distiller, Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Actor-Critic Swarm Loop, Streaming Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **46 Contoh Siap Pakai:** Seluruh 46 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
+- **47 Contoh Siap Pakai:** Seluruh 47 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

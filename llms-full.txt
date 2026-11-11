@@ -1,6 +1,6 @@
 # SinapsAI — Comprehensive Technical Specification & Full LLM Reference (llms-full.txt)
 
-> **Version**: 3.3.0  
+> **Version**: 3.4.0  
 > **Author**: Roedy Rustam <roedyrustam.id@gmail.com>  
 > **Copyright**: 2026 Roedy Rustam. All Rights Reserved.  
 > **License**: MIT  
@@ -52,7 +52,7 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
   │   - 'failover' (Priority order)                        │
   │ • In-Process CircuitBreaker (CLOSED, OPEN, HALF_OPEN)  │
   │ • Speculative HedgedExecutor (Delay-based backup calls)│
-  │ • Semantic & Exact Prompt Caches                       │
+  │ • Semantic & Clustered Prompt Caches                   │
   │ • BudgetGuardrails (FinOps USD & Token Caps)           │
   └──────────────────────────┬─────────────────────────────┘
                              │
@@ -61,15 +61,15 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
    [ Native Providers ]              [ Advanced Modules ]
    - OpenAI                          - McpToolBridge & DriftHealer
    - Anthropic Claude                - AgentSwarm & A2A Handoff
-   - Google Gemini                   - Actor-Critic Swarm Loop
-   - AWS Bedrock (SigV4)             - CognitiveBrain (Tri-Memory)
-   - Azure OpenAI (Entra ID)         - DurableWorkflowEngine
-   - DeepSeek                        - GeminiAgentBooster
-   - Groq LPU                        - sinapsai/ai-sdk Adapter
-   - OpenRouter                      - OpenTelemetry / Prometheus
-   - Mistral AI
-   - Ollama Local
-   - xAI Grok
+   - Google Gemini                   - Actor-Critic & Tournament Swarm
+   - AWS Bedrock (SigV4)             - ClusteredSemanticCache
+   - Azure OpenAI (Entra ID)         - KvCacheOptimizer (Prefix Pin)
+   - DeepSeek                        - CognitiveBrain (Tri-Memory)
+   - Groq LPU                        - SemanticRouter & Distiller
+   - OpenRouter                      - DurableWorkflowEngine
+   - Mistral AI                      - GeminiAgentBooster
+   - Ollama Local                    - sinapsai/ai-sdk Adapter
+   - xAI Grok                        - OpenTelemetry / Prometheus
    - Cohere v2
 ```
 
@@ -402,7 +402,7 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 
 ---
 
-## 8. Catalog of All 46 Examples
+## 8. Catalog of All 47 Examples
 
 | Example File | Description |
 |---|---|
@@ -452,13 +452,14 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 | `examples/44-steganography-firewall-and-parallel-merge.ts` | Steganography Firewall 2.0 (Zero-Width, ASCII tags) and parallel context deep-merge |
 | `examples/45-actor-critic-consensus-swarm.ts` | Actor-Critic self-correcting consensus swarm loop and streaming durable workflows |
 | `examples/46-semantic-router-and-dataset-distiller.ts` | In-process semantic prompt routing (<0.5ms) and synthetic dataset distillation (DPO & SFT) with PII redaction |
+| `examples/47-clustered-cache-tournament-and-prefix-pinning.ts` | Sub-0.1ms spherical K-means clustered semantic cache, multi-model swarm tournament consensus with minority dissent, and 3-tier KV-cache prefix pinning |
 
 ---
 
 ## 9. Verification & Quality Metrics
 
-- **Total Test Suites**: 57
-- **Total Unit & Integration Tests**: 589 passing (100% pass rate)
+- **Total Test Suites**: 60
+- **Total Unit & Integration Tests**: 608 passing (100% pass rate)
 - **Linter Status**: 100% compliant with Biome v2 (0 errors, 0 warnings)
 - **TypeScript**: Strict mode with declarations emitted
 - **Runtime Dependencies**: `0` (Zero external dependencies)

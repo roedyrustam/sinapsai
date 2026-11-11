@@ -1,7 +1,7 @@
-# Product Requirements Document (PRD) — SinapsAI v3.3.0
+# Product Requirements Document (PRD) — SinapsAI v3.4.0
 
 ## 1. Visi Produk
-Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM package (TypeScript/Node.js) yang menjembatani aplikasi pengembang dengan 200+ model LLM melalui satu *Unified API*. Dirancang dengan prinsip **Zero Runtime Dependencies** guna meminimalisir *downtime* dengan otomatisasi failover, retries, load balancing, perutean semantik sub-milidetik (Semantic Router), kurasi dataset fine-tuning otomatis (Synthetic Dataset Distiller), perlindungan privasi (PII Reversible Vault), pertahanan injeksi prompt & steganografi (Steganography Firewall 2.0), optimasi latensi ekor (Hedged Requests), memori kognitif terpadu (Cognitive Brain Tri-Memory), orkestrasi agen paralel (Map-Reduce Swarm dengan Deep-Merge atomik), loop konsensus koreksi-mandiri (Actor-Critic Swarm Loop dengan DPO otomatis), alur kerja tangguh (Streaming Durable Workflows dengan HITL dan pembersihan checkpoint permanen), penelusuran terdistribusi OpenTelemetry GenAI v1.30+, serta integrasi enterprise cloud (AWS Bedrock SigV4 & Azure OpenAI) dan MCP eksternal yang mampu memulihkan drift skema secara otonom.
+Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM package (TypeScript/Node.js) yang menjembatani aplikasi pengembang dengan 200+ model LLM melalui satu *Unified API*. Dirancang dengan prinsip **Zero Runtime Dependencies** guna meminimalisir *downtime* dengan otomatisasi failover, retries, load balancing, pengindeksan cache semantik terkelompok sub-0.1ms (Clustered Semantic Cache), konsensus voting dan turnamen musyawarah multi-model (Swarm Tournament Consensus), pengoptimalan pin prefix KV-Cache deterministik (KV-Cache Prefix Pinning), perutean semantik sub-milidetik (Semantic Router), kurasi dataset fine-tuning otomatis (Synthetic Dataset Distiller), perlindungan privasi (PII Reversible Vault), pertahanan injeksi prompt & steganografi (Steganography Firewall 2.0), optimasi latensi ekor (Hedged Requests), memori kognitif terpadu (Cognitive Brain Tri-Memory), orkestrasi agen paralel (Map-Reduce Swarm dengan Deep-Merge atomik), loop konsensus koreksi-mandiri (Actor-Critic Swarm Loop dengan DPO otomatis), alur kerja tangguh (Streaming Durable Workflows dengan HITL dan pembersihan checkpoint permanen), penelusuran terdistribusi OpenTelemetry GenAI v1.30+, serta integrasi enterprise cloud (AWS Bedrock SigV4 & Azure OpenAI) dan MCP eksternal yang mampu memulihkan drift skema secara otonom.
 
 ## 2. Lingkup Produk (Scope)
 - **Target Pengguna**: Pengembang Backend/Fullstack, AI Engineers, Tim DevOps, Multi-Agent Swarm Designers, dan Enterprise AI Platform.
@@ -106,19 +106,36 @@ Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM 
   - Redaksi PII otomatis terintegrasi menggunakan `PIIGuardrails` (membersihkan email, telepon, API key, dan kartu kredit) sebelum diekspor.
   - Integrasi autonomous DPO recording pada siklus evaluasi `AgentSwarm.runActorCritic` (`recordDpo: true`).
 
+### G. In-Process Clustered Semantic Cache, Swarm Tournament & KV-Cache Prefix Pinning (v3.4.0)
+- **In-Process Clustered Semantic Cache (`ClusteredSemanticCache`, `client.clusteredCache`, `src/core/ClusteredSemanticCache.ts`)**:
+  - Pengindeksan centroid spherical K-means in-memory yang memangkas lookup cache dari $O(N)$ pemindaian linear menjadi $O(K + N/K)$ (<0.08ms lookup) untuk repositori cache prompt besar.
+  - Pembaruan centroid online bertahap saat penyisipan, pemeringkatan jarak cluster kandidat, pencarian terbalik antar cluster dengan fallback, dan eviksi LRU deterministik berbasis penghitung sekuensial monotonik.
+  - Integrasi native pada `SinapsClient` via opsi `clusteredCache` lengkap dengan metrik hit/miss real-time (`getStats()`).
+- **Swarm Multi-Model Tournament & Voting Consensus (`TournamentConsensusEngine`, `AgentSwarm.runTournament`, `src/core/TournamentConsensus.ts`)**:
+  - Musyawarah multi-agen lintas model LLM heterogen dengan komputasi matriks kesamaan kosinus berpasangan dan pengelompokan semantik respon.
+  - Strategi konsensus fleksibel: Plurality Majority Voting, Borda-count Positional Ranking, dan Reliability-Weighted Scoring dengan estimasi interval keyakinan [0.0–1.0].
+  - Ekstraksi pandangan minoritas yang berbeda pendapat (*minority dissent*) dan eskalasi opsional ke Master Synthesizer.
+  - Distilasi dataset Direct Preference Optimization (DPO) otomatis memetakan pemenang konsensus sebagai `chosen` dan disenter minoritas utama sebagai `rejected` langsung ke `client.distiller`.
+- **KV-Cache Prefix Pinning Optimizer (`KvCacheOptimizer`, `client.kvCache`, `request.pinKvCache`, `src/core/KvCacheOptimizer.ts`)**:
+  - Partisi pesan 3-tingkat: Static Prefix (instruksi sistem, definisi peran), Stable Memory (memori episodik, triple knowledge graph), dan Volatile Tail (kueri pengguna, konteks runtime).
+  - Relokasi otomatis timestamp ISO dinamis dari instruksi sistem ke header standar `[RUNTIME_CONTEXT]` di bagian ekor kueri untuk menjaga prefix byte-identik.
+  - Kanonikalisasi leksikografis deterministik skema fungsi dan tool untuk menjamin kecocokan prompt cache byte-identik pada Claude 3.7/3.5, Gemini 4/2.5, dan GPT-4.1.
+  - Prediksi ketercapaian cache hit, perhitungan token prefix stabil, dan estimasi penghematan biaya USD prompt cache secara real-time.
+  - Lifecycle hook `onKvCachePartition` yang melaporkan batas token partisi dan status kelayakan cache hit.
+
 ---
 
 ## 4. Kepatuhan Hukum, Privasi & Trio Legal Wajib (Legal Trio Invariant)
 Sesuai amanat UU No. 27/2022 tentang Pelindungan Data Pribadi (UU PDP), EU GDPR Art. 17 (*Right to be Forgotten*), dan kebijakan Apple App Store / Google Play, SinapsAI dirancang dengan prinsip *Privacy-by-Design*:
 1. **Kebijakan Privasi (/privacy)**: SinapsAI beroperasi 100% in-process. Tidak ada data pengguna, API key, atau konten percakapan yang dikirim ke server pusat pihak ketiga.
 2. **Syarat & Ketentuan (/terms)**: Lisensi MIT terbuka, tanggung jawab kepatuhan kunci API penyedia LLM berada di tangan developer pengguna.
-3. **Alur & Endpoint Penghapusan Data (/delete-account & /data-deletion)**: API terpadu `client.clearCache()`, `client.brain.memory.delete(id)`, `client.distiller.clear()`, dan `client.workflows.delete(workflowId)` menjamin seluruh memori episodik, jejak audit, dataset kurasi, state alur kerja, dan penyimpanan lokal/terdistribusi dapat dihapus secara permanen seketika.
+3. **Alur & Endpoint Penghapusan Data (/delete-account & /data-deletion)**: API terpadu `client.clearCache()`, `client.clusteredCache.clear()`, `client.brain.memory.delete(id)`, `client.distiller.clear()`, dan `client.workflows.delete(workflowId)` menjamin seluruh memori episodik, jejak audit, dataset kurasi, state alur kerja, dan penyimpanan lokal/terdistribusi dapat dihapus secara permanen seketika.
 
 ---
 
 ## 5. Non-Functional Requirements (NFR)
-- **Performa Eksekusi**: Overhead proses internal sangat minim (<5ms, sub-millisecond cache hits).
+- **Performa Eksekusi**: Overhead proses internal sangat minim (<5ms, sub-millisecond cache hits, sub-0.1ms clustered semantic cache lookup).
 - **Zero Runtime Dependencies**: Murni memanfaatkan standar runtime web (`fetch`, Web Streams, EventSource SSE, Web Crypto, Node HTTP).
 - **Edge Runtime Certified**: Kompatibel 100% di Node.js 18+, Bun, Deno, dan Cloudflare Workers.
 - **Type Safety**: TypeScript strict mode dengan isolated declarations dan types definition lengkap (`dist/index.d.ts`).
-- **Verifikasi Kualitas**: 589/589 unit & integration tests lulus di 57 test suites (100% pass rate), 100% Biome clean (0 error, 0 warning), dan 46 contoh siap pakai di `examples/`.
+- **Verifikasi Kualitas**: 608/608 unit & integration tests lulus di 60 test suites (100% pass rate), 100% Biome clean (0 error, 0 warning), dan 47 contoh siap pakai di `examples/`.

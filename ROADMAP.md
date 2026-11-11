@@ -246,6 +246,25 @@
   - Opsi terintegrasi `recordDpo` dalam siklus Actor-Critic yang secara otomatis memetakan draft awal sebagai `rejected` dan revisi tervalidasi sebagai `chosen` ke dalam `client.distiller`.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 46 (`examples/46-semantic-router-and-dataset-distiller.ts`); total 589/589 unit tests lulus di 57 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.3.0.
 
+## Phase 28: Clustered Semantic Cache, Swarm Tournament Consensus & KV-Cache Prefix Pinning (v3.4.0) - *Completed*
+- [x] **In-Process Clustered Semantic Cache (`ClusteredSemanticCache`, `client.clusteredCache`)**:
+  - Pengindeksan centroid spherical K-means in-memory yang memangkas lookup cache dari $O(N)$ pemindaian linear menjadi $O(K + N/K)$ (<0.08ms lookup) untuk repositori cache prompt besar.
+  - Pembaruan centroid online bertahap saat penyisipan, pemeringkatan jarak cluster kandidat, pencarian terbalik antar cluster dengan fallback, dan eviksi LRU deterministik berbasis penghitung sekuensial monotonik.
+  - Integrasi native pada `SinapsClient` via opsi `clusteredCache` lengkap dengan metrik hit/miss real-time (`getStats()`).
+- [x] **Swarm Multi-Model Tournament & Voting Consensus (`TournamentConsensusEngine`, `AgentSwarm.runTournament`)**:
+  - Musyawarah multi-agen lintas model LLM heterogen dengan komputasi matriks kesamaan kosinus berpasangan dan pengelompokan semantik respon.
+  - Strategi konsensus fleksibel: Plurality Majority Voting, Borda-count Positional Ranking, dan Reliability-Weighted Scoring dengan estimasi interval keyakinan [0.0–1.0].
+  - Ekstraksi pandangan minoritas yang berbeda pendapat (*minority dissent*) dan eskalasi opsional ke Master Synthesizer.
+  - Distilasi dataset Direct Preference Optimization (DPO) otomatis memetakan pemenang konsensus sebagai `chosen` dan disenter minoritas utama sebagai `rejected` langsung ke `client.distiller`.
+- [x] **KV-Cache Prefix Pinning Optimizer (`KvCacheOptimizer`, `client.kvCache`, `request.pinKvCache`)**:
+  - Partisi pesan 3-tingkat: Static Prefix (instruksi sistem, definisi peran), Stable Memory (memori episodik, triple knowledge graph), dan Volatile Tail (kueri pengguna, konteks runtime).
+  - Relokasi otomatis timestamp ISO dinamis dari instruksi sistem ke header standar `[RUNTIME_CONTEXT]` di bagian ekor kueri untuk menjaga prefix byte-identik.
+  - Kanonikalisasi leksikografis deterministik skema fungsi dan tool untuk menjamin kecocokan prompt cache byte-identik pada Claude 3.7/3.5, Gemini 4/2.5, dan GPT-4.1.
+  - Prediksi ketercapaian cache hit, perhitungan token prefix stabil, dan estimasi penghematan biaya USD prompt cache secara real-time.
+  - Lifecycle hook `onKvCachePartition` yang melaporkan batas token partisi dan status kelayakan cache hit.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 47 (`examples/47-clustered-cache-tournament-and-prefix-pinning.ts`); total 608/608 unit tests lulus di 60 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.4.0.
+
+
 
 
 

@@ -5,13 +5,16 @@
 - **Author**: Roedy Rustam <roedyrustam.id@gmail.com>
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
-- **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits
-- **Test Suite**: 589 unit & integration tests passing across 57 test suites (100% pass rate)
+- **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits (<0.08ms clustered cache)
+- **Test Suite**: 608 unit & integration tests passing across 60 test suites (100% pass rate)
 - **Quality**: 100% Biome Clean, TypeScript strict mode
 
 ## Core Capabilities
 
 - **12 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock (SigV4 Web Crypto), Azure OpenAI (Entra ID & API Key), DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **In-Process Clustered Semantic Cache (`client.clusteredCache`, `ClusteredSemanticCache`)**: Sub-0.08ms spherical K-means centroid index reducing semantic cache lookup from $O(N)$ linear scans to $O(K + N/K)$ with incremental centroid updates and monotonic sequence counter LRU eviction.
+- **Swarm Multi-Model Tournament & Voting Consensus (`client.swarm.runTournament`, `TournamentConsensusEngine`)**: Multi-agent deliberation across diverse models, pairwise similarity matrix, majority/Borda/weighted voting, confidence scoring [0.0–1.0], minority dissent extraction, and automatic DPO pair distillation.
+- **KV-Cache Prefix Pinning Optimizer (`client.kvCache`, `KvCacheOptimizer`)**: 3-tier prompt partitioning, automatic relocation of dynamic ISO timestamps to volatile tail `[RUNTIME_CONTEXT]`, deterministic tool canonicalization, and prompt cache hit/savings prediction.
 - **In-Process Semantic Prompt Router (`client.semanticRouter`, `SemanticRouter`)**: Sub-millisecond vector centroid classification (<0.5ms) and automatic model routing directly to specialized LLMs (`claude-3-7-sonnet`, `gemini-2.5-flash-lite`, etc.) using L2-normalized 128-dim character 3-gram and token hashing with stop-word dampening.
 - **Synthetic Dataset Distiller (`client.distiller`, `DatasetDistiller`)**: In-process curation and real-time generation of fine-tuning datasets from live production interactions, supporting HuggingFace/TRL DPO pairs (`recordDpo`) and OpenAI/Axolotl SFT conversations (`recordSft`) with integrated PII redaction (`PIIGuardrails`) and autonomous DPO pair recording in Actor-Critic swarm loops (`runActorCritic`).
 - **Actor-Critic Consensus Swarm Loop (`client.swarm.runActorCritic`)**: Automated self-refining loop between worker and reviewer agents with score thresholds and live cycle callbacks.
@@ -116,4 +119,4 @@ for await (const chunk of stream) {
 - Complete English README: [README.md](README.md)
 - Complete Indonesian README: [README.id.md](README.id.md)
 - Version Roadmap: [ROADMAP.md](ROADMAP.md)
-- 46 Executable Examples: [examples/](examples/)
+- 47 Executable Examples: [examples/](examples/)

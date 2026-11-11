@@ -1,4 +1,4 @@
-# Entity & Architecture Relationship Diagram — SinapsAI v3.3.0
+# Entity & Architecture Relationship Diagram — SinapsAI v3.4.0
 
 Karena SinapsAI berjalan secara in-process sebagai SDK/Paket NPM (tanpa ketergantungan database eksternal mandatory), diagram ini merepresentasikan topologi relasi antar-komponen modul inti (*Aggregate Roots & Bounded Contexts*), struktur manajemen memori kognitif (*In-Process State*), serta adaptasi penyimpanan terdistribusi.
 
@@ -27,6 +27,8 @@ classDiagram
         +RealtimeClient realtime
         +SemanticRouter semanticRouter
         +DatasetDistiller distiller
+        +ClusteredSemanticCache clusteredCache
+        +KvCacheOptimizer kvCache
         +chat.completions.create(request)
         +embeddings.create(request)
         +batch.chat(requests, options)
@@ -34,6 +36,7 @@ classDiagram
         +runWithToolsStream(options)
         +swarm(options)
         +runActorCritic(options)
+        +runTournament(options)
         +checkHealth(options)
         +getMetrics()
         +getCircuitBreakerStatus()
@@ -240,6 +243,30 @@ classDiagram
         +clear()
     }
 
+    class ClusteredSemanticCache {
+        -number numClusters
+        -number similarityThreshold
+        -number maxEntries
+        -Map~string, ClusteredCacheEntry~ entries
+        -List~ClusterCentroid~ centroids
+        +get(prompt, embedder)
+        +set(prompt, response, embedder)
+        +getStats()
+        +clear()
+    }
+
+    class TournamentConsensusEngine {
+        -number similarityThreshold
+        -TournamentStrategy defaultStrategy
+        +evaluate(answers, options)
+    }
+
+    class KvCacheOptimizer {
+        +partition(messages, tools, options)
+        +predictHit(history, request)
+        +estimateCostSavings(request, provider)
+    }
+
     StateStorage <|.. InMemoryStorage : implements
     StateStorage <|.. CloudflareKVStorage : implements
     StateStorage <|.. RedisStorage : implements
@@ -265,7 +292,10 @@ classDiagram
     SinapsClient "1" *-- "1" McpClientConnector : ingests external MCP
     SinapsClient "1" *-- "1" DurableWorkflowEngine : checkpoints workflows
     SinapsClient "1" *-- "many" AgentSwarm : spawns multi-agent
+    SinapsClient "1" *-- "0..1" ClusteredSemanticCache : clusters cache lookups
+    SinapsClient "1" *-- "0..1" KvCacheOptimizer : pins prompt cache prefixes
     AgentSwarm "1" *-- "1" SwarmContext : shares context
+    AgentSwarm "1" o-- "1" TournamentConsensusEngine : deliberates consensus
     McpClientConnector "1" o-- "1" AutonomousDriftHealer : heals schema drift
     CognitiveBrain "1" *-- "1" EpisodicMemory : tracks facts
     CognitiveBrain "1" *-- "1" KnowledgeGraph : traverses relational triples
