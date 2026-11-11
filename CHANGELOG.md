@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.1.0] - 2026-11-11
+### Added
+- **AWS Bedrock Provider with Zero-Dependency SigV4 Signer (`AwsBedrockProvider`, `src/providers/AwsBedrockProvider.ts`)**:
+  - Converse API (`/model/{modelId}/converse`) integration supporting Claude 3.7/3.5, Amazon Nova (Pro/Lite/Micro), Meta Llama 3.3/3.1, and Mistral Large.
+  - Zero-dependency AWS SigV4 request signer implemented directly with Web Crypto (`crypto.subtle`) without `@aws-sdk/client-bedrock-runtime`.
+  - Automatic tool calling, JSON schema mapping, system prompt translation, and session token support.
+- **Azure OpenAI Service Provider (`AzureOpenAiProvider`, `src/providers/AzureOpenAiProvider.ts`)**:
+  - Custom deployment endpoint resolution (`https://{resourceName}.openai.azure.com/openai/deployments/{deploymentId}`).
+  - Dual authentication: Azure `api-key` header and Microsoft Entra ID Bearer tokens.
+  - Complete support for Chat Completions, Embeddings API, rate limit header extraction, and streaming SSE.
+- **Steganography Firewall 2.0 (`SecurityGuardrails`, `src/core/SecurityGuardrails.ts`)**:
+  - Real-time detection and neutralization of hidden Zero-Width characters (`\u200B`, `\u200C`, `\u200D`, `\uFEFF`, `\u2060`, `\u180E`), tag characters (ASCII smuggling `\u{E0000}-\u{E007F}`), and Bidi text direction overrides (`\u202A-\u202E`).
+  - Pre-scan Unicode NFKC normalization exposing obfuscated prompt injections and jailbreak attacks.
+- **Atomic Concurrency Deep-Merge for Multi-Agent Swarms (`deepMergeContext`, `SwarmContext.merge`, `src/core/AgentSwarm.ts`)**:
+  - Deterministic recursive deep merge preventing data loss during concurrent subagent fan-out in `AgentSwarm.runParallel`.
+  - Array union deduplication (`arrayStrategy: 'union' | 'concat' | 'replace'`) and custom conflict callback handler (`onContextConflict`).
+- **2 New Runnable Examples**:
+  - `examples/43-aws-bedrock-and-azure-openai.ts`: End-to-end enterprise cloud provider setup, failover, and invocation.
+  - `examples/44-steganography-firewall-and-parallel-merge.ts`: Steganography neutralization and parallel context deep-merge.
+- **Test Suite Expansion**: Added 17 new unit tests; total 573/573 unit tests passing across 55 test suites with 100% pass rate.
+
 ## [3.0.0] - 2026-11-08
 ### Added
 - **Unified In-Process Cognitive Brain (`CognitiveBrain`, `client.brain`, `src/core/CognitiveBrain.ts`)**:

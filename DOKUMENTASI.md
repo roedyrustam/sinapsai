@@ -178,6 +178,34 @@ run();
 1. **Adaptive Multi-Factor Dynamic Routing (`strategy: 'adaptive'`)**: Skoring cerdas multi-faktor memadukan keandalan (Laplace-smoothed reliability), latensi bergerak (moving-average latency), dan estimasi biaya per request secara real-time.
 2. **Reversible PII Vault (`piiGuardrails: { reversible: true }`)**: Tokenisasi dua arah (`{{PII_EMAIL_1}}`) yang menyamarkan data sensitif sebelum dikirim ke LLM dan secara otomatis mengembalikan nilai asli pada respons non-streaming.
 
+### Fitur Utama v3.1.0 (Enterprise Cloud Providers, Steganography Firewall & Swarm Deep-Merge)
+1. **AWS Bedrock Provider (`AwsBedrockProvider`)**:
+   - Integrasi Converse API (`/model/{modelId}/converse`) untuk Claude 3.7/3.5, Amazon Nova (Pro/Lite/Micro), Meta Llama 3.3/3.1, dan Mistral Large.
+   - Penandatanganan AWS SigV4 murni zero-dependency menggunakan Web Crypto (`crypto.subtle`) bawaan runtime tanpa paket AWS SDK eksternal.
+   - Mendukung temporary credentials via `sessionToken` (IAM Role/STS).
+2. **Azure OpenAI Service Provider (`AzureOpenAiProvider`)**:
+   - Target deployment endpoint kustom pada Azure OpenAI Studio (`https://{resourceName}.openai.azure.com/openai/deployments/{deploymentId}`).
+   - Autentikasi ganda: header `api-key` dan token Microsoft Entra ID (Bearer token).
+   - Chat Completions, Text Embeddings, dan streaming SSE.
+3. **Steganography Firewall 2.0 (`SecurityGuardrails`)**:
+   - Deteksi dan eliminasi karakter Zero-Width (`\u200B`, `\u200C`, `\u200D`, `\uFEFF`, `\u2060`, `\u180E`), unicode tags (ASCII smuggling `\u{E0000}-\u{E007F}`), dan pembalikan arah teks Bidi overrides (`\u202A-\u202E`).
+   - Normalisasi Unicode NFKC sebelum pemindaian guna menyingkap injeksi prompt dan jailbreak tersembunyi.
+4. **Atomic Concurrency Deep-Merge untuk Swarm Paralel (`AgentSwarm.runParallel`)**:
+   - Algoritma `deepMergeContext` dan metode `SwarmContext.merge` mencegah data loss saat banyak sub-agen paralel memutasi shared context secara serentak.
+   - Opsi penggabungan array union deduplicated (`arrayStrategy: 'union'`) dan callback resolusi konflik (`onContextConflict`).
+
+### Fitur Utama v3.0.0 (Cognitive Brain, Parallel Swarm, HITL & OpenTelemetry Tracing)
+1. **Unified In-Process Cognitive Brain (`CognitiveBrain`, `client.brain`)**:
+   - Tri-Memory Fusion architecture: memadukan Episodic Vector Memory, In-Memory Knowledge Graph (GraphRAG), dan Hybrid RAG (BM25 + Dense) dalam satu panggilan deklaratif (`client.brain.retrieveContext`).
+2. **Parallel Multi-Agent Swarm with Map-Reduce (`client.swarm.runParallel`)**:
+   - Eksekusi serentak cabang sub-agen spesialis (`Promise.all`) dengan pemisahan konteks dan sintesis agregator terpadu.
+3. **Human-in-the-Loop (HITL) Workflow Suspension (`client.workflows`)**:
+   - Penangguhan alur kerja otomatis pada aksi berisiko tinggi dengan status `waiting_approval` dan pemulihan instan tanpa duplikasi tool run.
+4. **Universal External MCP Client Ingestion (`client.mcp.connectExternalServer`)**:
+   - Menghubungkan server MCP eksternal over HTTP/SSE dan Stdio dengan pemulihan drift skema API otonom (`AutonomousDriftHealer`).
+5. **OpenTelemetry GenAI Semantic Conventions v1.30+ Tracing**:
+   - Emisi JSON OTLP Traces (`/v1/traces`) standar industri untuk visualisasi distributed spans di Langfuse, Arize Phoenix, Datadog, dan Jaeger.
+
 ### Fitur Utama v2.12.0 (Universal LLM Optimization Engine & AI-Ready Manifests)
 1. **Universal LLM Optimization Engine (`LlmOptimizer` / LLMO)**:
    - **Code-Block Aware Prompt Minification**: Pemangkasan spasi berlebih, tab horizontal, dan trailing newline pada prosa dengan tetap mempertahankan blok kode (fenced code blocks) 100% utuh tanpa merusak indentasi dan sintaksis.
@@ -211,9 +239,9 @@ run();
 - **100% In-Process & Privat:** Semua API keys dikelola langsung di dalam memori dan hanya dikirim ke penyedia model akhir (end-provider). Tidak ada transmisi ke gateway cloud pihak ketiga.
 - **Zero Runtime Dependencies:** Murni menggunakan standar runtime web modern (`fetch`, Web Streams, EventSource SSE, `AbortController`).
 - **Overhead Sangat Rendah:** Latensi eksekusi gateway internal di bawah 5ms.
-- **Pengujian Komprehensif:** 429/429 unit & integration tests lulus di 36 test suites (100% pass rate) mencakup seluruh 10 provider, modul fallback, canary circuit breaker, signal cleanup, prompt caching, gateway rate limiting, Prometheus/OTel exporters, MCP tool bridge, parallel tool execution, Gemini Context Caching, ReDoS hardening, prototype pollution immunity, Multi-Agent Swarm, A2A handoff protocol, Universal LLM Optimization Engine (LLMO), semantic cache, batch engine, PII, budget, security, dan hedged requests.
+- **Pengujian Komprehensif:** 573/573 unit & integration tests lulus di 55 test suites (100% pass rate) mencakup seluruh 12 provider (OpenAI, Claude, Gemini, Bedrock, Azure, Groq, DeepSeek, Mistral, Ollama, OpenRouter, xAI, Cohere), Cognitive Brain, Parallel Swarm Map-Reduce, Steganography Firewall 2.0, Durable Workflows HITL, External MCP Ingestion, Schema Drift Healer, OTel Tracing, dan guardrails.
 - **100% Biome Clean:** Kode sumber sepenuhnya sesuai dengan standar ketat linter Biome v2 tanpa peringatan maupun error.
-- **31 Contoh Siap Pakai:** Seluruh contoh pada folder `examples/` (1 s/d 31) teruji dan 100% lulus kompilasi TypeScript.
+- **44 Contoh Siap Pakai:** Seluruh 44 contoh pada folder `examples/` teruji dan 100% lulus kompilasi TypeScript strict mode.
 
 ## Lisensi
 Proyek ini dilisensikan di bawah lisensi [MIT License](./LICENSE). Anda bebas menyalin, memodifikasi, mendistribusikan, dan menggunakan proyek ini untuk keperluan apa pun (termasuk komersial) dengan menyertakan pemberitahuan hak cipta asli.

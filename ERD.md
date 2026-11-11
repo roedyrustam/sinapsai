@@ -1,24 +1,33 @@
-# Entity Relationship Diagram - SinapsAI (In-Memory State & Architecture)
+# Entity & Architecture Relationship Diagram — SinapsAI v3.0.0
 
-Karena SinapsAI berjalan secara lokal sebagai SDK/Paket NPM (tanpa database eksternal), diagram ini merepresentasikan arsitektur relasi antar-komponen inti dan struktur manajemen *state in-process* serta adaptasi storage terdistribusi.
+Karena SinapsAI berjalan secara in-process sebagai SDK/Paket NPM (tanpa ketergantungan database eksternal mandatory), diagram ini merepresentasikan topologi relasi antar-komponen modul inti (*Aggregate Roots & Bounded Contexts*), struktur manajemen memori kognitif (*In-Process State*), serta adaptasi penyimpanan terdistribusi.
 
 ```mermaid
 classDiagram
     class SinapsClient {
         -Router router
         -StateStorage storage
-        -PIIGuardrails piiGuardrails
-        -SecurityGuardrails securityGuardrails
-        -BudgetGuardrails budgetGuardrails
-        -ContextCompressor contextCompressor
-        -HedgedExecutor hedgedExecutor
-        -GatewayRateLimiter rateLimiter
+        +PIIGuardrails guardrails
+        +SecurityGuardrails securityGuardrails
+        +BudgetGuardrails budgetGuardrails
+        +ContextCompressor contextCompressor
+        +HedgedExecutor hedgedExecutor
+        +GatewayRateLimiter rateLimiter
+        +CanaryProber canary
+        +FaithfulnessSentinel sentinel
+        +DashboardServer dashboard
         +McpToolBridge mcp
-        +contextCache
+        +CognitiveBrain brain
+        +EpisodicMemory memory
+        +HybridRagEngine rag
+        +KnowledgeGraph graph
+        +DurableWorkflowEngine workflows
+        +LlmEvals evals
+        +ConsensusEngine consensus
+        +RealtimeClient realtime
         +chat.completions.create(request)
         +embeddings.create(request)
         +batch.chat(requests, options)
-        +batch.embeddings(requests, options)
         +runWithTools(options)
         +runWithToolsStream(options)
         +swarm(options)
@@ -28,9 +37,8 @@ classDiagram
         +resetCircuitBreaker()
         +clearCache()
         +exportPrometheusMetrics(options)
-        +toPrometheusMetrics(options)
         +exportOtelMetrics(options)
-        +toOtelMetrics(options)
+        +exportOtelTraces(options)
     }
 
     class Router {
@@ -51,11 +59,19 @@ classDiagram
         -number recoverySuccessThreshold
         -number resetTimeoutMs
         +isAvailable(providerId)
-        +execute(provider, request)
         +recordSuccess(providerId)
         +recordFailure(providerId)
         +getStatus()
         +reset()
+    }
+
+    class CanaryProber {
+        -SinapsClient client
+        -number intervalMs
+        +start()
+        +stop()
+        +probeProvider(providerId)
+        +getAllHealth()
     }
 
     class StateStorage {
@@ -63,17 +79,15 @@ classDiagram
         +get(key)
         +set(key, value, ttlSeconds)
         +delete(key)
-        +increment(key)
+        +increment(key, ttlSeconds)
     }
 
     class InMemoryStorage {
         -Map store
-        +sweep()
         +get(key)
         +set(key, value, ttlSeconds)
         +delete(key)
-        +increment(key)
-        +destroy()
+        +increment(key, ttlSeconds)
     }
 
     class CloudflareKVStorage {
@@ -81,7 +95,7 @@ classDiagram
         +get(key)
         +set(key, value, ttlSeconds)
         +delete(key)
-        +increment(key)
+        +increment(key, ttlSeconds)
     }
 
     class RedisStorage {
@@ -89,7 +103,7 @@ classDiagram
         +get(key)
         +set(key, value, ttlSeconds)
         +delete(key)
-        +increment(key)
+        +increment(key, ttlSeconds)
     }
 
     class D1Storage {
@@ -97,7 +111,7 @@ classDiagram
         +get(key)
         +set(key, value, ttlSeconds)
         +delete(key)
-        +increment(key)
+        +increment(key, ttlSeconds)
     }
 
     class Provider {
@@ -113,130 +127,86 @@ classDiagram
         +generateEmbedding(request)
     }
 
-    class OpenAiProvider {
-        +resolveModel(model)
-        +formatRequest(request)
-        +formatResponse(data)
-        +generateContent(request)
-    }
-    class AnthropicProvider {
-        +resolveModel(model)
-        +formatRequest(request)
-        +formatResponse(data)
-        +generateContent(request)
-    }
-    class GeminiProvider {
-        +resolveModel(model)
-        +formatRequest(request)
-        +formatResponse(data, model)
-        +generateContent(request)
-    }
-    class DeepSeekProvider {
-        +resolveModel(model)
-        +generateContent(request)
-    }
-    class GroqProvider {
-        +resolveModel(model)
-        +generateContent(request)
-    }
-    class MistralProvider {
-        +resolveModel(model)
-        +generateContent(request)
-    }
-    class OpenRouterProvider {
-        +resolveModel(model)
-        +generateContent(request)
-    }
-    class OllamaProvider {
-        +resolveModel(model)
-        +generateContent(request)
-    }
-    class XAiProvider {
-        +resolveModel(model)
-        +generateContent(request)
-    }
-    class CohereProvider {
-        +resolveModel(model)
-        +generateContent(request)
+    class CognitiveBrain {
+        +EpisodicMemory memory
+        +KnowledgeGraph graph
+        +HybridRagEngine rag
+        +rememberFact(fact, userId)
+        +retrieveContext(options)
     }
 
-    class PIIGuardrails {
-        +detect(text)
-        +redact(text)
-        +tokenize(text)
-        +detokenize(text, map)
-    }
-
-    class SecurityGuardrails {
-        +inspect(messages)
-    }
-
-    class BudgetGuardrails {
-        +trackUsage(usage, cost)
-        +checkBudget()
-    }
-
-    class ContextCompressor {
-        +compress(messages, options)
-    }
-
-    class HedgedExecutor {
-        +execute(providers, request, executor)
-    }
-
-    class GatewayRateLimiter {
+    class EpisodicMemory {
         -StateStorage storage
-        -GatewayRateLimitOptions options
-        +resolveRule(model, providerId)
-        +getKey(request)
-        +estimateTokens(request)
-        +check(request, options)
-        +adjustTokens(request, actualTokens, estimatedTokens, providerId)
+        +store(options)
+        +recall(query, options)
+        +delete(id)
     }
 
-    class McpToolBridge {
-        -Map tools
-        +registerTool(tool)
-        +unregisterTool(name)
-        +hasTool(name)
-        +getTool(name)
-        +listTools()
-        +toUnifiedTools()
-        +getTools()
-        +executeToolCall(call, context)
-        +executeToolCalls(calls, context)
-        +handleJsonRpc(request)
+    class KnowledgeGraph {
+        -Map nodes
+        -Map edges
+        +addTriple(subject, predicate, object)
+        +findSubgraph(query, maxDepth)
     }
 
-    class GeminiAgentBooster {
-        +analyzeComplexity(options)
-        +canonicalizeTools(tools)
-        +extractGroundingCitations(metadata)
-        +extractCodeExecution(metadata)
-    }
-
-    class SwarmContext {
-        -Map state
-        +get(key)
-        +set(key, value)
-        +has(key)
-        +delete(key)
-        +clear()
-        +getAll()
-        +toPromptSection()
+    class HybridRagEngine {
+        -List~DocumentChunk~ chunks
+        +addDocuments(docs)
+        +search(query, options)
     }
 
     class AgentSwarm {
         -SinapsClient client
         -Map agents
         -SwarmContext context
-        -string defaultAgentId
-        -number maxHandoffs
-        +getAgent(id)
-        +listAgents()
-        +exportAgentCards(baseUrl)
         +run(options)
         +runStream(options)
+        +runParallel(options)
+        +exportAgentCards(baseUrl)
+    }
+
+    class SwarmContext {
+        -Map state
+        +get(key)
+        +set(key, value)
+        +getAll()
+        +toPromptSection()
+    }
+
+    class DurableWorkflowEngine {
+        -StateStorage storage
+        +startWorkflow(id, initialData)
+        +recordStep(id, step)
+        +suspendForApproval(id, request)
+        +resolveApproval(id, resolution)
+        +resume(id)
+        +getCheckpoint(id)
+    }
+
+    class McpToolBridge {
+        -Map tools
+        +registerTool(tool)
+        +unregisterTool(name)
+        +executeToolCalls(calls, context)
+        +handleJsonRpc(request)
+        +toUnifiedTools()
+    }
+
+    class McpClientConnector {
+        +connectExternalServer(config)
+        +disconnect(serverName)
+    }
+
+    class AutonomousDriftHealer {
+        +heal(rawArgs, schema)
+        +diagnoseProviderError(error)
+    }
+
+    class DashboardServer {
+        -http.Server server
+        +start()
+        +stop()
+        +getUrl()
     }
 
     StateStorage <|.. InMemoryStorage : implements
@@ -255,20 +225,18 @@ classDiagram
     Provider <|.. XAiProvider : implements
     Provider <|.. CohereProvider : implements
 
-    SinapsClient "1" *-- "1" Router : delegates to
-    SinapsClient "1" *-- "1" StateStorage : maintains
-    SinapsClient "1" *-- "1" McpToolBridge : orchestrates tools via
-    SinapsClient "1" *-- "many" AgentSwarm : spawns
-    AgentSwarm "1" *-- "1" SwarmContext : maintains shared memory
-    SinapsClient "1" *-- "0..1" GeminiAgentBooster : optimizes via
-    SinapsClient "1" *-- "0..1" PIIGuardrails : safeguards with
-    SinapsClient "1" *-- "0..1" SecurityGuardrails : secures with
-    SinapsClient "1" *-- "0..1" BudgetGuardrails : caps budget with
-    SinapsClient "1" *-- "0..1" ContextCompressor : trims context with
-    SinapsClient "1" *-- "0..1" HedgedExecutor : hedges latency with
-    SinapsClient "1" *-- "0..1" GatewayRateLimiter : limits rate with
-    GatewayRateLimiter "1" o-- "1" StateStorage : tracks counters in
+    SinapsClient "1" *-- "1" Router : routes requests via
+    SinapsClient "1" *-- "1" StateStorage : maintains persistence
+    SinapsClient "1" *-- "1" CognitiveBrain : synthesizes memory
+    SinapsClient "1" *-- "1" McpToolBridge : orchestrates tools
+    SinapsClient "1" *-- "1" McpClientConnector : ingests external MCP
+    SinapsClient "1" *-- "1" DurableWorkflowEngine : checkpoints workflows
+    SinapsClient "1" *-- "many" AgentSwarm : spawns multi-agent
+    AgentSwarm "1" *-- "1" SwarmContext : shares context
+    McpClientConnector "1" o-- "1" AutonomousDriftHealer : heals schema drift
+    CognitiveBrain "1" *-- "1" EpisodicMemory : tracks facts
+    CognitiveBrain "1" *-- "1" KnowledgeGraph : traverses relational triples
+    CognitiveBrain "1" *-- "1" HybridRagEngine : fuses BM25 & dense vectors
     Router "1" *-- "1" CircuitBreaker : protects with
-    Router "1" o-- "many" Provider : routes across
-    CircuitBreaker "1" o-- "1" StateStorage : persists state in
-```
+    SinapsClient "1" *-- "0..1" CanaryProber : active probing
+    SinapsClient "1" *-- "0..1" DashboardServer : serves web UI

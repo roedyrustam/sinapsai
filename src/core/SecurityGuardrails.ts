@@ -115,25 +115,34 @@ const DEFAULT_THREAT_RULES: ThreatRule[] = [
   },
 ];
 
+// Unicode Steganography, Hidden Characters & Bidi Overrides
+const ZERO_WIDTH_REGEX = /[\u200B-\u200D\uFEFF\u2060\u180E\u200E\u200F]/g;
+const BIDI_OVERRIDE_REGEX = /[\u202A-\u202E\u2066-\u2069]/g;
+const TAG_CHARS_REGEX = /[\u{E0000}-\u{E007F}]/gu;
+
 /**
  * SecurityGuardrails protects applications against prompt injection, jailbreaking,
- * delimiter hijacking, and system prompt exfiltration before prompts reach upstream LLMs.
+ * delimiter hijacking, system prompt exfiltration, and unicode steganography before prompts reach upstream LLMs.
  */
 export class SecurityGuardrails {
   public readonly enabled: boolean;
   public readonly action: SecurityAction;
+  public readonly detectSteganography: boolean;
+  public readonly normalizeUnicode: boolean;
   private readonly rules: ThreatRule[];
   private readonly allowedPatterns: RegExp[];
 
   constructor(options: SecurityGuardrailsOptions = {}) {
     this.enabled = options.enabled !== false;
     this.action = options.action ?? 'block';
+    this.detectSteganography = options.detectSteganography ?? true;
+    this.normalizeUnicode = options.normalizeUnicode ?? true;
     this.rules = [...DEFAULT_THREAT_RULES, ...(options.customPatterns ?? [])];
     this.allowedPatterns = options.allowedPatterns ?? [];
   }
 
   /**
-   * Scans a text string for prompt injection or jailbreak indicators.
+   * Scans a text string for prompt injection, jailbreak, or steganographic indicators.
    */
   public scan(text: string): SecurityScanResult {
     if (!this.enabled || !text) {
@@ -147,62 +156,134 @@ export class SecurityGuardrails {
     const violations: SecurityViolation[] = [];
     let sanitizedText = text;
 
+    // 1. Steganography & Invisible unicode detection
+    if (this.detectSteganography) {
+      if (TAG_CHARS_REGEX.test(text)) {
+        violations.push({
+          category: 'steganography',
+          pattern: 'unicode_tag_chars',
+          matchedText: '[hidden_unicode_tag_characters]',
+          action: this.action,
+          timestamp: Date.now(),
+        });
+        if (this.action === 'sanitize') {
+          sanitizedText = sanitizedText.replace(TAG_CHARS_REGEX, '');
+        }
+      }
+
+      if (BIDI_OVERRIDE_REGEX.test(text)) {
+        violations.push({
+          category: 'bidi_override',
+          pattern: 'bidi_override_chars',
+          matchedText: '[bidi_override_characters]',
+          action: this.action,
+          timestamp: Date.now(),
+        });
+        if (this.action === 'sanitize') {
+          sanitizedText = sanitizedText.replace(BIDI_OVERRIDE_REGEX, '');
+        }
+      }
+
+      if (ZERO_WIDTH_REGEX.test(text)) {
+        violations.push({
+          category: 'steganography',
+          pattern: 'zero_width_chars',
+          matchedText: '[hidden_zero_width_characters]',
+          action: this.action,
+          timestamp: Date.now(),
+        });
+        if (this.action === 'sanitize') {
+          sanitizedText = sanitizedText.replace(ZERO_WIDTH_REGEX, '');
+        }
+      }
+    }
+
+    // 2. Prepare normalized/de-obfuscated text to defeat hidden prompt injections
+    let textToScan = text;
+    if (this.detectSteganography) {
+      textToScan = textToScan
+        .replace(ZERO_WIDTH_REGEX, '')
+        .replace(TAG_CHARS_REGEX, '')
+        .replace(BIDI_OVERRIDE_REGEX, '');
+    }
+    if (this.normalizeUnicode) {
+      textToScan = textToScan.normalize('NFKC');
+    }
+
+    // 3. Scan for adversarial threat patterns
     for (const rule of this.rules) {
-      // Find all matches for this rule
       const flags = rule.regex.flags.includes('g')
         ? rule.regex.flags
         : `${rule.regex.flags}g`;
       const globalRegex = new RegExp(rule.regex.source, flags);
 
-      let match: RegExpExecArray | null;
-      while (true) {
-        match = globalRegex.exec(text);
-        if (match === null) break;
+      // We test on both de-obfuscated textToScan and raw text
+      const targets = textToScan !== text ? [textToScan, text] : [textToScan];
 
-        const matchedText = match[0];
+      for (const targetText of targets) {
+        globalRegex.lastIndex = 0;
+        let match: RegExpExecArray | null;
 
-        // Prevent infinite loop on zero-length regex matches
-        if (matchedText.length === 0) {
-          globalRegex.lastIndex++;
-          continue;
-        }
+        while (true) {
+          match = globalRegex.exec(targetText);
+          if (match === null) break;
 
-        // Check if allowed
-        const isAllowed = this.allowedPatterns.some((allowed) => {
-          if (allowed.test(matchedText)) return true;
-          const allowedClone = new RegExp(
-            allowed.source,
-            allowed.flags.replace('g', ''),
+          const matchedText = match[0];
+
+          // Prevent infinite loop on zero-length regex matches
+          if (matchedText.length === 0) {
+            globalRegex.lastIndex++;
+            continue;
+          }
+
+          // Check if allowed
+          const isAllowed = this.allowedPatterns.some((allowed) => {
+            if (allowed.test(matchedText)) return true;
+            const allowedClone = new RegExp(
+              allowed.source,
+              allowed.flags.replace('g', ''),
+            );
+            const textMatch = allowedClone.exec(targetText);
+            if (textMatch && match) {
+              const start = textMatch.index;
+              const end = start + textMatch[0].length;
+              return (
+                match.index >= start && match.index + matchedText.length <= end
+              );
+            }
+            return false;
+          });
+          if (isAllowed) {
+            continue;
+          }
+
+          // Check for duplicate violation
+          const alreadyRecorded = violations.some(
+            (v) =>
+              v.category === rule.category &&
+              (v.matchedText === matchedText ||
+                v.pattern === rule.regex.source),
           );
-          const textMatch = allowedClone.exec(text);
-          if (textMatch && match) {
-            const start = textMatch.index;
-            const end = start + textMatch[0].length;
-            return (
-              match.index >= start && match.index + matchedText.length <= end
+          if (alreadyRecorded) {
+            continue;
+          }
+
+          const violation: SecurityViolation = {
+            category: rule.category,
+            pattern: rule.regex.source,
+            matchedText,
+            action: this.action,
+            timestamp: Date.now(),
+          };
+          violations.push(violation);
+
+          if (this.action === 'sanitize') {
+            const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
+            sanitizedText = sanitizedText.replace(
+              matchedText,
+              () => redactedReplacement,
             );
           }
-          return false;
-        });
-        if (isAllowed) {
-          continue;
-        }
-
-        const violation: SecurityViolation = {
-          category: rule.category,
-          pattern: rule.regex.source,
-          matchedText,
-          action: this.action,
-          timestamp: Date.now(),
-        };
-        violations.push(violation);
-
-        if (this.action === 'sanitize') {
-          const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
-          sanitizedText = sanitizedText.replace(
-            matchedText,
-            () => redactedReplacement,
-          );
         }
       }
     }

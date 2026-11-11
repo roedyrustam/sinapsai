@@ -15,6 +15,8 @@
 
 import { SinapsClient } from '../core/SinapsClient.js';
 import { AnthropicProvider } from '../providers/AnthropicProvider.js';
+import { AwsBedrockProvider } from '../providers/AwsBedrockProvider.js';
+import { AzureOpenAiProvider } from '../providers/AzureOpenAiProvider.js';
 import { DeepSeekProvider } from '../providers/DeepSeekProvider.js';
 import { GeminiProvider } from '../providers/GeminiProvider.js';
 import { GroqProvider } from '../providers/GroqProvider.js';
@@ -56,6 +58,29 @@ export function buildClientFromEnv(): SinapsClient {
   if (process.env.OPENROUTER_API_KEY) {
     providers.push(
       new OpenRouterProvider({ apiKey: process.env.OPENROUTER_API_KEY }),
+    );
+  }
+  if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+    providers.push(
+      new AwsBedrockProvider({
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        region: process.env.AWS_REGION || 'us-east-1',
+        sessionToken: process.env.AWS_SESSION_TOKEN,
+      }),
+    );
+  }
+  if (
+    process.env.AZURE_OPENAI_API_KEY &&
+    process.env.AZURE_OPENAI_RESOURCE_NAME
+  ) {
+    providers.push(
+      new AzureOpenAiProvider({
+        apiKey: process.env.AZURE_OPENAI_API_KEY,
+        resourceName: process.env.AZURE_OPENAI_RESOURCE_NAME,
+        deploymentName: process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+        apiVersion: process.env.AZURE_OPENAI_API_VERSION,
+      }),
     );
   }
 

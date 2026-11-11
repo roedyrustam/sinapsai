@@ -649,4 +649,102 @@ describe('AgentSwarm', () => {
     expect(parallelResult.content).toContain('Final Synthesis');
     expect(parallelResult.totalSteps).toBe(3);
   });
+
+  it('deep merges parallel branch contexts without data loss', async () => {
+    const provider = {
+      id: 'mock-parallel-merge',
+      name: 'Mock Parallel Merge Provider',
+      generateContent: async (req: CreateChatCompletionRequest) => {
+        const lastMsg = req.messages[req.messages.length - 1]?.content || '';
+        if (typeof lastMsg === 'string' && lastMsg.includes('auth')) {
+          return {
+            id: 'res-auth',
+            model: 'test',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Auth audited.',
+                },
+              },
+            ],
+          };
+        }
+        return {
+          id: 'res-db',
+          model: 'test',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'DB audited.',
+              },
+            },
+          ],
+        };
+      },
+    };
+
+    const client = new SinapsClient({
+      providers: [provider as unknown as Provider],
+    });
+
+    const swarm = client.swarm({
+      agents: [
+        {
+          id: 'auth_auditor',
+          name: 'Auth Auditor',
+          role: 'Auth Security',
+          instructions: 'Audit auth.',
+        },
+        {
+          id: 'db_auditor',
+          name: 'DB Auditor',
+          role: 'DB Architect',
+          instructions: 'Audit db.',
+        },
+      ],
+    });
+
+    const parallelResult = await swarm.runParallel({
+      tasks: [
+        {
+          agentId: 'auth_auditor',
+          prompt: 'Audit auth',
+          contextUpdates: {
+            findings: { auth: 'ok', tokens: 10 },
+            tags: ['security', 'auth'],
+          },
+        },
+        {
+          agentId: 'db_auditor',
+          prompt: 'Audit db',
+          contextUpdates: {
+            findings: { db: 'ok', connections: 50 },
+            tags: ['database', 'security'],
+          },
+        },
+      ],
+      prompt: 'Run audits',
+      contextMergeStrategy: 'deep-merge',
+    });
+
+    // Both findings should be preserved in deep-merged sharedContext
+    const findings = parallelResult.sharedContext.findings as Record<
+      string,
+      unknown
+    >;
+    expect(findings).toBeDefined();
+    expect(findings.auth).toBe('ok');
+    expect(findings.db).toBe('ok');
+    expect(findings.tokens).toBe(10);
+    expect(findings.connections).toBe(50);
+
+    // Tags should be unioned and deduplicated
+    const tags = parallelResult.sharedContext.tags as string[];
+    expect(tags).toContain('security');
+    expect(tags).toContain('auth');
+    expect(tags).toContain('database');
+    expect(tags.filter((t) => t === 'security').length).toBe(1);
+  });
 });

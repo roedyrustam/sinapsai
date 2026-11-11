@@ -426,7 +426,7 @@ export interface BatchResult<T> {
     durationMs: number;
 }
 export type SecurityAction = 'block' | 'sanitize' | 'warn';
-export type ThreatCategory = 'prompt_injection' | 'jailbreak' | 'system_override' | 'delimiter_hijack' | 'secret_exfiltration';
+export type ThreatCategory = 'prompt_injection' | 'jailbreak' | 'system_override' | 'delimiter_hijack' | 'secret_exfiltration' | 'steganography' | 'bidi_override';
 export interface SecurityViolation {
     category: ThreatCategory;
     pattern: string;
@@ -459,6 +459,17 @@ export interface SecurityGuardrailsOptions {
      * Optional allowlist patterns that should be ignored even if matched by detection rules.
      */
     allowedPatterns?: RegExp[];
+    /**
+     * When true, scans and strips hidden steganographic characters
+     * (e.g. zero-width spaces, word joiners, non-printable unicode control tags).
+     * Default: true
+     */
+    detectSteganography?: boolean;
+    /**
+     * When true, normalizes Unicode using NFKC before scanning to defeat lookalike homoglyphs.
+     * Default: true
+     */
+    normalizeUnicode?: boolean;
 }
 export type { CompressionResult, ContextCompressionOptions, } from '../core/ContextCompressor.js';
 export type ContextCompressionResult = import('../core/ContextCompressor.js').CompressionResult;
@@ -678,8 +689,8 @@ export type AgentStreamEvent = {
     result: RunWithToolsResult;
 };
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
-export type { SwarmParallelAgentTask, SwarmParallelBranchResult, SwarmParallelOptions, SwarmParallelResult, } from '../core/AgentSwarm.js';
-export { AgentWalletExceededError, type SwarmAgentWallet, } from '../core/AgentSwarm.js';
+export type { ContextMergeOptions, SwarmParallelAgentTask, SwarmParallelBranchResult, SwarmParallelOptions, SwarmParallelResult, } from '../core/AgentSwarm.js';
+export { AgentWalletExceededError, deepMergeContext, type SwarmAgentWallet, } from '../core/AgentSwarm.js';
 export { AutonomousDriftHealer, type DriftHealResult, type ProviderErrorRemediation, } from '../core/AutonomousDriftHealer.js';
 export { CognitiveBrain, type CognitiveBrainOptions, type CognitiveContextResult, type CognitiveRetrieveOptions, } from '../core/CognitiveBrain.js';
 export { type ConsensusDraftResult, ConsensusEngine, type ConsensusOptions, type ConsensusResult, calculatePairwiseSimilarity, computeTermFrequencyVector, } from '../core/ConsensusEngine.js';

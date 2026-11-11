@@ -10,13 +10,13 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-542%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-573%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
-**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js, Edge Runtimes, dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
+**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js, Edge Runtimes, dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Azure OpenAI, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
 
 Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, perutean latensi terendah (*lowest-latency*), dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
 

@@ -6,6 +6,8 @@
  */
 
 export * from './AnthropicProvider.js';
+export * from './AwsBedrockProvider.js';
+export * from './AzureOpenAiProvider.js';
 export * from './CohereProvider.js';
 export * from './DeepSeekProvider.js';
 export * from './GeminiProvider.js';

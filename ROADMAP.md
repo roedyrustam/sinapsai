@@ -206,5 +206,20 @@
   - Evaluasi skor kepastian/entropi output model Tier 1 dengan eskalasi otomatis ke model Tier 3 saat terdeteksi ambiguitas atau ketidakpastian.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 42 (`examples/42-opentelemetry-genai-tracing-and-confidence-cascading.ts`); total 556/556 unit tests lulus di 53 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies.
 
+## Phase 25: Enterprise Cloud Providers, Steganography Firewall 2.0 & Atomic Swarm Deep-Merge (v3.1.0) - *Completed*
+- [x] **AWS Bedrock Provider with Pure Zero-Dependency SigV4 Signer (`AwsBedrockProvider`)**:
+  - Converse API (`/model/{modelId}/converse`) mendukung Claude 3.7/3.5, Amazon Nova (Pro/Lite/Micro), Meta Llama 3.3/3.1, dan Mistral Large.
+  - Implementasi penandatanganan request AWS SigV4 murni menggunakan Web Crypto standard (`crypto.subtle`) tanpa membebani runtime dependencies eksternal.
+- [x] **Azure OpenAI Service Provider (`AzureOpenAiProvider`)**:
+  - Konfigurasi deployment ID kustom dan target resource name Azure OpenAI Studio.
+  - Dukungan autentikasi ganda: `api-key` header dan Microsoft Entra ID (Bearer token).
+  - Integrasi lengkap chat completions, embeddings, dan streaming SSE.
+- [x] **Steganography Firewall 2.0 di Security Guardrails (`SecurityGuardrails`)**:
+  - Deteksi dan netralisasi karakter tersembunyi Zero-Width (`\u200B`, `\u200C`, `\u200D`, `\uFEFF`, `\u2060`, `\u180E`), tag characters (ASCII smuggling `\u{E0000}-\u{E007F}`), dan Bidi text direction overrides (`\u202A-\u202E`).
+  - Normalisasi NFKC Unicode untuk menangkal injeksi prompt tersembunyi.
+- [x] **Atomic Concurrency Deep-Merge pada Multi-Agent Swarm (`AgentSwarm.runParallel`)**:
+  - Algoritma `deepMergeContext` dan metode `SwarmContext.merge` menggabungkan mutasi state cabang agen paralel secara rekursif, dengan union dan deduplikasi array serta penanganan konflik kustom (`onContextConflict`).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 43 (`examples/43-aws-bedrock-and-azure-openai.ts`) dan contoh 44 (`examples/44-steganography-firewall-and-parallel-merge.ts`); total 573/573 unit tests lulus di 55 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.1.0.
+
 
 

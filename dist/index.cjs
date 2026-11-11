@@ -2228,7 +2228,51 @@ var AgentWalletExceededError = class extends Error {
     this.limitUsd = limitUsd;
   }
 };
-var SwarmContext = class {
+function deepMergeContext(target, source, options = {}) {
+  const deep = options.deep !== false;
+  const arrayStrategy = options.arrayStrategy ?? "union";
+  const result = { ...target };
+  for (const [key, sourceVal] of Object.entries(source)) {
+    if (!(key in result)) {
+      result[key] = sourceVal;
+      continue;
+    }
+    const targetVal = result[key];
+    if (options.onConflict) {
+      result[key] = options.onConflict(key, targetVal, sourceVal);
+      continue;
+    }
+    if (Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      if (arrayStrategy === "union") {
+        const set = /* @__PURE__ */ new Set();
+        const merged = [];
+        for (const item of [...targetVal, ...sourceVal]) {
+          if (item !== null && typeof item === "object") {
+            merged.push(item);
+          } else if (!set.has(item)) {
+            set.add(item);
+            merged.push(item);
+          }
+        }
+        result[key] = merged;
+      } else if (arrayStrategy === "concat") {
+        result[key] = [...targetVal, ...sourceVal];
+      } else {
+        result[key] = sourceVal;
+      }
+    } else if (deep && typeof targetVal === "object" && targetVal !== null && !Array.isArray(targetVal) && typeof sourceVal === "object" && sourceVal !== null && !Array.isArray(sourceVal)) {
+      result[key] = deepMergeContext(
+        targetVal,
+        sourceVal,
+        options
+      );
+    } else {
+      result[key] = sourceVal;
+    }
+  }
+  return result;
+}
+var SwarmContext = class _SwarmContext {
   store = /* @__PURE__ */ new Map();
   constructor(initialData) {
     if (initialData) {
@@ -2255,6 +2299,18 @@ var SwarmContext = class {
   }
   getAll() {
     return Object.fromEntries(this.store.entries());
+  }
+  /**
+   * Merges an incoming context dictionary or another SwarmContext into this instance.
+   */
+  merge(other, options) {
+    const incoming = other instanceof _SwarmContext ? other.getAll() : other;
+    const merged = deepMergeContext(this.getAll(), incoming, options);
+    this.store.clear();
+    for (const [k, v] of Object.entries(merged)) {
+      this.store.set(k, v);
+    }
+    return this;
   }
   toPromptSection() {
     if (this.store.size === 0) return "";
@@ -2770,9 +2826,11 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
             ...typeof branchPrompt === "string" ? { task: branchPrompt } : { messages: branchPrompt },
             context: branchContext.getAll()
           });
-          for (const [k, v] of Object.entries(branchResult.sharedContext)) {
-            sharedContext.set(k, v);
-          }
+          sharedContext.merge(branchResult.sharedContext, {
+            deep: options.contextMergeStrategy !== "last-write-wins",
+            arrayStrategy: options.arrayStrategy ?? "union",
+            onConflict: options.onContextConflict ? (key, a, b) => options.onContextConflict?.(key, a, b, task.agentId) : void 0
+          });
           return {
             agentId: task.agentId,
             agentName,
@@ -9456,19 +9514,26 @@ var DEFAULT_THREAT_RULES = [
     regex: /\bhidden\s+instructions\s*:/i
   }
 ];
+var ZERO_WIDTH_REGEX = /[\u200B-\u200D\uFEFF\u2060\u180E\u200E\u200F]/g;
+var BIDI_OVERRIDE_REGEX = /[\u202A-\u202E\u2066-\u2069]/g;
+var TAG_CHARS_REGEX = /[\u{E0000}-\u{E007F}]/gu;
 var SecurityGuardrails = class {
   enabled;
   action;
+  detectSteganography;
+  normalizeUnicode;
   rules;
   allowedPatterns;
   constructor(options = {}) {
     this.enabled = options.enabled !== false;
     this.action = options.action ?? "block";
+    this.detectSteganography = options.detectSteganography ?? true;
+    this.normalizeUnicode = options.normalizeUnicode ?? true;
     this.rules = [...DEFAULT_THREAT_RULES, ...options.customPatterns ?? []];
     this.allowedPatterns = options.allowedPatterns ?? [];
   }
   /**
-   * Scans a text string for prompt injection or jailbreak indicators.
+   * Scans a text string for prompt injection, jailbreak, or steganographic indicators.
    */
   scan(text) {
     if (!this.enabled || !text) {
@@ -9480,49 +9545,104 @@ var SecurityGuardrails = class {
     }
     const violations = [];
     let sanitizedText = text;
+    if (this.detectSteganography) {
+      if (TAG_CHARS_REGEX.test(text)) {
+        violations.push({
+          category: "steganography",
+          pattern: "unicode_tag_chars",
+          matchedText: "[hidden_unicode_tag_characters]",
+          action: this.action,
+          timestamp: Date.now()
+        });
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(TAG_CHARS_REGEX, "");
+        }
+      }
+      if (BIDI_OVERRIDE_REGEX.test(text)) {
+        violations.push({
+          category: "bidi_override",
+          pattern: "bidi_override_chars",
+          matchedText: "[bidi_override_characters]",
+          action: this.action,
+          timestamp: Date.now()
+        });
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(BIDI_OVERRIDE_REGEX, "");
+        }
+      }
+      if (ZERO_WIDTH_REGEX.test(text)) {
+        violations.push({
+          category: "steganography",
+          pattern: "zero_width_chars",
+          matchedText: "[hidden_zero_width_characters]",
+          action: this.action,
+          timestamp: Date.now()
+        });
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(ZERO_WIDTH_REGEX, "");
+        }
+      }
+    }
+    let textToScan = text;
+    if (this.detectSteganography) {
+      textToScan = textToScan.replace(ZERO_WIDTH_REGEX, "").replace(TAG_CHARS_REGEX, "").replace(BIDI_OVERRIDE_REGEX, "");
+    }
+    if (this.normalizeUnicode) {
+      textToScan = textToScan.normalize("NFKC");
+    }
     for (const rule of this.rules) {
       const flags = rule.regex.flags.includes("g") ? rule.regex.flags : `${rule.regex.flags}g`;
       const globalRegex = new RegExp(rule.regex.source, flags);
-      let match;
-      while (true) {
-        match = globalRegex.exec(text);
-        if (match === null) break;
-        const matchedText = match[0];
-        if (matchedText.length === 0) {
-          globalRegex.lastIndex++;
-          continue;
-        }
-        const isAllowed = this.allowedPatterns.some((allowed) => {
-          if (allowed.test(matchedText)) return true;
-          const allowedClone = new RegExp(
-            allowed.source,
-            allowed.flags.replace("g", "")
-          );
-          const textMatch = allowedClone.exec(text);
-          if (textMatch && match) {
-            const start = textMatch.index;
-            const end = start + textMatch[0].length;
-            return match.index >= start && match.index + matchedText.length <= end;
+      const targets = textToScan !== text ? [textToScan, text] : [textToScan];
+      for (const targetText of targets) {
+        globalRegex.lastIndex = 0;
+        let match;
+        while (true) {
+          match = globalRegex.exec(targetText);
+          if (match === null) break;
+          const matchedText = match[0];
+          if (matchedText.length === 0) {
+            globalRegex.lastIndex++;
+            continue;
           }
-          return false;
-        });
-        if (isAllowed) {
-          continue;
-        }
-        const violation = {
-          category: rule.category,
-          pattern: rule.regex.source,
-          matchedText,
-          action: this.action,
-          timestamp: Date.now()
-        };
-        violations.push(violation);
-        if (this.action === "sanitize") {
-          const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
-          sanitizedText = sanitizedText.replace(
-            matchedText,
-            () => redactedReplacement
+          const isAllowed = this.allowedPatterns.some((allowed) => {
+            if (allowed.test(matchedText)) return true;
+            const allowedClone = new RegExp(
+              allowed.source,
+              allowed.flags.replace("g", "")
+            );
+            const textMatch = allowedClone.exec(targetText);
+            if (textMatch && match) {
+              const start = textMatch.index;
+              const end = start + textMatch[0].length;
+              return match.index >= start && match.index + matchedText.length <= end;
+            }
+            return false;
+          });
+          if (isAllowed) {
+            continue;
+          }
+          const alreadyRecorded = violations.some(
+            (v) => v.category === rule.category && (v.matchedText === matchedText || v.pattern === rule.regex.source)
           );
+          if (alreadyRecorded) {
+            continue;
+          }
+          const violation = {
+            category: rule.category,
+            pattern: rule.regex.source,
+            matchedText,
+            action: this.action,
+            timestamp: Date.now()
+          };
+          violations.push(violation);
+          if (this.action === "sanitize") {
+            const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
+            sanitizedText = sanitizedText.replace(
+              matchedText,
+              () => redactedReplacement
+            );
+          }
         }
       }
     }
@@ -11775,6 +11895,640 @@ ${JSON.stringify(request.responseFormat.json_schema.schema)}`
         cleanupSignal?.();
         if (timeoutId) clearTimeout(timeoutId);
       }
+    }
+  }
+};
+
+// src/providers/AwsBedrockProvider.ts
+var BEDROCK_MODELS = {
+  CLAUDE_3_7_SONNET: "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+  CLAUDE_3_5_SONNET: "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+  CLAUDE_3_5_HAIKU: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+  NOVA_PRO: "amazon.nova-pro-v1:0",
+  NOVA_LITE: "amazon.nova-lite-v1:0",
+  NOVA_MICRO: "amazon.nova-micro-v1:0",
+  LLAMA_3_3_70B: "meta.llama3-3-70b-instruct-v1:0",
+  LLAMA_3_1_8B: "meta.llama3-1-8b-instruct-v1:0",
+  MISTRAL_LARGE: "mistral.mistral-large-2407-v1:0"
+};
+async function sha256Hex(data) {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const arrayBuffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  );
+  const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
+  return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function hmacSha256(key, data) {
+  const keyBuffer = key instanceof Uint8Array ? key.buffer.slice(
+    key.byteOffset,
+    key.byteOffset + key.byteLength
+  ) : key;
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyBuffer,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(data)
+  );
+}
+async function getSignatureKey(secretKey, dateStamp, region, service) {
+  const kDate = await hmacSha256(
+    new TextEncoder().encode(`AWS4${secretKey}`),
+    dateStamp
+  );
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, service);
+  return hmacSha256(kService, "aws4_request");
+}
+async function signAwsRequest(params) {
+  const parsedUrl = new URL(params.url);
+  const now = params.date || /* @__PURE__ */ new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.substring(0, 8);
+  const headersToSign = {
+    "content-type": "application/json",
+    host: parsedUrl.host,
+    "x-amz-date": amzDate
+  };
+  if (params.sessionToken) {
+    headersToSign["x-amz-security-token"] = params.sessionToken;
+  }
+  const sortedHeaderKeys = Object.keys(headersToSign).sort();
+  const canonicalHeaders = sortedHeaderKeys.map((k) => `${k}:${headersToSign[k].trim()}
+`).join("");
+  const signedHeaders = sortedHeaderKeys.join(";");
+  const payloadHash = await sha256Hex(params.body);
+  const canonicalRequest = [
+    params.method.toUpperCase(),
+    parsedUrl.pathname,
+    parsedUrl.search.replace(/^\?/, ""),
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash
+  ].join("\n");
+  const credentialScope = `${dateStamp}/${params.region}/${params.service}/aws4_request`;
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    await sha256Hex(canonicalRequest)
+  ].join("\n");
+  const signingKey = await getSignatureKey(
+    params.secretAccessKey,
+    dateStamp,
+    params.region,
+    params.service
+  );
+  const signatureBuffer = await hmacSha256(signingKey, stringToSign);
+  const signature = Array.from(new Uint8Array(signatureBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${params.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  return {
+    ...headersToSign,
+    authorization
+  };
+}
+var AwsBedrockProvider = class {
+  id;
+  name = "AWS Bedrock";
+  config;
+  region;
+  accessKeyId;
+  secretAccessKey;
+  sessionToken;
+  constructor(config = {}) {
+    this.config = config;
+    this.id = config.id || `bedrock-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    this.region = config.region || (typeof process !== "undefined" ? process.env.AWS_REGION : void 0) || "us-east-1";
+    this.accessKeyId = config.accessKeyId || (typeof process !== "undefined" ? process.env.AWS_ACCESS_KEY_ID : void 0);
+    this.secretAccessKey = config.secretAccessKey || (typeof process !== "undefined" ? process.env.AWS_SECRET_ACCESS_KEY : void 0);
+    this.sessionToken = config.sessionToken || (typeof process !== "undefined" ? process.env.AWS_SESSION_TOKEN : void 0);
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel || BEDROCK_MODELS.CLAUDE_3_5_SONNET;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return model || this.defaultModel || BEDROCK_MODELS.CLAUDE_3_5_SONNET;
+  }
+  /**
+   * Converts UnifiedApiRequest to AWS Bedrock Converse format
+   */
+  formatRequest(request) {
+    const modelId = this.resolveModel(request.model);
+    const systemMessages = request.messages.filter((m) => m.role === "system");
+    const system = systemMessages.length > 0 ? systemMessages.map((m) => ({
+      text: typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+    })) : void 0;
+    const messages = request.messages.filter((m) => m.role !== "system").map((m) => {
+      const role = m.role === "assistant" ? "assistant" : "user";
+      if (m.role === "tool" && m.tool_call_id) {
+        return {
+          role: "user",
+          content: [
+            {
+              toolResult: {
+                toolUseId: m.tool_call_id,
+                content: [
+                  {
+                    text: typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+                  }
+                ],
+                status: "success"
+              }
+            }
+          ]
+        };
+      }
+      if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        const contents = [];
+        if (typeof m.content === "string" && m.content) {
+          contents.push({ text: m.content });
+        }
+        for (const tc of m.tool_calls) {
+          let input = {};
+          try {
+            input = JSON.parse(tc.function.arguments || "{}");
+          } catch {
+            input = { raw: tc.function.arguments };
+          }
+          contents.push({
+            toolUse: {
+              toolUseId: tc.id,
+              name: tc.function.name,
+              input
+            }
+          });
+        }
+        return { role: "assistant", content: contents };
+      }
+      if (typeof m.content === "string") {
+        return {
+          role,
+          content: [{ text: m.content }]
+        };
+      }
+      if (Array.isArray(m.content)) {
+        const contentParts = [];
+        for (const part of m.content) {
+          if (part.type === "text") {
+            contentParts.push({ text: part.text });
+          }
+        }
+        return {
+          role,
+          content: contentParts.length > 0 ? contentParts : [{ text: JSON.stringify(m.content) }]
+        };
+      }
+      return {
+        role,
+        content: [{ text: String(m.content || "") }]
+      };
+    });
+    const payload = {
+      messages
+    };
+    if (system && system.length > 0) {
+      payload.system = system;
+    }
+    const inferenceConfig = {};
+    if (request.maxTokens !== void 0) {
+      inferenceConfig.maxTokens = request.maxTokens;
+    }
+    if (request.temperature !== void 0) {
+      inferenceConfig.temperature = request.temperature;
+    }
+    if (Object.keys(inferenceConfig).length > 0) {
+      payload.inferenceConfig = inferenceConfig;
+    }
+    if (Array.isArray(request.tools) && request.tools.length > 0) {
+      payload.toolConfig = {
+        tools: request.tools.map((t) => ({
+          toolSpec: {
+            name: t.function.name,
+            description: t.function.description || t.function.name,
+            inputSchema: {
+              json: t.function.parameters || { type: "object", properties: {} }
+            }
+          }
+        }))
+      };
+    }
+    return { modelId, payload };
+  }
+  /**
+   * Formats Bedrock Converse response into UnifiedApiResponse
+   */
+  formatResponse(data, modelId) {
+    const msg = data.output?.message;
+    let content = null;
+    const toolCalls = [];
+    if (Array.isArray(msg?.content)) {
+      for (const item of msg.content) {
+        if (typeof item.text === "string") {
+          content = (content || "") + item.text;
+        }
+        if (item.toolUse) {
+          toolCalls.push({
+            id: item.toolUse.toolUseId || `tool_${Date.now()}`,
+            type: "function",
+            function: {
+              name: item.toolUse.name,
+              arguments: JSON.stringify(item.toolUse.input || {})
+            }
+          });
+        }
+      }
+    }
+    const finishReason = data.stopReason === "tool_use" ? "tool_calls" : data.stopReason === "end_turn" ? "stop" : data.stopReason === "max_tokens" ? "length" : data.stopReason || "stop";
+    return {
+      id: `bedrock-${Date.now()}`,
+      model: modelId,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content,
+            tool_calls: toolCalls.length > 0 ? toolCalls : void 0
+          },
+          finishReason
+        }
+      ],
+      usage: data.usage ? {
+        promptTokens: data.usage.inputTokens || 0,
+        completionTokens: data.usage.outputTokens || 0,
+        totalTokens: data.usage.totalTokens || 0
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    if (!this.accessKeyId || !this.secretAccessKey) {
+      throw new Error(
+        "AWS Bedrock error: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be provided via config or environment variables."
+      );
+    }
+    const { modelId, payload } = this.formatRequest(request);
+    const bodyStr = JSON.stringify(payload);
+    const baseUrl = this.config.baseUrl || `https://bedrock-runtime.${this.region}.amazonaws.com`;
+    const url = `${baseUrl.replace(/\/+$/, "")}/model/${encodeURIComponent(modelId)}/converse`;
+    const signedHeaders = await signAwsRequest({
+      method: "POST",
+      url,
+      body: bodyStr,
+      accessKeyId: this.accessKeyId,
+      secretAccessKey: this.secretAccessKey,
+      sessionToken: this.sessionToken,
+      region: this.region,
+      service: "bedrock"
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, this.config.timeoutMs || 6e4);
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: signedHeaders,
+        body: bodyStr,
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `AWS Bedrock HTTP ${response.status} (${response.statusText}): ${errorText}`
+        );
+      }
+      const json = await response.json();
+      const unifiedResponse = this.formatResponse(json, modelId);
+      if (request.stream) {
+        return (async function* () {
+          yield {
+            id: unifiedResponse.id,
+            model: unifiedResponse.model,
+            choices: [
+              {
+                delta: {
+                  content: unifiedResponse.choices[0].message.content,
+                  tool_calls: unifiedResponse.choices[0].message.tool_calls?.map(
+                    (tc, idx) => ({
+                      index: idx,
+                      id: tc.id,
+                      type: "function",
+                      function: {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments
+                      }
+                    })
+                  )
+                },
+                finishReason: unifiedResponse.choices[0].finishReason
+              }
+            ],
+            usage: unifiedResponse.usage
+          };
+        })();
+      }
+      return unifiedResponse;
+    } finally {
+      clearTimeout(timeout);
+      cleanupSignal?.();
+    }
+  }
+  async generateEmbedding(_request) {
+    throw new Error(
+      "AWS Bedrock Embeddings should be configured via Titan or Cohere Embed models."
+    );
+  }
+};
+
+// src/providers/AzureOpenAiProvider.ts
+init_stream();
+var AzureOpenAiProvider = class {
+  id;
+  name = "Azure OpenAI";
+  config;
+  resourceName;
+  deploymentName;
+  apiVersion;
+  apiKey;
+  bearerToken;
+  constructor(config = {}) {
+    this.config = config;
+    this.id = config.id || `azure-openai-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    this.resourceName = config.resourceName || (typeof process !== "undefined" ? process.env.AZURE_OPENAI_RESOURCE_NAME : void 0);
+    this.deploymentName = config.deploymentName || (typeof process !== "undefined" ? process.env.AZURE_OPENAI_DEPLOYMENT_NAME : void 0);
+    this.apiVersion = config.apiVersion || "2024-10-21";
+    this.apiKey = config.apiKey || (typeof process !== "undefined" ? process.env.AZURE_OPENAI_API_KEY : void 0);
+    this.bearerToken = config.bearerToken;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel || this.deploymentName || "gpt-4o";
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.deploymentName || model || this.defaultModel || "gpt-4o";
+  }
+  getAuthHeaders() {
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (this.apiKey) {
+      headers["api-key"] = this.apiKey;
+    } else if (this.bearerToken) {
+      headers.Authorization = `Bearer ${this.bearerToken}`;
+    } else {
+      throw new Error(
+        "Azure OpenAI error: apiKey or bearerToken must be provided via config or environment variables (AZURE_OPENAI_API_KEY)."
+      );
+    }
+    return headers;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      const msg = {
+        role: m.role,
+        content: m.content
+      };
+      if (m.name) msg.name = m.name;
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      return msg;
+    });
+    const deployment = this.resolveModel(request.model);
+    const payload = {
+      messages
+    };
+    const isReasoningModel = deployment.startsWith("o1") || deployment.startsWith("o3") || deployment.startsWith("o4");
+    if (request.reasoningEffort) {
+      payload.reasoning_effort = request.reasoningEffort;
+    }
+    if (request.temperature !== void 0 && !isReasoningModel) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      if (isReasoningModel) {
+        payload.max_completion_tokens = request.maxTokens;
+      } else {
+        payload.max_tokens = request.maxTokens;
+      }
+    }
+    if (request.stream) {
+      payload.stream = true;
+      payload.stream_options = { include_usage: true };
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    return { deployment, payload };
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: Azure response structure
+  formatResponse(data, deployment) {
+    const choice = data.choices?.[0];
+    const reasoningContent = choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+    return {
+      id: data.id || `azure-${Date.now()}`,
+      model: data.model || deployment,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            reasoning_content: reasoningContent,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason ?? "stop"
+        }
+      ],
+      usage: data.usage ? {
+        promptTokens: data.usage.prompt_tokens,
+        completionTokens: data.usage.completion_tokens,
+        totalTokens: data.usage.total_tokens,
+        cachedPromptTokens: data.usage.prompt_tokens_details?.cached_tokens ?? void 0
+      } : void 0
+    };
+  }
+  async generateContent(request) {
+    if (!this.resourceName && !this.config.baseUrl) {
+      throw new Error(
+        "Azure OpenAI error: resourceName (or baseUrl) must be configured."
+      );
+    }
+    const { deployment, payload } = this.formatRequest(request);
+    const headers = this.getAuthHeaders();
+    const baseUrl = this.config.baseUrl || `https://${this.resourceName}.openai.azure.com`;
+    const url = `${baseUrl.replace(/\/+$/, "")}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${this.apiVersion}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, this.config.timeoutMs || 6e4);
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Azure OpenAI API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          try {
+            for await (const msg of parseSSE(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                let chunkUsage;
+                if (parsed.usage) {
+                  chunkUsage = {
+                    promptTokens: parsed.usage.prompt_tokens || 0,
+                    completionTokens: parsed.usage.completion_tokens || 0,
+                    totalTokens: parsed.usage.total_tokens || 0,
+                    cachedPromptTokens: parsed.usage.prompt_tokens_details?.cached_tokens ?? void 0
+                  };
+                }
+                yield {
+                  id: parsed.id || `azure-${Date.now()}`,
+                  model: parsed.model || deployment,
+                  choices: [
+                    {
+                      delta: {
+                        role: chunk?.delta?.role,
+                        content: chunk?.delta?.content,
+                        reasoning_content: chunk?.delta?.reasoning ?? chunk?.delta?.reasoning_content ?? null,
+                        tool_calls: chunk?.delta?.tool_calls
+                      },
+                      finishReason: chunk?.finish_reason || null
+                    }
+                  ],
+                  usage: chunkUsage
+                };
+              } catch {
+              }
+            }
+          } finally {
+            cleanupSignal?.();
+            clearTimeout(timeoutId);
+            controller.abort();
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data, deployment);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      cleanupSignal?.();
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+  async generateEmbedding(request) {
+    if (!this.resourceName && !this.config.baseUrl) {
+      throw new Error(
+        "Azure OpenAI error: resourceName (or baseUrl) must be configured."
+      );
+    }
+    const deployment = this.resolveModel(request.model);
+    const headers = this.getAuthHeaders();
+    const baseUrl = this.config.baseUrl || `https://${this.resourceName}.openai.azure.com`;
+    const url = `${baseUrl.replace(/\/+$/, "")}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${this.apiVersion}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, this.config.timeoutMs || 3e4);
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          input: request.input,
+          dimensions: request.dimensions
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Azure OpenAI Embeddings API Error (${response.status}): ${errorText}`
+        );
+      }
+      const data = await response.json();
+      return {
+        object: "list",
+        data: data.data,
+        model: deployment,
+        usage: {
+          promptTokens: data.usage?.prompt_tokens || 0,
+          totalTokens: data.usage?.total_tokens || 0
+        }
+      };
+    } finally {
+      cleanupSignal?.();
+      clearTimeout(timeoutId);
     }
   }
 };
@@ -14852,6 +15606,36 @@ var XAiProvider = class {
  * @copyright 2026 Roedy Rustam
  * @license MIT
  */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * AWS Bedrock Provider (Converse API with pure Zero-Dependency AWS SigV4 Signer)
+ *
+ * Implements:
+ * 1. Zero-dependency AWS SigV4 request signer using standard Web Crypto API (crypto.subtle).
+ * 2. AWS Bedrock Converse API (`/model/{modelId}/converse`).
+ * 3. Support for Claude 3.7/3.5, Amazon Nova (Pro/Lite/Micro), Meta Llama 3.3/3.1, and Mistral Large.
+ * 4. Automatic tool calling and JSON Schema translation.
+ * 5. Full TypeScript strict typing and error recovery.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Azure OpenAI Service Provider
+ *
+ * Implements:
+ * 1. Microsoft Azure OpenAI custom deployment endpoint resolution.
+ * 2. Dual authentication support: Azure `api-key` header and Microsoft Entra ID (Bearer token).
+ * 3. Chat Completions with tool calls, structured outputs, and streaming SSE.
+ * 4. Text Embeddings API.
+ * 5. Rate limit telemetry and zero external runtime dependencies.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
 
 exports.AgentSwarm = AgentSwarm;
 exports.AgentWalletExceededError = AgentWalletExceededError;
@@ -14859,6 +15643,9 @@ exports.AnthropicProvider = AnthropicProvider;
 exports.AnySchemaNode = AnySchemaNode;
 exports.ArraySchemaNode = ArraySchemaNode;
 exports.AutonomousDriftHealer = AutonomousDriftHealer;
+exports.AwsBedrockProvider = AwsBedrockProvider;
+exports.AzureOpenAiProvider = AzureOpenAiProvider;
+exports.BEDROCK_MODELS = BEDROCK_MODELS;
 exports.BatchExecutionError = BatchExecutionError;
 exports.Bm25Index = Bm25Index;
 exports.BooleanSchemaNode = BooleanSchemaNode;
@@ -14935,6 +15722,7 @@ exports.cosineSimilarity = cosineSimilarity;
 exports.createOpenRouterFreeProvider = createOpenRouterFreeProvider;
 exports.createSinapsAI = createSinapsAI;
 exports.deduplicateSystemInstructions = deduplicateSystemInstructions;
+exports.deepMergeContext = deepMergeContext;
 exports.estimateMessageTokens = estimateMessageTokens;
 exports.estimateTextTokens = estimateTextTokens;
 exports.estimateTotalTokens = estimateTotalTokens;
@@ -14948,6 +15736,8 @@ exports.formatOtelMetrics = formatOtelMetrics;
 exports.formatPrometheusMetrics = formatPrometheusMetrics;
 exports.generateSpanId = generateSpanId;
 exports.generateTraceId = generateTraceId;
+exports.getSignatureKey = getSignatureKey;
+exports.hmacSha256 = hmacSha256;
 exports.isOpenRouterFreeModel = isOpenRouterFreeModel;
 exports.isSinapsSchema = isSinapsSchema;
 exports.isStandardSchema = isStandardSchema;
@@ -14958,6 +15748,8 @@ exports.mapFinishReason = mapFinishReason;
 exports.minifyProsePreservingCode = minifyProsePreservingCode;
 exports.reciprocalRankFusion = reciprocalRankFusion;
 exports.s = s;
+exports.sha256Hex = sha256Hex;
+exports.signAwsRequest = signAwsRequest;
 exports.sinapsai = sinapsai;
 exports.toOtelTracePayload = toOtelTracePayload;
 exports.toStandardJsonSchema = toStandardJsonSchema;

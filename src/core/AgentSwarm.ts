@@ -133,6 +133,97 @@ export class AgentWalletExceededError extends Error {
   }
 }
 
+export interface ContextMergeOptions {
+  /**
+   * When true, objects are merged recursively rather than overwritten.
+   * Default: true
+   */
+  deep?: boolean;
+  /**
+   * How arrays should be merged:
+   * - 'union': Deduplicates primitive values, appends objects
+   * - 'concat': Appends all items without deduplication
+   * - 'replace': Overwrites target array with source array
+   * Default: 'union'
+   */
+  arrayStrategy?: 'union' | 'concat' | 'replace';
+  /**
+   * Custom conflict resolution callback when a key exists in both targets.
+   * Return the resolved value to store in context.
+   */
+  onConflict?: (
+    key: string,
+    existingValue: unknown,
+    incomingValue: unknown,
+  ) => unknown;
+}
+
+/**
+ * Deeply merges two context dictionaries with recursive object traversal,
+ * array union deduplication, and optional conflict handler.
+ */
+export function deepMergeContext(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  options: ContextMergeOptions = {},
+): Record<string, unknown> {
+  const deep = options.deep !== false;
+  const arrayStrategy = options.arrayStrategy ?? 'union';
+  const result: Record<string, unknown> = { ...target };
+
+  for (const [key, sourceVal] of Object.entries(source)) {
+    if (!(key in result)) {
+      result[key] = sourceVal;
+      continue;
+    }
+
+    const targetVal = result[key];
+
+    if (options.onConflict) {
+      result[key] = options.onConflict(key, targetVal, sourceVal);
+      continue;
+    }
+
+    if (Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      if (arrayStrategy === 'union') {
+        const set = new Set();
+        const merged: unknown[] = [];
+        for (const item of [...targetVal, ...sourceVal]) {
+          if (item !== null && typeof item === 'object') {
+            merged.push(item);
+          } else if (!set.has(item)) {
+            set.add(item);
+            merged.push(item);
+          }
+        }
+        result[key] = merged;
+      } else if (arrayStrategy === 'concat') {
+        result[key] = [...targetVal, ...sourceVal];
+      } else {
+        result[key] = sourceVal;
+      }
+    } else if (
+      deep &&
+      typeof targetVal === 'object' &&
+      targetVal !== null &&
+      !Array.isArray(targetVal) &&
+      typeof sourceVal === 'object' &&
+      sourceVal !== null &&
+      !Array.isArray(sourceVal)
+    ) {
+      result[key] = deepMergeContext(
+        targetVal as Record<string, unknown>,
+        sourceVal as Record<string, unknown>,
+        options,
+      );
+    } else {
+      result[key] = sourceVal;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Shared memory context accessible and mutable by all agents in the swarm
  */
@@ -170,6 +261,22 @@ export class SwarmContext {
 
   public getAll(): Record<string, unknown> {
     return Object.fromEntries(this.store.entries());
+  }
+
+  /**
+   * Merges an incoming context dictionary or another SwarmContext into this instance.
+   */
+  public merge(
+    other: Record<string, unknown> | SwarmContext,
+    options?: ContextMergeOptions,
+  ): this {
+    const incoming = other instanceof SwarmContext ? other.getAll() : other;
+    const merged = deepMergeContext(this.getAll(), incoming, options);
+    this.store.clear();
+    for (const [k, v] of Object.entries(merged)) {
+      this.store.set(k, v);
+    }
+    return this;
   }
 
   public toPromptSection(): string {
@@ -340,6 +447,26 @@ export interface SwarmParallelOptions {
    * Optional AbortSignal.
    */
   signal?: AbortSignal;
+  /**
+   * Strategy for merging context updates produced by concurrent branches:
+   * - 'deep-merge': Recursively merges objects and unions arrays (default)
+   * - 'last-write-wins': Overwrites keys as branches finish
+   */
+  contextMergeStrategy?: 'deep-merge' | 'last-write-wins';
+  /**
+   * Array merging strategy when contextMergeStrategy is 'deep-merge'.
+   * Default: 'union'
+   */
+  arrayStrategy?: 'union' | 'concat' | 'replace';
+  /**
+   * Custom callback invoked when two branches mutate the same context key.
+   */
+  onContextConflict?: (
+    key: string,
+    existingValue: unknown,
+    incomingValue: unknown,
+    agentId: string,
+  ) => unknown;
 }
 
 /**
@@ -1045,10 +1172,15 @@ export class AgentSwarm {
             context: branchContext.getAll(),
           });
 
-          // Merge any branch context updates back
-          for (const [k, v] of Object.entries(branchResult.sharedContext)) {
-            sharedContext.set(k, v);
-          }
+          // Merge any branch context updates back using deep merge
+          sharedContext.merge(branchResult.sharedContext, {
+            deep: options.contextMergeStrategy !== 'last-write-wins',
+            arrayStrategy: options.arrayStrategy ?? 'union',
+            onConflict: options.onContextConflict
+              ? (key, a, b) =>
+                  options.onContextConflict?.(key, a, b, task.agentId)
+              : undefined,
+          });
 
           return {
             agentId: task.agentId,

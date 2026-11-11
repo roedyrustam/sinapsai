@@ -1761,7 +1761,51 @@ var AgentWalletExceededError = class extends Error {
     this.limitUsd = limitUsd;
   }
 };
-var SwarmContext = class {
+function deepMergeContext(target, source, options = {}) {
+  const deep = options.deep !== false;
+  const arrayStrategy = options.arrayStrategy ?? "union";
+  const result = { ...target };
+  for (const [key, sourceVal] of Object.entries(source)) {
+    if (!(key in result)) {
+      result[key] = sourceVal;
+      continue;
+    }
+    const targetVal = result[key];
+    if (options.onConflict) {
+      result[key] = options.onConflict(key, targetVal, sourceVal);
+      continue;
+    }
+    if (Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      if (arrayStrategy === "union") {
+        const set = /* @__PURE__ */ new Set();
+        const merged = [];
+        for (const item of [...targetVal, ...sourceVal]) {
+          if (item !== null && typeof item === "object") {
+            merged.push(item);
+          } else if (!set.has(item)) {
+            set.add(item);
+            merged.push(item);
+          }
+        }
+        result[key] = merged;
+      } else if (arrayStrategy === "concat") {
+        result[key] = [...targetVal, ...sourceVal];
+      } else {
+        result[key] = sourceVal;
+      }
+    } else if (deep && typeof targetVal === "object" && targetVal !== null && !Array.isArray(targetVal) && typeof sourceVal === "object" && sourceVal !== null && !Array.isArray(sourceVal)) {
+      result[key] = deepMergeContext(
+        targetVal,
+        sourceVal,
+        options
+      );
+    } else {
+      result[key] = sourceVal;
+    }
+  }
+  return result;
+}
+var SwarmContext = class _SwarmContext {
   store = /* @__PURE__ */ new Map();
   constructor(initialData) {
     if (initialData) {
@@ -1788,6 +1832,18 @@ var SwarmContext = class {
   }
   getAll() {
     return Object.fromEntries(this.store.entries());
+  }
+  /**
+   * Merges an incoming context dictionary or another SwarmContext into this instance.
+   */
+  merge(other, options) {
+    const incoming = other instanceof _SwarmContext ? other.getAll() : other;
+    const merged = deepMergeContext(this.getAll(), incoming, options);
+    this.store.clear();
+    for (const [k, v] of Object.entries(merged)) {
+      this.store.set(k, v);
+    }
+    return this;
   }
   toPromptSection() {
     if (this.store.size === 0) return "";
@@ -2303,9 +2359,11 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
             ...typeof branchPrompt === "string" ? { task: branchPrompt } : { messages: branchPrompt },
             context: branchContext.getAll()
           });
-          for (const [k, v] of Object.entries(branchResult.sharedContext)) {
-            sharedContext.set(k, v);
-          }
+          sharedContext.merge(branchResult.sharedContext, {
+            deep: options.contextMergeStrategy !== "last-write-wins",
+            arrayStrategy: options.arrayStrategy ?? "union",
+            onConflict: options.onContextConflict ? (key, a, b) => options.onContextConflict?.(key, a, b, task.agentId) : void 0
+          });
           return {
             agentId: task.agentId,
             agentName,
@@ -8959,19 +9017,26 @@ var DEFAULT_THREAT_RULES = [
     regex: /\bhidden\s+instructions\s*:/i
   }
 ];
+var ZERO_WIDTH_REGEX = /[\u200B-\u200D\uFEFF\u2060\u180E\u200E\u200F]/g;
+var BIDI_OVERRIDE_REGEX = /[\u202A-\u202E\u2066-\u2069]/g;
+var TAG_CHARS_REGEX = /[\u{E0000}-\u{E007F}]/gu;
 var SecurityGuardrails = class {
   enabled;
   action;
+  detectSteganography;
+  normalizeUnicode;
   rules;
   allowedPatterns;
   constructor(options = {}) {
     this.enabled = options.enabled !== false;
     this.action = options.action ?? "block";
+    this.detectSteganography = options.detectSteganography ?? true;
+    this.normalizeUnicode = options.normalizeUnicode ?? true;
     this.rules = [...DEFAULT_THREAT_RULES, ...options.customPatterns ?? []];
     this.allowedPatterns = options.allowedPatterns ?? [];
   }
   /**
-   * Scans a text string for prompt injection or jailbreak indicators.
+   * Scans a text string for prompt injection, jailbreak, or steganographic indicators.
    */
   scan(text) {
     if (!this.enabled || !text) {
@@ -8983,49 +9048,104 @@ var SecurityGuardrails = class {
     }
     const violations = [];
     let sanitizedText = text;
+    if (this.detectSteganography) {
+      if (TAG_CHARS_REGEX.test(text)) {
+        violations.push({
+          category: "steganography",
+          pattern: "unicode_tag_chars",
+          matchedText: "[hidden_unicode_tag_characters]",
+          action: this.action,
+          timestamp: Date.now()
+        });
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(TAG_CHARS_REGEX, "");
+        }
+      }
+      if (BIDI_OVERRIDE_REGEX.test(text)) {
+        violations.push({
+          category: "bidi_override",
+          pattern: "bidi_override_chars",
+          matchedText: "[bidi_override_characters]",
+          action: this.action,
+          timestamp: Date.now()
+        });
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(BIDI_OVERRIDE_REGEX, "");
+        }
+      }
+      if (ZERO_WIDTH_REGEX.test(text)) {
+        violations.push({
+          category: "steganography",
+          pattern: "zero_width_chars",
+          matchedText: "[hidden_zero_width_characters]",
+          action: this.action,
+          timestamp: Date.now()
+        });
+        if (this.action === "sanitize") {
+          sanitizedText = sanitizedText.replace(ZERO_WIDTH_REGEX, "");
+        }
+      }
+    }
+    let textToScan = text;
+    if (this.detectSteganography) {
+      textToScan = textToScan.replace(ZERO_WIDTH_REGEX, "").replace(TAG_CHARS_REGEX, "").replace(BIDI_OVERRIDE_REGEX, "");
+    }
+    if (this.normalizeUnicode) {
+      textToScan = textToScan.normalize("NFKC");
+    }
     for (const rule of this.rules) {
       const flags = rule.regex.flags.includes("g") ? rule.regex.flags : `${rule.regex.flags}g`;
       const globalRegex = new RegExp(rule.regex.source, flags);
-      let match;
-      while (true) {
-        match = globalRegex.exec(text);
-        if (match === null) break;
-        const matchedText = match[0];
-        if (matchedText.length === 0) {
-          globalRegex.lastIndex++;
-          continue;
-        }
-        const isAllowed = this.allowedPatterns.some((allowed) => {
-          if (allowed.test(matchedText)) return true;
-          const allowedClone = new RegExp(
-            allowed.source,
-            allowed.flags.replace("g", "")
-          );
-          const textMatch = allowedClone.exec(text);
-          if (textMatch && match) {
-            const start = textMatch.index;
-            const end = start + textMatch[0].length;
-            return match.index >= start && match.index + matchedText.length <= end;
+      const targets = textToScan !== text ? [textToScan, text] : [textToScan];
+      for (const targetText of targets) {
+        globalRegex.lastIndex = 0;
+        let match;
+        while (true) {
+          match = globalRegex.exec(targetText);
+          if (match === null) break;
+          const matchedText = match[0];
+          if (matchedText.length === 0) {
+            globalRegex.lastIndex++;
+            continue;
           }
-          return false;
-        });
-        if (isAllowed) {
-          continue;
-        }
-        const violation = {
-          category: rule.category,
-          pattern: rule.regex.source,
-          matchedText,
-          action: this.action,
-          timestamp: Date.now()
-        };
-        violations.push(violation);
-        if (this.action === "sanitize") {
-          const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
-          sanitizedText = sanitizedText.replace(
-            matchedText,
-            () => redactedReplacement
+          const isAllowed = this.allowedPatterns.some((allowed) => {
+            if (allowed.test(matchedText)) return true;
+            const allowedClone = new RegExp(
+              allowed.source,
+              allowed.flags.replace("g", "")
+            );
+            const textMatch = allowedClone.exec(targetText);
+            if (textMatch && match) {
+              const start = textMatch.index;
+              const end = start + textMatch[0].length;
+              return match.index >= start && match.index + matchedText.length <= end;
+            }
+            return false;
+          });
+          if (isAllowed) {
+            continue;
+          }
+          const alreadyRecorded = violations.some(
+            (v) => v.category === rule.category && (v.matchedText === matchedText || v.pattern === rule.regex.source)
           );
+          if (alreadyRecorded) {
+            continue;
+          }
+          const violation = {
+            category: rule.category,
+            pattern: rule.regex.source,
+            matchedText,
+            action: this.action,
+            timestamp: Date.now()
+          };
+          violations.push(violation);
+          if (this.action === "sanitize") {
+            const redactedReplacement = `[SECURITY_REDACTED: ${rule.category}]`;
+            sanitizedText = sanitizedText.replace(
+              matchedText,
+              () => redactedReplacement
+            );
+          }
         }
       }
     }

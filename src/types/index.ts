@@ -531,7 +531,9 @@ export type ThreatCategory =
   | 'jailbreak'
   | 'system_override'
   | 'delimiter_hijack'
-  | 'secret_exfiltration';
+  | 'secret_exfiltration'
+  | 'steganography'
+  | 'bidi_override';
 
 export interface SecurityViolation {
   category: ThreatCategory;
@@ -564,6 +566,17 @@ export interface SecurityGuardrailsOptions {
    * Optional allowlist patterns that should be ignored even if matched by detection rules.
    */
   allowedPatterns?: RegExp[];
+  /**
+   * When true, scans and strips hidden steganographic characters
+   * (e.g. zero-width spaces, word joiners, non-printable unicode control tags).
+   * Default: true
+   */
+  detectSteganography?: boolean;
+  /**
+   * When true, normalizes Unicode using NFKC before scanning to defeat lookalike homoglyphs.
+   * Default: true
+   */
+  normalizeUnicode?: boolean;
 }
 
 export type {
@@ -812,6 +825,7 @@ export type AgentStreamEvent =
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
 
 export type {
+  ContextMergeOptions,
   SwarmParallelAgentTask,
   SwarmParallelBranchResult,
   SwarmParallelOptions,
@@ -819,6 +833,7 @@ export type {
 } from '../core/AgentSwarm.js';
 export {
   AgentWalletExceededError,
+  deepMergeContext,
   type SwarmAgentWallet,
 } from '../core/AgentSwarm.js';
 export {
