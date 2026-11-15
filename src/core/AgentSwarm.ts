@@ -23,6 +23,10 @@ import type {
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import type {
+  AgentPersonaRegistry,
+  PersonaDriftResult,
+} from './AgentPersonaRegistry.js';
 import type { SinapsClient } from './SinapsClient.js';
 import {
   type DissentingView,
@@ -115,6 +119,11 @@ export interface SwarmAgentConfig {
    * Optional micro-economy budget wallet capping spend for this agent.
    */
   wallet?: SwarmAgentWallet;
+  /**
+   * Optional persona ID referencing a registered persona in AgentPersonaRegistry.
+   * If provided, instructions, tool policies, and ephemeral skills are bound to this persona.
+   */
+  personaId?: string;
 }
 
 /**
@@ -319,6 +328,18 @@ export interface AgentSwarmOptions {
    * Global fallback model if agent does not specify one
    */
   defaultModel?: string;
+  /**
+   * Optional persona registry for persona-bound prompts and ephemeral skills
+   */
+  personaRegistry?: AgentPersonaRegistry;
+  /**
+   * Optional callback invoked when an agent output triggers persona drift detection
+   */
+  onPersonaDrift?: (
+    agentId: string,
+    personaId: string,
+    drift: PersonaDriftResult,
+  ) => void;
 }
 
 /**
@@ -361,6 +382,14 @@ export interface SwarmResult {
    * Spend and token breakdown tracked per agent ID
    */
   agentSpendBreakdown?: Record<string, { costUsd: number; tokens: number }>;
+  /**
+   * Persona drift diagnostics recorded per agent ID when personaRegistry is bound
+   */
+  personaDrift?: Record<string, PersonaDriftResult>;
+  /**
+   * Ephemeral skill IDs that expired and were pruned per agent ID during swarm turns
+   */
+  prunedEphemeralSkills?: Record<string, string[]>;
 }
 
 /**
@@ -655,11 +684,15 @@ export class AgentSwarm {
   private defaultAgentId: string;
   private maxHandoffs: number;
   private defaultModel?: string;
+  public readonly personaRegistry?: AgentPersonaRegistry;
+  private onPersonaDrift?: AgentSwarmOptions['onPersonaDrift'];
 
   constructor(client: SinapsClient, options: AgentSwarmOptions) {
     this.client = client;
     this.maxHandoffs = options.maxHandoffs ?? 10;
     this.defaultModel = options.defaultModel;
+    this.personaRegistry = options.personaRegistry;
+    this.onPersonaDrift = options.onPersonaDrift;
 
     if (!options.agents || options.agents.length === 0) {
       throw new Error('AgentSwarm requires at least one specialist agent.');
@@ -768,11 +801,21 @@ export class AgentSwarm {
     const handoffTools = this.getHandoffTools(agent);
     const mcpTools = this.client.mcp.toUnifiedTools();
 
-    if (agent.tools) {
-      return [...agent.tools, ...handoffTools];
+    const baseTools = agent.tools
+      ? [...agent.tools, ...handoffTools]
+      : [...mcpTools, ...handoffTools];
+
+    const personaId = agent.personaId;
+    const registry = this.personaRegistry;
+    if (personaId && registry) {
+      return baseTools.filter(
+        (t) =>
+          t.function.name.startsWith('transfer_to_') ||
+          registry.isToolAllowed(personaId, t.function.name),
+      );
     }
 
-    return [...mcpTools, ...handoffTools];
+    return baseTools;
   }
 
   /**
@@ -793,6 +836,8 @@ export class AgentSwarm {
       string,
       { costUsd: number; tokens: number }
     > = {};
+    const personaDrift: Record<string, PersonaDriftResult> = {};
+    const prunedEphemeralSkills: Record<string, string[]> = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history: ChatMessage[] = options.messages
       ? [...options.messages]
@@ -811,7 +856,14 @@ export class AgentSwarm {
       totalSteps++;
 
       // Build effective system instructions injected with shared context
-      const systemContent = `${agent.instructions}\n\nYou are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
+      let baseInstructions = agent.instructions;
+      if (agent.personaId && this.personaRegistry) {
+        baseInstructions = this.personaRegistry.buildSystemPrompt(
+          agent.personaId,
+          agent.instructions,
+        );
+      }
+      const systemContent = `${baseInstructions}\n\nYou are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
 
       // Filter out existing system prompts and prepend active agent's system prompt
       const stepMessages: ChatMessage[] = [
@@ -892,6 +944,36 @@ export class AgentSwarm {
 
       const msg = choice.message;
       history.push(msg);
+
+      // Evaluate persona lifecycle: consume ephemeral skill turn and inspect response drift
+      if (agent.personaId && this.personaRegistry) {
+        const turnInfo = this.personaRegistry.consumeTurn(agent.personaId);
+        if (turnInfo.prunedSkills.length > 0) {
+          prunedEphemeralSkills[activeAgentId] = [
+            ...(prunedEphemeralSkills[activeAgentId] || []),
+            ...turnInfo.prunedSkills,
+          ];
+        }
+        const msgText =
+          typeof msg.content === 'string'
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? (msg.content as ContentPart[])
+                  .filter((p) => p.type === 'text')
+                  .map((p) => p.text)
+                  .join('')
+              : '';
+        if (msgText) {
+          const drift = this.personaRegistry.detectDrift(
+            agent.personaId,
+            msgText,
+          );
+          personaDrift[activeAgentId] = drift;
+          if (drift.hasDrift) {
+            this.onPersonaDrift?.(activeAgentId, agent.personaId, drift);
+          }
+        }
+      }
 
       // Check if the agent called any tools
       if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
@@ -981,6 +1063,10 @@ export class AgentSwarm {
         agentSteps,
         totalCostUsd,
         agentSpendBreakdown,
+        ...(Object.keys(personaDrift).length > 0 ? { personaDrift } : {}),
+        ...(Object.keys(prunedEphemeralSkills).length > 0
+          ? { prunedEphemeralSkills }
+          : {}),
       };
     }
 
@@ -1001,6 +1087,10 @@ export class AgentSwarm {
       agentSteps,
       totalCostUsd,
       agentSpendBreakdown,
+      ...(Object.keys(personaDrift).length > 0 ? { personaDrift } : {}),
+      ...(Object.keys(prunedEphemeralSkills).length > 0
+        ? { prunedEphemeralSkills }
+        : {}),
     };
   }
 
@@ -1022,6 +1112,8 @@ export class AgentSwarm {
       string,
       { costUsd: number; tokens: number }
     > = {};
+    const personaDrift: Record<string, PersonaDriftResult> = {};
+    const prunedEphemeralSkills: Record<string, string[]> = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history: ChatMessage[] = options.messages
       ? [...options.messages]
@@ -1047,7 +1139,14 @@ export class AgentSwarm {
         handoffCount,
       };
 
-      const systemContent = `${agent.instructions}\n\nYou are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
+      let baseInstructions = agent.instructions;
+      if (agent.personaId && this.personaRegistry) {
+        baseInstructions = this.personaRegistry.buildSystemPrompt(
+          agent.personaId,
+          agent.instructions,
+        );
+      }
+      const systemContent = `${baseInstructions}\n\nYou are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       const stepMessages: ChatMessage[] = [
         { role: 'system', content: systemContent },
         ...history.filter((m) => m.role !== 'system'),
@@ -1138,6 +1237,27 @@ export class AgentSwarm {
           assembledToolCalls.length > 0 ? assembledToolCalls : undefined,
       };
       history.push(assistantMsg);
+
+      // Evaluate persona lifecycle in streaming mode
+      if (agent.personaId && this.personaRegistry) {
+        const turnInfo = this.personaRegistry.consumeTurn(agent.personaId);
+        if (turnInfo.prunedSkills.length > 0) {
+          prunedEphemeralSkills[activeAgentId] = [
+            ...(prunedEphemeralSkills[activeAgentId] || []),
+            ...turnInfo.prunedSkills,
+          ];
+        }
+        if (contentAcc) {
+          const drift = this.personaRegistry.detectDrift(
+            agent.personaId,
+            contentAcc,
+          );
+          personaDrift[activeAgentId] = drift;
+          if (drift.hasDrift) {
+            this.onPersonaDrift?.(activeAgentId, agent.personaId, drift);
+          }
+        }
+      }
 
       if (assembledToolCalls.length > 0) {
         yield {
@@ -1232,6 +1352,10 @@ export class AgentSwarm {
         agentSteps,
         totalCostUsd,
         agentSpendBreakdown,
+        ...(Object.keys(personaDrift).length > 0 ? { personaDrift } : {}),
+        ...(Object.keys(prunedEphemeralSkills).length > 0
+          ? { prunedEphemeralSkills }
+          : {}),
       };
 
       yield {
@@ -1254,6 +1378,10 @@ export class AgentSwarm {
       totalHandoffs: handoffCount,
       agentSteps,
       totalCostUsd,
+      ...(Object.keys(personaDrift).length > 0 ? { personaDrift } : {}),
+      ...(Object.keys(prunedEphemeralSkills).length > 0
+        ? { prunedEphemeralSkills }
+        : {}),
     };
 
     yield {

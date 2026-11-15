@@ -7,6 +7,7 @@
  */
 
 export * from './ai-sdk/index.js';
+export * from './core/AgentPersonaRegistry.js';
 export * from './core/AgentSwarm.js';
 export * from './core/AutonomousDriftHealer.js';
 export * from './core/BatchExecutor.js';
@@ -42,8 +43,10 @@ export * from './core/Router.js';
 export * from './core/SecurityGuardrails.js';
 export * from './core/SemanticRouter.js';
 export * from './core/SinapsClient.js';
+export * from './core/SpeculativeStreamVerifier.js';
 export * from './core/StateStorage.js';
 export * from './core/TournamentConsensus.js';
+export * from './core/VisionOptimizer.js';
 export * from './providers/index.js';
 export * from './types/index.js';
 export { BudgetExceededError } from './types/index.js';

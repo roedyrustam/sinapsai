@@ -1,4 +1,4 @@
-# Product Requirements Document (PRD) — SinapsAI v3.4.0
+# Product Requirements Document (PRD) — SinapsAI v3.5.0
 
 ## 1. Visi Produk
 Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM package (TypeScript/Node.js) yang menjembatani aplikasi pengembang dengan 200+ model LLM melalui satu *Unified API*. Dirancang dengan prinsip **Zero Runtime Dependencies** guna meminimalisir *downtime* dengan otomatisasi failover, retries, load balancing, pengindeksan cache semantik terkelompok sub-0.1ms (Clustered Semantic Cache), konsensus voting dan turnamen musyawarah multi-model (Swarm Tournament Consensus), pengoptimalan pin prefix KV-Cache deterministik (KV-Cache Prefix Pinning), perutean semantik sub-milidetik (Semantic Router), kurasi dataset fine-tuning otomatis (Synthetic Dataset Distiller), perlindungan privasi (PII Reversible Vault), pertahanan injeksi prompt & steganografi (Steganography Firewall 2.0), optimasi latensi ekor (Hedged Requests), memori kognitif terpadu (Cognitive Brain Tri-Memory), orkestrasi agen paralel (Map-Reduce Swarm dengan Deep-Merge atomik), loop konsensus koreksi-mandiri (Actor-Critic Swarm Loop dengan DPO otomatis), alur kerja tangguh (Streaming Durable Workflows dengan HITL dan pembersihan checkpoint permanen), penelusuran terdistribusi OpenTelemetry GenAI v1.30+, serta integrasi enterprise cloud (AWS Bedrock SigV4 & Azure OpenAI) dan MCP eksternal yang mampu memulihkan drift skema secara otonom.
@@ -123,6 +123,17 @@ Menciptakan "Control Plane & Cognitive Architecture" AI in-process berbasis NPM 
   - Prediksi ketercapaian cache hit, perhitungan token prefix stabil, dan estimasi penghematan biaya USD prompt cache secara real-time.
   - Lifecycle hook `onKvCachePartition` yang melaporkan batas token partisi dan status kelayakan cache hit.
 
+### H. Multimodal Vision FinOps, Speculative Stream Verification, Persona Registry & Unified Hot-Path (v3.5.0)
+- **Vision Token Optimizer (`VisionOptimizer`)**:
+  - Inspeksi header gambar biner/base64 zero-dependency (PNG, JPEG, GIF, WebP) untuk perhitungan tile OpenAI, megapixel Anthropic, dan fixed-tile Gemini.
+  - Optimasi otomatis `optimizeContentParts` dengan downsampling `high` -> `low` detail dan dukungan penuh `image_url` maupun `imageUrl`.
+- **Speculative Stream Verification (`SpeculativeStreamVerifier`)**:
+  - Kopling generator draft ultra-cepat (`Provider.generateContent` atau `SpeculativeProviderLike` `executeStream`/`execute`) dengan auditor latar belakang asinkron tanpa memblokir TTFT.
+- **Dynamic Agent Persona Registry (`AgentPersonaRegistry`)**:
+  - Tata kelola instruksi persona, allowlist/blacklist tool per agen, pemangkasan skill sementara berbasis TTL (`consumeTurn`), serta deteksi penyimpangan perilaku (`detectDrift` & `onPersonaDrift`) yang terintegrasi penuh di `AgentSwarm.run()` dan `runStream()`.
+- **Unified Hot-Path Pipeline (`SinapsClient`)**:
+  - Flag `useBrain` dan `useClusteredCache` langsung di `chat.completions.create()`, serta buffer telemetri otomatis `recordedSpans` (max 500 span) dengan `.getRecordedSpans()`, `.clearRecordedSpans()`, dan argumen `spans` opsional pada `.toOtelTraces()` / `.exportOtelTraces()`.
+
 ---
 
 ## 4. Kepatuhan Hukum, Privasi & Trio Legal Wajib (Legal Trio Invariant)
@@ -138,4 +149,4 @@ Sesuai amanat UU No. 27/2022 tentang Pelindungan Data Pribadi (UU PDP), EU GDPR 
 - **Zero Runtime Dependencies**: Murni memanfaatkan standar runtime web (`fetch`, Web Streams, EventSource SSE, Web Crypto, Node HTTP).
 - **Edge Runtime Certified**: Kompatibel 100% di Node.js 18+, Bun, Deno, dan Cloudflare Workers.
 - **Type Safety**: TypeScript strict mode dengan isolated declarations dan types definition lengkap (`dist/index.d.ts`).
-- **Verifikasi Kualitas**: 608/608 unit & integration tests lulus di 60 test suites (100% pass rate), 100% Biome clean (0 error, 0 warning), dan 47 contoh siap pakai di `examples/`.
+- **Verifikasi Kualitas**: 630/630 unit & integration tests lulus di 63 test suites (100% pass rate), 100% Biome clean (0 error, 0 warning), dan 48 contoh siap pakai di `examples/`.

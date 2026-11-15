@@ -9,6 +9,7 @@ import type { Provider } from '../providers/Provider.js';
 import type { AgentStreamEvent, BatchOptions, BatchResult, BudgetOptions, CachedContentInfo, CircuitBreakerStatus, ContextCacheEligibility, CreateCachedContentOptions, CreateChatCompletionRequest, CreateChatCompletionRequestNonStreaming, CreateChatCompletionRequestStreaming, CreateEmbeddingRequest, CreateEmbeddingResponse, GatewayHealthReport, GatewayRateLimitOptions, HealthCheckOptions, OtelExportOptions, OtelResourceMetrics, PrometheusExportOptions, RunWithToolsOptions, RunWithToolsResult, RunWithToolsStreamOptions, SecurityGuardrailsOptions, SinapsEventHooks, SinapsMetrics, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import { type StreamAccumulatorOptions } from '../utils/streamAccumulator.js';
 import { type GenAiSpan, type OtelTraceExportOptions, type OtelTracePayload } from '../utils/tracingExporter.js';
+import { type AgentPersona, AgentPersonaRegistry } from './AgentPersonaRegistry.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
 import { type CircuitBreakerOptions } from './CircuitBreaker.js';
@@ -34,7 +35,9 @@ import { RealtimeClient } from './RealtimeClient.js';
 import { type CacheOptions, type RouterStrategy } from './Router.js';
 import { SecurityGuardrails } from './SecurityGuardrails.js';
 import { SemanticRouter, type SemanticRouterConfig } from './SemanticRouter.js';
+import { type SpeculativeStreamOptions, SpeculativeStreamVerifier } from './SpeculativeStreamVerifier.js';
 import type { StateStorage } from './StateStorage.js';
+import { VisionOptimizer, type VisionOptimizerOptions } from './VisionOptimizer.js';
 export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
     /**
      * When true, applies reversible tokenization to outgoing messages and
@@ -163,6 +166,16 @@ export interface SinapsClientOptions {
      * timestamps to the tail to maximize provider prompt caching hit rates.
      */
     kvCache?: KvPartitionOptions | boolean;
+    /**
+     * Optional multimodal vision token optimizer.
+     * Provides binary image header inspection, tile grid token estimation, and auto-downsampling.
+     */
+    vision?: VisionOptimizerOptions | boolean;
+    /**
+     * Optional agent persona registry or initial personas list.
+     * Manages standardized system personas, ephemeral skills, and drift detection.
+     */
+    personas?: AgentPersona[] | AgentPersonaRegistry;
 }
 export declare class SinapsClient {
     private router;
@@ -187,8 +200,13 @@ export declare class SinapsClient {
     readonly distiller: DatasetDistiller;
     readonly clusteredCache: ClusteredSemanticCache;
     readonly kvCache: KvCacheOptimizer;
+    readonly vision: VisionOptimizer;
+    readonly personas: AgentPersonaRegistry;
     private kvCacheEnabled;
+    private clusteredCacheEnabled;
     private semanticRouterEnabled;
+    private recordedSpans;
+    private readonly maxRecordedSpans;
     readonly realtime: RealtimeClient;
     readonly consensus: {
         create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -357,14 +375,25 @@ export declare class SinapsClient {
      * Alias for exportOtelMetrics.
      */
     toOtelMetrics(options?: OtelExportOptions): OtelResourceMetrics;
+    private recordSpan;
     /**
-     * Formats internal GenAI spans into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+     * Returns automatically collected OpenTelemetry GenAI spans from client requests.
      */
-    toOtelTraces(spans: GenAiSpan[], options?: OtelTraceExportOptions): OtelTracePayload;
+    getRecordedSpans(): GenAiSpan[];
     /**
-     * Exports OpenTelemetry GenAI traces directly to an OTLP collector endpoint (/v1/traces).
+     * Clears the internal OpenTelemetry GenAI span ring buffer.
      */
-    exportOtelTraces(spans: GenAiSpan[], options?: OtelTraceExportOptions): Promise<{
+    clearRecordedSpans(): void;
+    /**
+     * Formats internal GenAI spans (or automatically recorded client spans if omitted)
+     * into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+     */
+    toOtelTraces(spans?: GenAiSpan[], options?: OtelTraceExportOptions): OtelTracePayload;
+    /**
+     * Exports OpenTelemetry GenAI traces (or automatically recorded client spans if omitted)
+     * directly to an OTLP collector endpoint (/v1/traces).
+     */
+    exportOtelTraces(spans?: GenAiSpan[], options?: OtelTraceExportOptions): Promise<{
         success: boolean;
         status?: number;
         error?: string;
@@ -390,5 +419,10 @@ export declare class SinapsClient {
      * supporting role-based specialist delegation, A2A handoffs, and shared memory.
      */
     swarm(options: AgentSwarmOptions): AgentSwarm;
+    /**
+     * Instantiate an in-process speculative stream verifier coupling an ultra-fast streaming
+     * draft model with a background heavy reasoning auditor for real-time claim validation.
+     */
+    createSpeculativeStream(options: SpeculativeStreamOptions): SpeculativeStreamVerifier;
 }
 //# sourceMappingURL=SinapsClient.d.ts.map

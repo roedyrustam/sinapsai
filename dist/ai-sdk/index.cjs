@@ -1752,6 +1752,177 @@ async function exportOtelTraces(spans, options = {}) {
   }
 }
 
+// src/core/AgentPersonaRegistry.ts
+var AgentPersonaRegistry = class {
+  personas = /* @__PURE__ */ new Map();
+  constructor(initialPersonas) {
+    if (initialPersonas) {
+      for (const p of initialPersonas) {
+        this.registerPersona(p);
+      }
+    }
+  }
+  /**
+   * Registers or updates an agent persona.
+   */
+  registerPersona(persona) {
+    this.personas.set(persona.id, {
+      ...persona,
+      ephemeralSkills: persona.ephemeralSkills ? [...persona.ephemeralSkills] : [],
+      styleGuidelines: persona.styleGuidelines ? [...persona.styleGuidelines] : []
+    });
+  }
+  /**
+   * Retrieves a persona by its ID.
+   */
+  getPersona(id) {
+    return this.personas.get(id);
+  }
+  /**
+   * Lists all registered personas.
+   */
+  listPersonas() {
+    return Array.from(this.personas.values());
+  }
+  /**
+   * Deletes a persona from the registry.
+   */
+  removePersona(id) {
+    return this.personas.delete(id);
+  }
+  /**
+   * Injects an ephemeral skill into a persona. The skill will automatically
+   * expire and be pruned after turnsRemaining turns are consumed.
+   */
+  injectSkill(personaId, skill) {
+    const persona = this.personas.get(personaId);
+    if (!persona) return false;
+    if (!persona.ephemeralSkills) {
+      persona.ephemeralSkills = [];
+    }
+    const existingIdx = persona.ephemeralSkills.findIndex(
+      (s) => s.id === skill.id
+    );
+    if (existingIdx >= 0) {
+      persona.ephemeralSkills[existingIdx] = { ...skill };
+    } else {
+      persona.ephemeralSkills.push({ ...skill });
+    }
+    return true;
+  }
+  /**
+   * Consumes one turn for all active ephemeral skills on the persona,
+   * decrementing turnsRemaining and pruning any skills that have expired (<= 0).
+   */
+  consumeTurn(personaId) {
+    const persona = this.personas.get(personaId);
+    if (!persona?.ephemeralSkills || persona.ephemeralSkills.length === 0) {
+      return { activeSkillsCount: 0, prunedSkills: [] };
+    }
+    const prunedSkills = [];
+    const activeSkills = [];
+    for (const skill of persona.ephemeralSkills) {
+      skill.turnsRemaining--;
+      if (skill.turnsRemaining <= 0) {
+        prunedSkills.push(skill.id);
+      } else {
+        activeSkills.push(skill);
+      }
+    }
+    persona.ephemeralSkills = activeSkills;
+    return {
+      activeSkillsCount: activeSkills.length,
+      prunedSkills
+    };
+  }
+  /**
+   * Verifies if a given tool is permitted under this persona's security policy.
+   */
+  isToolAllowed(personaId, toolName) {
+    const persona = this.personas.get(personaId);
+    if (!persona) return true;
+    if (persona.forbiddenTools?.includes(toolName)) {
+      return false;
+    }
+    if (persona.allowedTools && persona.allowedTools.length > 0) {
+      const ephemeralToolNames = (persona.ephemeralSkills ?? []).flatMap(
+        (s) => s.tools?.map((t) => t.function.name) ?? []
+      );
+      return persona.allowedTools.includes(toolName) || ephemeralToolNames.includes(toolName);
+    }
+    return true;
+  }
+  /**
+   * Compiles the complete, canonical system prompt for the persona,
+   * synthesizing core instructions, style guidelines, and active ephemeral skills.
+   */
+  buildSystemPrompt(personaId, dynamicContext) {
+    const persona = this.personas.get(personaId);
+    if (!persona) return dynamicContext ?? "";
+    const sections = [
+      `You are ${persona.name}, acting as ${persona.role}.`,
+      persona.systemInstructions
+    ];
+    if (persona.styleGuidelines && persona.styleGuidelines.length > 0) {
+      sections.push(
+        "Style & Behavioral Guidelines:\n" + persona.styleGuidelines.map((g) => `- ${g}`).join("\n")
+      );
+    }
+    if (persona.ephemeralSkills && persona.ephemeralSkills.length > 0) {
+      sections.push(
+        "Active Temporary Skills:\n" + persona.ephemeralSkills.map(
+          (s) => `[Skill: ${s.name} (${s.turnsRemaining} turn${s.turnsRemaining > 1 ? "s" : ""} left)]
+${s.instructions}`
+        ).join("\n\n")
+      );
+    }
+    if (dynamicContext) {
+      sections.push(`Runtime Context:
+${dynamicContext}`);
+    }
+    return sections.join("\n\n");
+  }
+  /**
+   * Inspects agent output for persona drift (unauthorized apologies, generic fluff,
+   * or violation of defined style guidelines).
+   */
+  detectDrift(personaId, responseContent) {
+    const persona = this.personas.get(personaId);
+    if (!persona) {
+      return { hasDrift: false, score: 0, violations: [] };
+    }
+    const violations = [];
+    const apologyRegex = /\b(i('m| am) sorry|i apologize|my apologies|pardon me)\b/i;
+    if (apologyRegex.test(responseContent)) {
+      violations.push(
+        "Agent used prohibited apologetic language violating concise style guidelines."
+      );
+    }
+    const sycophancyRegex = /\b(as an ai|certainly|sure thing|great question|happy to help)\b/i;
+    if (sycophancyRegex.test(responseContent)) {
+      violations.push(
+        "Agent used generic conversational filler / sycophantic intro."
+      );
+    }
+    if (persona.styleGuidelines) {
+      for (const guideline of persona.styleGuidelines) {
+        const lowerG = guideline.toLowerCase();
+        if (lowerG.includes("json") && !responseContent.includes("{") && !responseContent.includes("[")) {
+          violations.push(
+            "Response does not adhere to mandatory JSON formatting guideline."
+          );
+        }
+      }
+    }
+    const score = violations.length > 0 ? Math.min(1, violations.length * 0.4) : 0;
+    return {
+      hasDrift: violations.length > 0,
+      score: Number(score.toFixed(2)),
+      violations
+    };
+  }
+};
+
 // src/utils/similarity.ts
 function cosineSimilarity(a, b) {
   if (!a || !b || a.length === 0 || b.length === 0 || a.length !== b.length) {
@@ -2372,10 +2543,14 @@ var AgentSwarm = class {
   defaultAgentId;
   maxHandoffs;
   defaultModel;
+  personaRegistry;
+  onPersonaDrift;
   constructor(client, options) {
     this.client = client;
     this.maxHandoffs = options.maxHandoffs ?? 10;
     this.defaultModel = options.defaultModel;
+    this.personaRegistry = options.personaRegistry;
+    this.onPersonaDrift = options.onPersonaDrift;
     if (!options.agents || options.agents.length === 0) {
       throw new Error("AgentSwarm requires at least one specialist agent.");
     }
@@ -2468,10 +2643,15 @@ var AgentSwarm = class {
   compileAgentTools(agent) {
     const handoffTools = this.getHandoffTools(agent);
     const mcpTools = this.client.mcp.toUnifiedTools();
-    if (agent.tools) {
-      return [...agent.tools, ...handoffTools];
+    const baseTools = agent.tools ? [...agent.tools, ...handoffTools] : [...mcpTools, ...handoffTools];
+    const personaId = agent.personaId;
+    const registry = this.personaRegistry;
+    if (personaId && registry) {
+      return baseTools.filter(
+        (t) => t.function.name.startsWith("transfer_to_") || registry.isToolAllowed(personaId, t.function.name)
+      );
     }
-    return [...mcpTools, ...handoffTools];
+    return baseTools;
   }
   /**
    * Run the multi-agent swarm to completion (non-streaming)
@@ -2483,6 +2663,8 @@ var AgentSwarm = class {
     let totalSteps = 0;
     const agentSteps = {};
     const agentSpendBreakdown = {};
+    const personaDrift = {};
+    const prunedEphemeralSkills = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history = options.messages ? [...options.messages] : [];
     if (options.task && history.length === 0) {
@@ -2495,7 +2677,14 @@ var AgentSwarm = class {
       }
       agentSteps[activeAgentId] = (agentSteps[activeAgentId] || 0) + 1;
       totalSteps++;
-      const systemContent = `${agent.instructions}
+      let baseInstructions = agent.instructions;
+      if (agent.personaId && this.personaRegistry) {
+        baseInstructions = this.personaRegistry.buildSystemPrompt(
+          agent.personaId,
+          agent.instructions
+        );
+      }
+      const systemContent = `${baseInstructions}
 
 You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       const stepMessages = [
@@ -2546,6 +2735,26 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       }
       const msg = choice.message;
       history.push(msg);
+      if (agent.personaId && this.personaRegistry) {
+        const turnInfo = this.personaRegistry.consumeTurn(agent.personaId);
+        if (turnInfo.prunedSkills.length > 0) {
+          prunedEphemeralSkills[activeAgentId] = [
+            ...prunedEphemeralSkills[activeAgentId] || [],
+            ...turnInfo.prunedSkills
+          ];
+        }
+        const msgText = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.filter((p) => p.type === "text").map((p) => p.text).join("") : "";
+        if (msgText) {
+          const drift = this.personaRegistry.detectDrift(
+            agent.personaId,
+            msgText
+          );
+          personaDrift[activeAgentId] = drift;
+          if (drift.hasDrift) {
+            this.onPersonaDrift?.(activeAgentId, agent.personaId, drift);
+          }
+        }
+      }
       if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
         let delegatedTo;
         for (const tc of msg.tool_calls) {
@@ -2606,7 +2815,9 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         totalHandoffs: handoffCount,
         agentSteps,
         totalCostUsd: totalCostUsd2,
-        agentSpendBreakdown
+        agentSpendBreakdown,
+        ...Object.keys(personaDrift).length > 0 ? { personaDrift } : {},
+        ...Object.keys(prunedEphemeralSkills).length > 0 ? { prunedEphemeralSkills } : {}
       };
     }
     const lastMsg = history[history.length - 1];
@@ -2621,7 +2832,9 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       totalHandoffs: handoffCount,
       agentSteps,
       totalCostUsd,
-      agentSpendBreakdown
+      agentSpendBreakdown,
+      ...Object.keys(personaDrift).length > 0 ? { personaDrift } : {},
+      ...Object.keys(prunedEphemeralSkills).length > 0 ? { prunedEphemeralSkills } : {}
     };
   }
   /**
@@ -2634,6 +2847,8 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
     let totalSteps = 0;
     const agentSteps = {};
     const agentSpendBreakdown = {};
+    const personaDrift = {};
+    const prunedEphemeralSkills = {};
     const startCost = this.client.getMetrics().estimatedCostUsd;
     const history = options.messages ? [...options.messages] : [];
     if (options.task && history.length === 0) {
@@ -2653,7 +2868,14 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         step: totalSteps,
         handoffCount
       };
-      const systemContent = `${agent.instructions}
+      let baseInstructions = agent.instructions;
+      if (agent.personaId && this.personaRegistry) {
+        baseInstructions = this.personaRegistry.buildSystemPrompt(
+          agent.personaId,
+          agent.instructions
+        );
+      }
+      const systemContent = `${baseInstructions}
 
 You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       const stepMessages = [
@@ -2727,6 +2949,25 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         tool_calls: assembledToolCalls.length > 0 ? assembledToolCalls : void 0
       };
       history.push(assistantMsg);
+      if (agent.personaId && this.personaRegistry) {
+        const turnInfo = this.personaRegistry.consumeTurn(agent.personaId);
+        if (turnInfo.prunedSkills.length > 0) {
+          prunedEphemeralSkills[activeAgentId] = [
+            ...prunedEphemeralSkills[activeAgentId] || [],
+            ...turnInfo.prunedSkills
+          ];
+        }
+        if (contentAcc) {
+          const drift = this.personaRegistry.detectDrift(
+            agent.personaId,
+            contentAcc
+          );
+          personaDrift[activeAgentId] = drift;
+          if (drift.hasDrift) {
+            this.onPersonaDrift?.(activeAgentId, agent.personaId, drift);
+          }
+        }
+      }
       if (assembledToolCalls.length > 0) {
         yield {
           type: "tool-call-start",
@@ -2802,7 +3043,9 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         totalHandoffs: handoffCount,
         agentSteps,
         totalCostUsd: totalCostUsd2,
-        agentSpendBreakdown
+        agentSpendBreakdown,
+        ...Object.keys(personaDrift).length > 0 ? { personaDrift } : {},
+        ...Object.keys(prunedEphemeralSkills).length > 0 ? { prunedEphemeralSkills } : {}
       };
       yield {
         type: "done",
@@ -2820,7 +3063,9 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
       totalSteps,
       totalHandoffs: handoffCount,
       agentSteps,
-      totalCostUsd
+      totalCostUsd,
+      ...Object.keys(personaDrift).length > 0 ? { personaDrift } : {},
+      ...Object.keys(prunedEphemeralSkills).length > 0 ? { prunedEphemeralSkills } : {}
     };
     yield {
       type: "done",
@@ -9088,6 +9333,529 @@ var RealtimeClient = class {
   }
 };
 
+// src/core/SpeculativeStreamVerifier.ts
+var SpeculativeStreamVerifier = class {
+  draftProvider;
+  auditorProvider;
+  draftModel;
+  auditorModel;
+  minSentenceLength;
+  auditorInstructions;
+  onCorrection;
+  constructor(options) {
+    this.draftProvider = options.draftProvider;
+    this.auditorProvider = options.auditorProvider;
+    this.draftModel = options.draftModel;
+    this.auditorModel = options.auditorModel;
+    this.minSentenceLength = options.minSentenceLength ?? 30;
+    this.auditorInstructions = options.auditorInstructions ?? "You are a rigorous code and factual verification auditor. Validate the given statement for logical errors, hallucinations, or security risks. Reply in format: [VALID] or [INVALID: <reason>]";
+    this.onCorrection = options.onCorrection;
+  }
+  /**
+   * Executes speculative dual-engine stream.
+   * Yields draft stream chunks immediately to consumer, while scheduling asynchronous audits.
+   */
+  async *executeStream(request) {
+    const draftReq = {
+      ...request,
+      model: this.draftModel ?? request.model,
+      stream: true
+    };
+    let stream;
+    if (typeof this.draftProvider.generateContent === "function") {
+      const res = await this.draftProvider.generateContent(draftReq);
+      if (res != null && typeof res === "object" && Symbol.asyncIterator in res) {
+        stream = res;
+      } else {
+        const single = res;
+        stream = (async function* () {
+          yield {
+            id: single.id,
+            model: single.model,
+            provider: single.provider,
+            choices: [
+              {
+                delta: {
+                  role: "assistant",
+                  content: single.choices?.[0]?.message?.content ?? ""
+                },
+                finishReason: single.choices?.[0]?.finishReason ?? "stop"
+              }
+            ],
+            usage: single.usage
+          };
+        })();
+      }
+    } else if ("executeStream" in this.draftProvider && typeof this.draftProvider.executeStream === "function") {
+      stream = await this.draftProvider.executeStream(draftReq);
+    } else {
+      throw new Error(
+        `Draft provider "${this.draftProvider.id}" does not implement generateContent or executeStream.`
+      );
+    }
+    let fullDraftText = "";
+    let currentSentence = "";
+    let chunkIndex = 0;
+    const auditPromises = [];
+    const corrections = [];
+    let auditedSentencesCount = 0;
+    for await (const chunk of stream) {
+      const deltaContent = chunk.choices[0]?.delta?.content ?? "";
+      fullDraftText += deltaContent;
+      currentSentence += deltaContent;
+      yield chunk;
+      if (this.isSentenceBoundary(currentSentence)) {
+        const sentenceToAudit = currentSentence.trim();
+        currentSentence = "";
+        if (sentenceToAudit.length >= this.minSentenceLength && this.auditorProvider) {
+          auditedSentencesCount++;
+          const currentIndex = chunkIndex;
+          const auditPromise = this.auditSnippet(sentenceToAudit, currentIndex);
+          auditPromises.push(auditPromise);
+          auditPromise.then((corr) => {
+            if (corr) {
+              corrections.push(corr);
+              if (this.onCorrection) {
+                this.onCorrection(corr);
+              }
+            }
+          });
+        }
+      }
+      chunkIndex++;
+    }
+    if (currentSentence.trim().length >= this.minSentenceLength && this.auditorProvider) {
+      auditedSentencesCount++;
+      const auditPromise = this.auditSnippet(
+        currentSentence.trim(),
+        chunkIndex
+      );
+      auditPromises.push(auditPromise);
+      auditPromise.then((corr) => {
+        if (corr) {
+          corrections.push(corr);
+          if (this.onCorrection) {
+            this.onCorrection(corr);
+          }
+        }
+      });
+    }
+    await Promise.allSettled(auditPromises);
+    const passRate = auditedSentencesCount > 0 ? (auditedSentencesCount - corrections.length) / auditedSentencesCount : 1;
+    return {
+      fullDraftText,
+      corrections,
+      stats: {
+        totalChunks: chunkIndex,
+        auditedSentences: auditedSentencesCount,
+        correctionsCount: corrections.length,
+        auditPassRate: Number(Math.max(0, passRate).toFixed(4))
+      }
+    };
+  }
+  /**
+   * Helper method that consumes the stream, invoking optional onChunk callback,
+   * and directly resolves with the final SpeculativeStreamResult.
+   */
+  async execute(request, onChunk) {
+    const stream = this.executeStream(request);
+    let item = await stream.next();
+    while (!item.done) {
+      if (onChunk && item.value) {
+        onChunk(item.value);
+      }
+      item = await stream.next();
+    }
+    return item.value;
+  }
+  /**
+   * Internal verification of a text snippet against the auditor provider.
+   */
+  async auditSnippet(snippet, chunkIndex) {
+    if (!this.auditorProvider) return null;
+    try {
+      const auditReq = {
+        model: this.auditorModel ?? "claude-3-7-sonnet",
+        messages: [
+          { role: "system", content: this.auditorInstructions },
+          {
+            role: "user",
+            content: `Audit this snippet from LLM output:
+"""
+${snippet}
+"""`
+          }
+        ],
+        temperature: 0.1
+      };
+      let res;
+      if (typeof this.auditorProvider.generateContent === "function") {
+        const out = await this.auditorProvider.generateContent(auditReq);
+        if (out != null && typeof out === "object" && Symbol.asyncIterator in out) {
+          let textAcc = "";
+          for await (const chunk of out) {
+            textAcc += chunk.choices?.[0]?.delta?.content ?? "";
+          }
+          res = {
+            id: "audit-stream",
+            model: auditReq.model,
+            choices: [
+              {
+                message: { role: "assistant", content: textAcc },
+                finishReason: "stop"
+              }
+            ]
+          };
+        } else {
+          res = out;
+        }
+      } else if ("execute" in this.auditorProvider && typeof this.auditorProvider.execute === "function") {
+        res = await this.auditorProvider.execute(auditReq);
+      } else {
+        return null;
+      }
+      const content = res.choices[0]?.message?.content ?? "";
+      if (content.includes("[INVALID:")) {
+        const match = content.match(/\[INVALID:\s*([^\]]+)\]/i);
+        const reason = match ? match[1].trim() : "Factual or logic inaccuracy identified";
+        return {
+          chunkIndex,
+          originalText: snippet,
+          reason,
+          severity: reason.toLowerCase().includes("critical") || reason.toLowerCase().includes("security") ? "critical" : "warning",
+          confidence: 0.92
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  isSentenceBoundary(text) {
+    return text.includes("\n\n") || /[.!?]\s+$/.test(text) && text.trim().length >= this.minSentenceLength;
+  }
+};
+
+// src/core/VisionOptimizer.ts
+var VisionOptimizer = class {
+  defaultDetail;
+  maxAllowedTokensPerImage;
+  autoDownsampleDetail;
+  constructor(options = {}) {
+    this.defaultDetail = options.defaultDetail ?? "auto";
+    this.maxAllowedTokensPerImage = options.maxAllowedTokensPerImage ?? 2e3;
+    this.autoDownsampleDetail = options.autoDownsampleDetail ?? true;
+  }
+  /**
+   * Inspects raw image bytes or base64 data URIs to extract dimensions and format.
+   * Completely zero-dependency via standard Web Buffer/Uint8Array header parsing.
+   */
+  analyzeImage(input) {
+    const bytes = this.toBytes(input);
+    if (bytes.length < 8) {
+      return {
+        width: 0,
+        height: 0,
+        format: "unknown",
+        mimeType: "application/octet-stream",
+        byteLength: bytes.length
+      };
+    }
+    if (bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71 && bytes[4] === 13 && bytes[5] === 10 && bytes[6] === 26 && bytes[7] === 10) {
+      if (bytes.length >= 24) {
+        const view = new DataView(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength
+        );
+        const width = view.getUint32(16, false);
+        const height = view.getUint32(20, false);
+        return {
+          width,
+          height,
+          format: "png",
+          mimeType: "image/png",
+          byteLength: bytes.length
+        };
+      }
+    }
+    if (bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 56 && (bytes[4] === 55 || bytes[4] === 57) && bytes[5] === 97) {
+      if (bytes.length >= 10) {
+        const view = new DataView(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength
+        );
+        const width = view.getUint16(6, true);
+        const height = view.getUint16(8, true);
+        return {
+          width,
+          height,
+          format: "gif",
+          mimeType: "image/gif",
+          byteLength: bytes.length
+        };
+      }
+    }
+    if (bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80) {
+      const parsedWebp = this.parseWebp(bytes);
+      if (parsedWebp) return parsedWebp;
+    }
+    if (bytes[0] === 255 && bytes[1] === 216) {
+      const parsedJpeg = this.parseJpeg(bytes);
+      if (parsedJpeg) return parsedJpeg;
+    }
+    return {
+      width: 1024,
+      height: 1024,
+      format: "unknown",
+      mimeType: "image/jpeg",
+      byteLength: bytes.length
+    };
+  }
+  /**
+   * Estimates provider-specific vision token consumption and dollar cost.
+   * Accurately replicates OpenAI 512px tile grid, Anthropic megapixel ratios, and Gemini tile formulas.
+   */
+  estimateVisionTokens(input, provider = "openai", detailOverride) {
+    const dims = typeof input === "object" && "format" in input ? input : this.analyzeImage(input);
+    const detail = detailOverride ?? this.defaultDetail;
+    const normProvider = provider.toLowerCase();
+    let tokens = 0;
+    let tilesCount = 1;
+    if (normProvider.includes("anthropic") || normProvider.includes("claude")) {
+      const rawTokens = Math.ceil(dims.width * dims.height / 750);
+      tokens = Math.max(160, Math.min(rawTokens, 2400));
+      tilesCount = Math.max(
+        1,
+        Math.ceil(dims.width * dims.height / (512 * 512))
+      );
+    } else if (normProvider.includes("gemini") || normProvider.includes("google")) {
+      const tilesW = Math.ceil(dims.width / 768);
+      const tilesH = Math.ceil(dims.height / 768);
+      tilesCount = Math.max(1, tilesW * tilesH);
+      tokens = tilesCount * 258;
+    } else {
+      if (detail === "low") {
+        tokens = 85;
+        tilesCount = 1;
+      } else {
+        let w = dims.width;
+        let h = dims.height;
+        if (w > 2048 || h > 2048) {
+          const ratio = Math.min(2048 / w, 2048 / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+        const shortest = Math.min(w, h);
+        if (shortest > 768) {
+          const scale = 768 / shortest;
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        const tilesW = Math.ceil(w / 512);
+        const tilesH = Math.ceil(h / 512);
+        tilesCount = Math.max(1, tilesW * tilesH);
+        tokens = 85 + tilesCount * 170;
+      }
+    }
+    const costPer1k = 25e-4;
+    const estimatedCostUsd = tokens / 1e3 * costPer1k;
+    return {
+      provider,
+      tokens,
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
+      detailMode: detail,
+      tilesCount,
+      width: dims.width,
+      height: dims.height
+    };
+  }
+  /**
+   * Estimates audio token consumption from base64/buffer or duration.
+   * Standardized across OpenAI Audio (~30 tok/sec) and Gemini Multimodal Audio (~32 tok/sec).
+   */
+  estimateAudioTokens(input, provider = "openai") {
+    let duration = input.durationSeconds;
+    if (duration === void 0 && input.byteLength) {
+      duration = Math.max(1, Math.round(input.byteLength / 24e3));
+    }
+    const safeDuration = Math.max(1, duration ?? 1);
+    const normProvider = provider.toLowerCase();
+    const tokensPerSec = normProvider.includes("gemini") ? 32 : 30;
+    const tokens = safeDuration * tokensPerSec;
+    const costPer1k = 5e-3;
+    const estimatedCostUsd = tokens / 1e3 * costPer1k;
+    return {
+      provider,
+      estimatedDurationSeconds: safeDuration,
+      tokens,
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6))
+    };
+  }
+  /**
+   * Scans and optimizes ContentPart array in a UnifiedApiRequest.
+   * If an image exceeds maxAllowedTokensPerImage and autoDownsampleDetail is active,
+   * downscales detail mode from 'high'/'auto' to 'low' to slash FinOps token waste.
+   */
+  optimizeContentParts(parts, provider = "openai", options) {
+    const maxTokens = options?.maxTokensPerImage ?? this.maxAllowedTokensPerImage;
+    let optimizedCount = 0;
+    let savedTokensEstimated = 0;
+    const optimized = parts.map((part) => {
+      if (part.type !== "image_url") {
+        return part;
+      }
+      const imgObj = part.image_url ?? part.imageUrl;
+      if (!imgObj) {
+        return part;
+      }
+      if (options?.enforceDetail) {
+        const updatedImg = {
+          ...imgObj,
+          detail: options.enforceDetail
+        };
+        return {
+          ...part,
+          image_url: updatedImg,
+          ...part.imageUrl ? { imageUrl: updatedImg } : {}
+        };
+      }
+      const estimate = this.estimateVisionTokens(
+        imgObj.url,
+        provider,
+        imgObj.detail ?? "high"
+      );
+      if (estimate.tokens > maxTokens && this.autoDownsampleDetail) {
+        const lowEstimate = this.estimateVisionTokens(
+          imgObj.url,
+          provider,
+          "low"
+        );
+        const saved = estimate.tokens - lowEstimate.tokens;
+        optimizedCount++;
+        savedTokensEstimated += Math.max(0, saved);
+        const downsampledImg = {
+          ...imgObj,
+          detail: "low"
+        };
+        return {
+          ...part,
+          image_url: downsampledImg,
+          imageUrl: downsampledImg
+        };
+      }
+      return part;
+    });
+    return {
+      parts: optimized,
+      optimizedCount,
+      savedTokensEstimated
+    };
+  }
+  // --- Private Header Parsers ---
+  toBytes(input) {
+    if (input instanceof Uint8Array) return input;
+    if (input instanceof ArrayBuffer) return new Uint8Array(input);
+    if (typeof input === "string") {
+      if (input.startsWith("data:") && input.includes(";base64,")) {
+        const base64Data = input.split(";base64,")[1] ?? "";
+        return this.decodeBase64Prefix(base64Data, 1024);
+      }
+      if (/^[A-Za-z0-9+/=]+$/.test(input.slice(0, 64))) {
+        return this.decodeBase64Prefix(input, 1024);
+      }
+      return new TextEncoder().encode(input.slice(0, 1024));
+    }
+    return new Uint8Array(0);
+  }
+  decodeBase64Prefix(b64, maxBytes) {
+    const safeB64 = b64.slice(0, Math.ceil(maxBytes * 4 / 3));
+    if (typeof Buffer !== "undefined") {
+      return Uint8Array.from(Buffer.from(safeB64, "base64"));
+    }
+    const binStr = atob(safeB64);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) {
+      bytes[i] = binStr.charCodeAt(i);
+    }
+    return bytes;
+  }
+  parseJpeg(bytes) {
+    let offset = 2;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    while (offset < bytes.length - 8) {
+      if (bytes[offset] !== 255) {
+        offset++;
+        continue;
+      }
+      const marker = bytes[offset + 1];
+      if (marker >= 192 && marker <= 195 || marker >= 197 && marker <= 199 || marker >= 201 && marker <= 203 || marker >= 205 && marker <= 207) {
+        if (offset + 9 < bytes.length) {
+          const height = view.getUint16(offset + 5, false);
+          const width = view.getUint16(offset + 7, false);
+          return {
+            width,
+            height,
+            format: "jpeg",
+            mimeType: "image/jpeg",
+            byteLength: bytes.length
+          };
+        }
+      }
+      if (offset + 3 < bytes.length) {
+        const length = view.getUint16(offset + 2, false);
+        offset += 2 + length;
+      } else {
+        break;
+      }
+    }
+    return null;
+  }
+  parseWebp(bytes) {
+    if (bytes.length < 30) return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes[12] === 86 && bytes[13] === 80 && bytes[14] === 56 && bytes[15] === 32) {
+      const width = view.getUint16(26, true) & 16383;
+      const height = view.getUint16(28, true) & 16383;
+      return {
+        width,
+        height,
+        format: "webp",
+        mimeType: "image/webp",
+        byteLength: bytes.length
+      };
+    }
+    if (bytes[12] === 86 && bytes[13] === 80 && bytes[14] === 56 && bytes[15] === 76) {
+      const b0 = bytes[21] ?? 0;
+      const b1 = bytes[22] ?? 0;
+      const b2 = bytes[23] ?? 0;
+      const b3 = bytes[24] ?? 0;
+      const width = 1 + ((b1 & 63) << 8 | b0);
+      const height = 1 + ((b3 & 15) << 10 | b2 << 2 | (b1 & 192) >> 6);
+      return {
+        width,
+        height,
+        format: "webp",
+        mimeType: "image/webp",
+        byteLength: bytes.length
+      };
+    }
+    if (bytes[12] === 86 && bytes[13] === 80 && bytes[14] === 56 && bytes[15] === 88) {
+      const width = 1 + (bytes[24] | bytes[25] << 8 | bytes[26] << 16);
+      const height = 1 + (bytes[27] | bytes[28] << 8 | bytes[29] << 16);
+      return {
+        width,
+        height,
+        format: "webp",
+        mimeType: "image/webp",
+        byteLength: bytes.length
+      };
+    }
+    return null;
+  }
+};
+
 // src/types/index.ts
 var BudgetExceededError = class extends Error {
   currentCostUsd;
@@ -10873,8 +11641,13 @@ var SinapsClient = class {
   distiller;
   clusteredCache;
   kvCache;
+  vision;
+  personas;
   kvCacheEnabled = false;
+  clusteredCacheEnabled = false;
   semanticRouterEnabled;
+  recordedSpans = [];
+  maxRecordedSpans = 500;
   realtime = new RealtimeClient();
   consensus;
   isReversiblePII = false;
@@ -10962,6 +11735,7 @@ var SinapsClient = class {
       piiGuardrails: this.guardrails,
       ...options.distiller
     });
+    this.clusteredCacheEnabled = Boolean(options.clusteredCache);
     if (typeof options.clusteredCache === "object") {
       this.clusteredCache = new ClusteredSemanticCache({
         storage: this.storage,
@@ -10979,6 +11753,18 @@ var SinapsClient = class {
       );
     } else {
       this.kvCache = new KvCacheOptimizer();
+    }
+    if (typeof options.vision === "object") {
+      this.vision = new VisionOptimizer(options.vision);
+    } else {
+      this.vision = new VisionOptimizer();
+    }
+    if (options.personas instanceof AgentPersonaRegistry) {
+      this.personas = options.personas;
+    } else if (Array.isArray(options.personas)) {
+      this.personas = new AgentPersonaRegistry(options.personas);
+    } else {
+      this.personas = new AgentPersonaRegistry();
     }
     this.consensus = {
       create: async (consensusOptions) => {
@@ -11085,6 +11871,18 @@ var SinapsClient = class {
             }
           }
         }
+        if (request.useBrain) {
+          const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+          const lastUserText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : Array.isArray(lastUserMsg?.content) ? lastUserMsg.content.filter((p) => p.type === "text").map((p) => p.text).join(" ") : "";
+          if (lastUserText.trim().length > 0) {
+            const brainOpts = typeof request.useBrain === "object" ? request.useBrain : {};
+            const brainCtx = await this.brain.retrieveContext({
+              query: lastUserText,
+              ...brainOpts
+            });
+            messages = this.brain.injectIntoMessages(messages, brainCtx);
+          }
+        }
         if (this.llmo) {
           const opt = this.llmo.optimize(
             {
@@ -11110,6 +11908,21 @@ var SinapsClient = class {
           }
           this.hooks?.onKvCachePartition?.(partitioned, request);
         }
+        if (request.optimizeVision ?? true) {
+          messages = messages.map((m) => {
+            if (Array.isArray(m.content)) {
+              const opt = this.vision.optimizeContentParts(
+                m.content,
+                this.resolveModel(requestedModel)
+              );
+              if (opt.optimizedCount > 0) {
+                this.hooks?.onVisionOptimized?.(opt, request);
+              }
+              return { ...m, content: opt.parts };
+            }
+            return m;
+          });
+        }
         const resolvedModel = this.resolveModel(requestedModel);
         const fullReq = {
           model: resolvedModel,
@@ -11130,33 +11943,67 @@ var SinapsClient = class {
           user: request.user,
           llmo: request.llmo
         };
+        const startTimeMs = Date.now();
         let estimatedTokens = 0;
         let candidateProviderId;
-        if (this.rateLimiter) {
-          candidateProviderId = this.router.getPrimaryCandidateProviderId(fullReq);
-          estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
-          const check = await this.rateLimiter.check(fullReq, {
-            estimatedTokens,
-            providerId: candidateProviderId
+        let res;
+        let fromClusteredCache = false;
+        let clusterHitMeta;
+        if (!request.stream && (this.clusteredCacheEnabled || request.useClusteredCache)) {
+          const clusterHit = await this.clusteredCache.get(messages, {
+            model: resolvedModel
           });
-          if (!check.allowed && check.violation) {
-            this.hooks?.onGatewayRateLimitWarning?.(check.violation);
-            if (this.rateLimiter.action === "block") {
-              throw new GatewayRateLimitError(
-                `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
-                check.violation
-              );
-            }
+          if (clusterHit) {
+            fromClusteredCache = true;
+            clusterHitMeta = {
+              clusterId: clusterHit.clusterId,
+              similarity: clusterHit.similarity
+            };
+            res = clusterHit.value;
+            this.hooks?.onSemanticCacheHit?.(
+              fullReq,
+              res,
+              clusterHit.similarity
+            );
           }
         }
-        const res = await this.router.execute(fullReq);
-        const actualTokens = res.usage?.totalTokens;
-        if (this.rateLimiter && !request.stream && actualTokens !== void 0) {
-          await this.rateLimiter.adjustTokens(
-            fullReq,
-            actualTokens,
-            estimatedTokens,
-            res.provider || candidateProviderId
+        if (!fromClusteredCache) {
+          if (this.rateLimiter) {
+            candidateProviderId = this.router.getPrimaryCandidateProviderId(fullReq);
+            estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
+            const check = await this.rateLimiter.check(fullReq, {
+              estimatedTokens,
+              providerId: candidateProviderId
+            });
+            if (!check.allowed && check.violation) {
+              this.hooks?.onGatewayRateLimitWarning?.(check.violation);
+              if (this.rateLimiter.action === "block") {
+                throw new GatewayRateLimitError(
+                  `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
+                  check.violation
+                );
+              }
+            }
+          }
+          res = await this.router.execute(fullReq);
+          const actualTokens = res.usage?.totalTokens;
+          if (this.rateLimiter && !request.stream && actualTokens !== void 0) {
+            await this.rateLimiter.adjustTokens(
+              fullReq,
+              actualTokens,
+              estimatedTokens,
+              res.provider || candidateProviderId
+            );
+          }
+          if (!request.stream && (this.clusteredCacheEnabled || request.useClusteredCache) && res && typeof res === "object" && "choices" in res) {
+            await this.clusteredCache.set(messages, res, {
+              model: resolvedModel
+            });
+          }
+        }
+        if (!res) {
+          throw new Error(
+            "Gateway execution returned an empty response payload."
           );
         }
         if (request.stream) {
@@ -11198,47 +12045,52 @@ var SinapsClient = class {
           }
           return streamResult;
         }
-        if (this.guardrails && piiVault && piiVault.size > 0 && "choices" in res) {
-          const restored = this.guardrails.restoreResponse(
-            res,
+        let finalResponse = res;
+        if (this.guardrails && piiVault && piiVault.size > 0 && "choices" in finalResponse) {
+          finalResponse = this.guardrails.restoreResponse(
+            finalResponse,
             piiVault
           );
-          if (this.dashboard && !request.stream) {
-            const rAny = restored;
+        }
+        if ("choices" in finalResponse) {
+          const endTimeMs = Date.now();
+          const rAny = finalResponse;
+          this.recordSpan({
+            name: `chat ${finalResponse.model || fullReq.model}`,
+            startTimeMs,
+            endTimeMs,
+            attributes: {
+              "gen_ai.operation.name": "chat",
+              "gen_ai.system": finalResponse.provider || candidateProviderId || "sinapsai",
+              "gen_ai.request.model": fullReq.model,
+              "gen_ai.response.model": finalResponse.model || fullReq.model,
+              "gen_ai.usage.prompt_tokens": finalResponse.usage?.promptTokens ?? 0,
+              "gen_ai.usage.completion_tokens": finalResponse.usage?.completionTokens ?? 0,
+              "gen_ai.usage.total_tokens": finalResponse.usage?.totalTokens ?? 0,
+              ...fromClusteredCache && clusterHitMeta ? {
+                "sinapsai.cache.hit": true,
+                "sinapsai.cache.cluster_id": clusterHitMeta.clusterId,
+                "sinapsai.cache.similarity": clusterHitMeta.similarity
+              } : {}
+            }
+          });
+          if (this.dashboard) {
             this.dashboard.recordRequest({
-              id: restored.id || `req_${Date.now()}`,
-              timestamp: Date.now(),
-              model: restored.model || fullReq.model,
-              provider: restored.provider || candidateProviderId || "unknown",
-              latencyMs: Number(rAny.latencyMs ?? 0),
-              promptTokens: restored.usage?.promptTokens || 0,
-              completionTokens: restored.usage?.completionTokens || 0,
-              totalTokens: restored.usage?.totalTokens || 0,
-              cached: Boolean(rAny.cached),
+              id: finalResponse.id || `req_${endTimeMs}`,
+              timestamp: endTimeMs,
+              model: finalResponse.model || fullReq.model,
+              provider: finalResponse.provider || candidateProviderId || "unknown",
+              latencyMs: Number(rAny.latencyMs ?? endTimeMs - startTimeMs),
+              promptTokens: finalResponse.usage?.promptTokens || 0,
+              completionTokens: finalResponse.usage?.completionTokens || 0,
+              totalTokens: finalResponse.usage?.totalTokens || 0,
+              cached: Boolean(rAny.cached) || fromClusteredCache,
               costUsd: Number(rAny.estimatedCostUsd ?? 0),
               status: "success"
             });
           }
-          return restored;
         }
-        if (this.dashboard && !request.stream && "choices" in res) {
-          const resp = res;
-          const rAny = resp;
-          this.dashboard.recordRequest({
-            id: resp.id || `req_${Date.now()}`,
-            timestamp: Date.now(),
-            model: resp.model || fullReq.model,
-            provider: resp.provider || candidateProviderId || "unknown",
-            latencyMs: Number(rAny.latencyMs ?? 0),
-            promptTokens: resp.usage?.promptTokens || 0,
-            completionTokens: resp.usage?.completionTokens || 0,
-            totalTokens: resp.usage?.totalTokens || 0,
-            cached: Boolean(rAny.cached),
-            costUsd: Number(rAny.estimatedCostUsd ?? 0),
-            status: "success"
-          });
-        }
-        return res;
+        return finalResponse;
       }),
       /**
        * Accumulates a streaming response into a complete UnifiedApiResponse.
@@ -11449,6 +12301,7 @@ var SinapsClient = class {
     return this.router.resetCircuitBreaker(providerId);
   }
   async clearCache() {
+    this.clusteredCache.clear();
     return this.router.clearCache();
   }
   /**
@@ -11576,17 +12429,42 @@ var SinapsClient = class {
   toOtelMetrics(options) {
     return this.exportOtelMetrics(options);
   }
-  /**
-   * Formats internal GenAI spans into OpenTelemetry (OTLP v1 JSON) Trace Payload.
-   */
-  toOtelTraces(spans, options) {
-    return toOtelTracePayload(spans, options);
+  recordSpan(span) {
+    const normalized = {
+      traceId: span.traceId || generateTraceId(),
+      spanId: span.spanId || generateSpanId(),
+      ...span
+    };
+    this.recordedSpans.push(normalized);
+    if (this.recordedSpans.length > this.maxRecordedSpans) {
+      this.recordedSpans.shift();
+    }
   }
   /**
-   * Exports OpenTelemetry GenAI traces directly to an OTLP collector endpoint (/v1/traces).
+   * Returns automatically collected OpenTelemetry GenAI spans from client requests.
+   */
+  getRecordedSpans() {
+    return [...this.recordedSpans];
+  }
+  /**
+   * Clears the internal OpenTelemetry GenAI span ring buffer.
+   */
+  clearRecordedSpans() {
+    this.recordedSpans = [];
+  }
+  /**
+   * Formats internal GenAI spans (or automatically recorded client spans if omitted)
+   * into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+   */
+  toOtelTraces(spans, options) {
+    return toOtelTracePayload(spans ?? this.recordedSpans, options);
+  }
+  /**
+   * Exports OpenTelemetry GenAI traces (or automatically recorded client spans if omitted)
+   * directly to an OTLP collector endpoint (/v1/traces).
    */
   async exportOtelTraces(spans, options) {
-    return exportOtelTraces(spans, options);
+    return exportOtelTraces(spans ?? this.recordedSpans, options);
   }
   /**
    * Runs an autonomous multi-step tool-calling agent loop.
@@ -11873,7 +12751,17 @@ var SinapsClient = class {
    * supporting role-based specialist delegation, A2A handoffs, and shared memory.
    */
   swarm(options) {
-    return new AgentSwarm(this, options);
+    return new AgentSwarm(this, {
+      personaRegistry: options.personaRegistry ?? this.personas,
+      ...options
+    });
+  }
+  /**
+   * Instantiate an in-process speculative stream verifier coupling an ultra-fast streaming
+   * draft model with a background heavy reasoning auditor for real-time claim validation.
+   */
+  createSpeculativeStream(options) {
+    return new SpeculativeStreamVerifier(options);
   }
 };
 
@@ -12360,6 +13248,15 @@ var sinapsai = createSinapsAI;
  * @license MIT
  */
 /**
+ * Zero-dependency In-Process Autonomous Dynamic Agent Persona & Ephemeral Skill Registry.
+ *
+ * Manages standardized personas, ephemeral skill lifetimes (auto-expiring across turns),
+ * fine-grained tool whitelists/blacklists, and persona drift detection across multi-agent swarms.
+ *
+ * @author Roedy Rustam
+ * @license MIT
+ */
+/**
  * SinapsAI - In-Process AI Gateway & Control Plane
  * In-Process Semantic Prompt Router & Intent Classifier
  *
@@ -12664,6 +13561,27 @@ var sinapsai = createSinapsAI;
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * Zero-dependency In-Process Speculative Stream Verification & Dual-Engine Decoupled Copilot.
+ *
+ * Couples an ultra-fast streaming draft generator (e.g., Groq LPU, Gemini Flash-Lite) with
+ * an asynchronous background auditor model (e.g., Claude 3.7 Sonnet, GPT-4o).
+ * Dispatches real-time tokens to the client with sub-100ms TTFT while evaluating
+ * sentence/code block claims in parallel, emitting non-blocking corrections upon divergence.
+ *
+ * @author Roedy Rustam
+ * @license MIT
+ */
+/**
+ * Zero-dependency In-Process Multimodal Vision & Audio Token Optimizer.
+ *
+ * Provides sub-millisecond image/audio header inspection, exact provider-specific
+ * token estimation (OpenAI tile grid math, Anthropic megapixel ratio, Gemini fixed tiles),
+ * FinOps cost projection, and automatic content part optimization for multimodal LLM requests.
+ *
+ * @author Roedy Rustam
  * @license MIT
  */
 /**

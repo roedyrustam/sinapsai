@@ -264,6 +264,19 @@
   - Lifecycle hook `onKvCachePartition` yang melaporkan batas token partisi dan status kelayakan cache hit.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 47 (`examples/47-clustered-cache-tournament-and-prefix-pinning.ts`); total 608/608 unit tests lulus di 60 test suites, 100% Biome Clean, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.4.0.
 
+## Phase 29: Vision Token Optimizer, Speculative Stream Verifier, Agent Personas & Unified Hot-Path Pipeline (v3.5.0) - *Completed*
+- [x] **Multimodal Vision Token Optimizer (`VisionOptimizer`)**:
+  - Inspeksi dimensi header gambar zero-dependency (PNG, JPEG, GIF, WebP) serta estimasi token/biaya spesifik OpenAI, Anthropic, dan Gemini.
+  - Sinkronisasi properti `image_url` dan alias `imageUrl` serta auto-downsampling `high` -> `low` detail melalui `client.vision.optimizeContentParts()`.
+- [x] **Speculative Stream Verification (`SpeculativeStreamVerifier`)**:
+  - Eksekusi paralel draft stream + auditor latar belakang dengan union adapter `SpeculativeProviderLike` (mendukung `Provider.generateContent` standar maupun `execute`/`executeStream`), callback non-blokir `onCorrection`, dan factory `client.createSpeculativeStream()`.
+- [x] **Dynamic Agent Persona Registry & Swarm Lifecycle (`AgentPersonaRegistry` + `AgentSwarm`)**:
+  - Integrasi `consumeTurn()` dan `detectDrift()` ke `AgentSwarm.run()` dan `AgentSwarm.runStream()`, dilengkapi `onPersonaDrift`, `prunedEphemeralSkills`, dan `personaDrift` di `SwarmResult`.
+- [x] **Unified Hot-Path Pipeline (`SinapsClient`)**:
+  - Penyatuan `useBrain` (Tri-Memory retrieval & injection), `clusteredCache` / `useClusteredCache` (dengan `onSemanticCacheHit`), dan perekaman otomatis `GenAiSpan` ring buffer (`getRecordedSpans()`, `clearRecordedSpans()`, argumen opsional pada `toOtelTraces()`/`exportOtelTraces()`).
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 48 (`examples/48-vision-optimizer-speculative-stream-and-personas.ts`); total 630/630 unit tests lulus di 63 test suites, 100% Biome Clean (0 error, 0 warning), Strict TypeScript Pass, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.5.0.
+
+
 
 
 

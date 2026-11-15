@@ -41,6 +41,13 @@ export interface ImageUrlContentPart {
         url: string;
         detail?: 'auto' | 'low' | 'high';
     };
+    /**
+     * Optional camelCase alias for ergonomic compatibility.
+     */
+    imageUrl?: {
+        url: string;
+        detail?: 'auto' | 'low' | 'high';
+    };
 }
 export interface InputAudioContentPart {
     type: 'input_audio';
@@ -123,6 +130,19 @@ export interface UnifiedApiRequest {
      */
     pinKvCache?: boolean;
     /**
+     * Optional multimodal vision token optimization: automatically downsamples image detail
+     * from 'high'/'auto' to 'low' when estimated tokens exceed the configured threshold.
+     */
+    optimizeVision?: boolean;
+    /**
+     * Optional automatic ClusteredSemanticCache lookup/store for this request.
+     */
+    useClusteredCache?: boolean;
+    /**
+     * Optional automatic CognitiveBrain Tri-Memory context retrieval and injection.
+     */
+    useBrain?: boolean | Omit<import('../core/CognitiveBrain.js').CognitiveRetrieveOptions, 'query'>;
+    /**
      * A unique identifier representing your end-user, useful for tracking abuse and rate limiting.
      */
     user?: string;
@@ -161,6 +181,7 @@ export interface UnifiedApiStreamChunk {
     usage?: ApiUsage;
     grounding?: GroundingMetadata;
 }
+export type ChatCompletionChunk = UnifiedApiStreamChunk;
 export interface RateLimitInfo {
     remainingRequests?: number;
     remainingTokens?: number;
@@ -348,6 +369,11 @@ export interface SinapsEventHooks {
     onGatewayRateLimitWarning?: (violation: GatewayRateLimitViolation) => void;
     onSemanticRouteMatch?: (match: import('../core/SemanticRouter.js').SemanticMatchResult, request: CreateChatCompletionRequest | UnifiedApiRequest) => void;
     onKvCachePartition?: (partitioned: import('../core/KvCacheOptimizer.js').PartitionedPrompt, request: CreateChatCompletionRequest | UnifiedApiRequest) => void;
+    onVisionOptimized?: (result: {
+        parts: ContentPart[];
+        optimizedCount: number;
+        savedTokensEstimated: number;
+    }, request: CreateChatCompletionRequest | UnifiedApiRequest) => void;
 }
 export interface BatchProgress {
     /**
@@ -696,6 +722,7 @@ export type AgentStreamEvent = {
     result: RunWithToolsResult;
 };
 export type RunWithToolsStreamOptions = Omit<RunWithToolsOptions, 'stream'>;
+export { type AgentPersona, AgentPersonaRegistry, type EphemeralSkill, type PersonaDriftResult, } from '../core/AgentPersonaRegistry.js';
 export type { ActorCriticOptions, ActorCriticResult, ActorCriticRevision, ContextMergeOptions, SwarmParallelAgentTask, SwarmParallelBranchResult, SwarmParallelOptions, SwarmParallelResult, } from '../core/AgentSwarm.js';
 export { AgentWalletExceededError, deepMergeContext, type SwarmAgentWallet, type TournamentOptions, type TournamentResult, } from '../core/AgentSwarm.js';
 export { AutonomousDriftHealer, type DriftHealResult, type ProviderErrorRemediation, } from '../core/AutonomousDriftHealer.js';
@@ -717,6 +744,8 @@ export { RealtimeClient, type RealtimeConnectOptions, type RealtimeProviderType,
 export type { RouterOptions } from '../core/Router.js';
 export { createFastSemanticEmbedding, type SemanticMatchResult, type SemanticRoute, SemanticRouter, type SemanticRouterConfig, type SemanticRouterOptions, } from '../core/SemanticRouter.js';
 export type { ExtendedPIIGuardrailsOptions, SinapsClientOptions, } from '../core/SinapsClient.js';
+export { type SpeculativeProviderLike, type SpeculativeStreamOptions, type SpeculativeStreamResult, SpeculativeStreamVerifier, type StreamCorrectionEvent, } from '../core/SpeculativeStreamVerifier.js';
 export { type DissentingView, type TournamentAgentScore, type TournamentCluster, TournamentConsensusEngine, type TournamentConsensusOptions, type TournamentConsensusResult, type TournamentSubmission, type TournamentVotingStrategy, } from '../core/TournamentConsensus.js';
+export { type AudioTokenEstimate, type ImageDimensions, VisionOptimizer, type VisionOptimizerOptions, type VisionTokenEstimate, } from '../core/VisionOptimizer.js';
 export { exportOtelTraces, type GenAiSpan, type GenAiSpanAttribute, generateSpanId, generateTraceId, type OtelTraceExportOptions, type OtelTracePayload, toOtelTracePayload, } from '../utils/tracingExporter.js';
 //# sourceMappingURL=index.d.ts.map

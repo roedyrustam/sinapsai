@@ -1416,4 +1416,178 @@ describe('SinapsClient', () => {
       );
     });
   });
+
+  describe('Unified Hot-Path Pipeline (v3.5.0)', () => {
+    it('routes non-streaming chat completions through ClusteredSemanticCache and fires onSemanticCacheHit', async () => {
+      const mockResponse: UnifiedApiResponse = {
+        id: 'chatcmpl-clustered-1',
+        model: 'gpt-4o',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Use O(n log n) divide-and-conquer quicksort.',
+            },
+            finishReason: 'stop',
+          },
+        ],
+        usage: {
+          promptTokens: 12,
+          completionTokens: 10,
+          totalTokens: 22,
+        },
+      };
+
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn().mockResolvedValue(mockResponse),
+      };
+
+      const onSemanticCacheHit = vi.fn();
+      const client = new SinapsClient({
+        providers: [mockProvider],
+        clusteredCache: { similarityThreshold: 0.6, k: 2 },
+        hooks: { onSemanticCacheHit },
+      });
+
+      const first = await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'user',
+            content: 'How do I implement quicksort algorithm in TypeScript?',
+          },
+        ],
+      });
+
+      const second = await client.chat.completions.create({
+        model: 'gpt-4o',
+        useClusteredCache: true,
+        messages: [
+          {
+            role: 'user',
+            content: 'How to implement quicksort algorithm in TypeScript?',
+          },
+        ],
+      });
+
+      expect(first.choices[0].message.content).toBe(
+        'Use O(n log n) divide-and-conquer quicksort.',
+      );
+      expect(second.choices[0].message.content).toBe(
+        'Use O(n log n) divide-and-conquer quicksort.',
+      );
+      expect(mockProvider.generateContent).toHaveBeenCalledTimes(1);
+      expect(onSemanticCacheHit).toHaveBeenCalledTimes(1);
+      expect(onSemanticCacheHit).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-4o' }),
+        expect.objectContaining({ id: 'chatcmpl-clustered-1' }),
+        expect.any(Number),
+      );
+    });
+
+    it('retrieves and injects CognitiveBrain memory automatically when useBrain is enabled alongside pinKvCache', async () => {
+      const mockResponse: UnifiedApiResponse = {
+        id: 'chatcmpl-brain-1',
+        model: 'gpt-4o',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Strict TS snippet ready.' },
+            finishReason: 'stop',
+          },
+        ],
+      };
+
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn().mockResolvedValue(mockResponse),
+      };
+
+      const client = new SinapsClient({
+        providers: [mockProvider],
+      });
+
+      await client.brain.rememberFact(
+        'User strongly prefers strict TypeScript sorting helpers without any.',
+      );
+
+      const res = await client.chat.completions.create({
+        model: 'gpt-4o',
+        useBrain: true,
+        pinKvCache: true,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a TypeScript mentor. Current time: 2026-11-15T10:00:00Z.',
+          },
+          {
+            role: 'user',
+            content: 'Write a strict TypeScript sorting helper.',
+          },
+        ],
+      });
+
+      expect(res.choices[0].message.content).toBe('Strict TS snippet ready.');
+      expect(mockProvider.generateContent).toHaveBeenCalledTimes(1);
+      const sentRequest = vi.mocked(mockProvider.generateContent).mock
+        .calls[0][0];
+      const serialized = sentRequest.messages
+        .map((m) => (typeof m.content === 'string' ? m.content : ''))
+        .join('\n');
+      expect(serialized).toContain('strict TypeScript sorting helpers');
+      expect(serialized).toContain('[RUNTIME_CONTEXT]: Current time:');
+    });
+
+    it('auto-records GenAiSpan telemetry and exports via toOtelTraces() with zero arguments', async () => {
+      const mockResponse: UnifiedApiResponse = {
+        id: 'chatcmpl-otel-1',
+        model: 'gpt-4o',
+        provider: 'mock',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Telemetry verified.' },
+            finishReason: 'stop',
+          },
+        ],
+        usage: {
+          promptTokens: 15,
+          completionTokens: 5,
+          totalTokens: 20,
+        },
+      };
+
+      const mockProvider: Provider = {
+        name: 'mock',
+        id: 'mock-p',
+        generateContent: vi.fn().mockResolvedValue(mockResponse),
+      };
+
+      const client = new SinapsClient({
+        providers: [mockProvider],
+      });
+
+      await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Ping telemetry' }],
+      });
+
+      const recorded = client.getRecordedSpans();
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0].attributes['gen_ai.operation.name']).toBe('chat');
+      expect(recorded[0].attributes['gen_ai.request.model']).toBe('gpt-4o');
+      expect(recorded[0].attributes['gen_ai.usage.total_tokens']).toBe(20);
+
+      const otelPayload = client.toOtelTraces();
+      expect(otelPayload.resourceSpans).toHaveLength(1);
+      const otelSpans = otelPayload.resourceSpans[0].scopeSpans[0].spans;
+      expect(otelSpans).toHaveLength(1);
+      expect(otelSpans[0].name).toContain('chat');
+
+      client.clearRecordedSpans();
+      expect(client.getRecordedSpans()).toHaveLength(0);
+    });
+  });
 });

@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.5.0] - 2026-11-15
+### Added
+- **Multimodal Vision Token Optimizer (`VisionOptimizer`)**: Zero-dependency binary/base64 image header analyzer (PNG, JPEG, GIF, WebP), provider-specific token & FinOps cost estimator (OpenAI tiles, Anthropic megapixel ratio, Gemini fixed tiles), and automatic `high` -> `low` detail downsampling supporting both `image_url` and `imageUrl`.
+- **Speculative Stream Verification (`SpeculativeStreamVerifier` & `client.createSpeculativeStream()`)**: Couples ultra-fast streaming draft generation (`Provider.generateContent` or custom `SpeculativeProviderLike` `executeStream`/`execute` adapter) with non-blocking asynchronous background claim verification via `onCorrection`.
+- **Dynamic Agent Persona Governance (`AgentPersonaRegistry` + `AgentSwarm`)**: Wired ephemeral skill TTL pruning (`consumeTurn`), behavioral drift detection (`detectDrift`), `onPersonaDrift` callbacks, `prunedEphemeralSkills`, and `personaDrift` tracking into `AgentSwarm.run()` and `AgentSwarm.runStream()`.
+- **Unified Hot-Path Pipeline (`SinapsClient.chat.completions.create`)**:
+  - Automatic `CognitiveBrain` Tri-Memory retrieval & injection via `useBrain` request option.
+  - Integrated `ClusteredSemanticCache` hot-path short-circuiting (`clusteredCache` / `useClusteredCache`) with `onSemanticCacheHit` hook dispatch and `sinapsai.cache.*` span attributes.
+  - Automatic `GenAiSpan` telemetry ring buffer (`getRecordedSpans()`, `clearRecordedSpans()`) with zero-argument support on `toOtelTraces()` and `exportOtelTraces()`.
+- **Validation & Examples**: Added Example 48 (`examples/48-vision-optimizer-speculative-stream-and-personas.ts`); 630/630 tests passing across 63 suites, 100% Biome clean, and strict TypeScript passing across `src/` and `examples/`.
+
 ## [3.4.0] - 2026-11-11
 ### Added
 - **In-Process Clustered Semantic Cache (`ClusteredSemanticCache`, `client.clusteredCache`, `src/core/ClusteredSemanticCache.ts`)**:

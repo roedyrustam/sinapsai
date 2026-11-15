@@ -59,10 +59,16 @@ import {
 import {
   exportOtelTraces,
   type GenAiSpan,
+  generateSpanId,
+  generateTraceId,
   type OtelTraceExportOptions,
   type OtelTracePayload,
   toOtelTracePayload,
 } from '../utils/tracingExporter.js';
+import {
+  type AgentPersona,
+  AgentPersonaRegistry,
+} from './AgentPersonaRegistry.js';
 import { AgentSwarm, type AgentSwarmOptions } from './AgentSwarm.js';
 import { executeBatch } from './BatchExecutor.js';
 import { CanaryProber, type CanaryProberOptions } from './CanaryProber.js';
@@ -138,7 +144,15 @@ import {
   SecurityGuardrails,
 } from './SecurityGuardrails.js';
 import { SemanticRouter, type SemanticRouterConfig } from './SemanticRouter.js';
+import {
+  type SpeculativeStreamOptions,
+  SpeculativeStreamVerifier,
+} from './SpeculativeStreamVerifier.js';
 import type { StateStorage } from './StateStorage.js';
+import {
+  VisionOptimizer,
+  type VisionOptimizerOptions,
+} from './VisionOptimizer.js';
 
 export interface ExtendedPIIGuardrailsOptions extends PIIGuardrailsOptions {
   /**
@@ -269,6 +283,16 @@ export interface SinapsClientOptions {
    * timestamps to the tail to maximize provider prompt caching hit rates.
    */
   kvCache?: KvPartitionOptions | boolean;
+  /**
+   * Optional multimodal vision token optimizer.
+   * Provides binary image header inspection, tile grid token estimation, and auto-downsampling.
+   */
+  vision?: VisionOptimizerOptions | boolean;
+  /**
+   * Optional agent persona registry or initial personas list.
+   * Manages standardized system personas, ephemeral skills, and drift detection.
+   */
+  personas?: AgentPersona[] | AgentPersonaRegistry;
 }
 
 export class SinapsClient {
@@ -294,8 +318,13 @@ export class SinapsClient {
   public readonly distiller: DatasetDistiller;
   public readonly clusteredCache: ClusteredSemanticCache;
   public readonly kvCache: KvCacheOptimizer;
+  public readonly vision: VisionOptimizer;
+  public readonly personas: AgentPersonaRegistry;
   private kvCacheEnabled = false;
+  private clusteredCacheEnabled = false;
   private semanticRouterEnabled: boolean;
+  private recordedSpans: GenAiSpan[] = [];
+  private readonly maxRecordedSpans = 500;
   public readonly realtime = new RealtimeClient();
   public readonly consensus: {
     create: (options: ConsensusOptions) => Promise<ConsensusResult>;
@@ -421,6 +450,7 @@ export class SinapsClient {
     });
 
     // Initialize In-Process Clustered Semantic Cache
+    this.clusteredCacheEnabled = Boolean(options.clusteredCache);
     if (typeof options.clusteredCache === 'object') {
       this.clusteredCache = new ClusteredSemanticCache({
         storage: this.storage,
@@ -440,6 +470,22 @@ export class SinapsClient {
       );
     } else {
       this.kvCache = new KvCacheOptimizer();
+    }
+
+    // Initialize Multimodal Vision Token Optimizer
+    if (typeof options.vision === 'object') {
+      this.vision = new VisionOptimizer(options.vision);
+    } else {
+      this.vision = new VisionOptimizer();
+    }
+
+    // Initialize Autonomous Agent Persona Registry
+    if (options.personas instanceof AgentPersonaRegistry) {
+      this.personas = options.personas;
+    } else if (Array.isArray(options.personas)) {
+      this.personas = new AgentPersonaRegistry(options.personas);
+    } else {
+      this.personas = new AgentPersonaRegistry();
     }
 
     // Initialize Speculative Multi-Draft Consensus
@@ -574,6 +620,32 @@ export class SinapsClient {
           }
         }
 
+        // Apply Cognitive Brain Tri-Memory Retrieval & Injection if requested
+        if (request.useBrain) {
+          const lastUserMsg = [...messages]
+            .reverse()
+            .find((m) => m.role === 'user');
+          const lastUserText =
+            typeof lastUserMsg?.content === 'string'
+              ? lastUserMsg.content
+              : Array.isArray(lastUserMsg?.content)
+                ? lastUserMsg.content
+                    .filter((p) => p.type === 'text')
+                    .map((p) => p.text)
+                    .join(' ')
+                : '';
+
+          if (lastUserText.trim().length > 0) {
+            const brainOpts =
+              typeof request.useBrain === 'object' ? request.useBrain : {};
+            const brainCtx = await this.brain.retrieveContext({
+              query: lastUserText,
+              ...brainOpts,
+            });
+            messages = this.brain.injectIntoMessages(messages, brainCtx);
+          }
+        }
+
         // Apply LLM Optimization (LLMO) if configured
         if (this.llmo) {
           const opt = this.llmo.optimize(
@@ -603,6 +675,23 @@ export class SinapsClient {
           this.hooks?.onKvCachePartition?.(partitioned, request);
         }
 
+        // Apply Multimodal Vision token optimization if messages contain image parts
+        if (request.optimizeVision ?? true) {
+          messages = messages.map((m) => {
+            if (Array.isArray(m.content)) {
+              const opt = this.vision.optimizeContentParts(
+                m.content,
+                this.resolveModel(requestedModel),
+              );
+              if (opt.optimizedCount > 0) {
+                this.hooks?.onVisionOptimized?.(opt, request);
+              }
+              return { ...m, content: opt.parts };
+            }
+            return m;
+          });
+        }
+
         const resolvedModel = this.resolveModel(requestedModel);
 
         const fullReq: UnifiedApiRequest = {
@@ -625,36 +714,92 @@ export class SinapsClient {
           llmo: request.llmo,
         };
 
+        const startTimeMs = Date.now();
         let estimatedTokens = 0;
         let candidateProviderId: string | undefined;
-        if (this.rateLimiter) {
-          candidateProviderId =
-            this.router.getPrimaryCandidateProviderId(fullReq);
-          estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
-          const check = await this.rateLimiter.check(fullReq, {
-            estimatedTokens,
-            providerId: candidateProviderId,
+        let res:
+          | UnifiedApiResponse
+          | AsyncIterable<UnifiedApiStreamChunk>
+          | undefined;
+        let fromClusteredCache = false;
+        let clusterHitMeta:
+          | { clusterId: string; similarity: number }
+          | undefined;
+
+        if (
+          !request.stream &&
+          (this.clusteredCacheEnabled || request.useClusteredCache)
+        ) {
+          const clusterHit = await this.clusteredCache.get(messages, {
+            model: resolvedModel,
           });
-          if (!check.allowed && check.violation) {
-            this.hooks?.onGatewayRateLimitWarning?.(check.violation);
-            if (this.rateLimiter.action === 'block') {
-              throw new GatewayRateLimitError(
-                `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
-                check.violation,
-              );
-            }
+          if (clusterHit) {
+            fromClusteredCache = true;
+            clusterHitMeta = {
+              clusterId: clusterHit.clusterId,
+              similarity: clusterHit.similarity,
+            };
+            res = clusterHit.value as UnifiedApiResponse;
+            this.hooks?.onSemanticCacheHit?.(
+              fullReq,
+              res,
+              clusterHit.similarity,
+            );
           }
         }
 
-        const res = await this.router.execute(fullReq);
+        if (!fromClusteredCache) {
+          if (this.rateLimiter) {
+            candidateProviderId =
+              this.router.getPrimaryCandidateProviderId(fullReq);
+            estimatedTokens = this.rateLimiter.estimateTokens(fullReq);
+            const check = await this.rateLimiter.check(fullReq, {
+              estimatedTokens,
+              providerId: candidateProviderId,
+            });
+            if (!check.allowed && check.violation) {
+              this.hooks?.onGatewayRateLimitWarning?.(check.violation);
+              if (this.rateLimiter.action === 'block') {
+                throw new GatewayRateLimitError(
+                  `Gateway rate limit exceeded: ${check.violation.limitType} limit reached for ${check.violation.key} (${check.violation.current}/${check.violation.limit}). Retry after ${check.violation.retryAfterSec}s.`,
+                  check.violation,
+                );
+              }
+            }
+          }
 
-        const actualTokens = (res as UnifiedApiResponse).usage?.totalTokens;
-        if (this.rateLimiter && !request.stream && actualTokens !== undefined) {
-          await this.rateLimiter.adjustTokens(
-            fullReq,
-            actualTokens,
-            estimatedTokens,
-            (res as UnifiedApiResponse).provider || candidateProviderId,
+          res = await this.router.execute(fullReq);
+
+          const actualTokens = (res as UnifiedApiResponse).usage?.totalTokens;
+          if (
+            this.rateLimiter &&
+            !request.stream &&
+            actualTokens !== undefined
+          ) {
+            await this.rateLimiter.adjustTokens(
+              fullReq,
+              actualTokens,
+              estimatedTokens,
+              (res as UnifiedApiResponse).provider || candidateProviderId,
+            );
+          }
+
+          if (
+            !request.stream &&
+            (this.clusteredCacheEnabled || request.useClusteredCache) &&
+            res &&
+            typeof res === 'object' &&
+            'choices' in res
+          ) {
+            await this.clusteredCache.set(messages, res as UnifiedApiResponse, {
+              model: resolvedModel,
+            });
+          }
+        }
+
+        if (!res) {
+          throw new Error(
+            'Gateway execution returned an empty response payload.',
           );
         }
 
@@ -707,59 +852,70 @@ export class SinapsClient {
           return streamResult;
         }
 
+        let finalResponse = res as UnifiedApiResponse;
+
         // Reversibly restore PII values if vault contains tokens
         if (
           this.guardrails &&
           piiVault &&
           piiVault.size > 0 &&
-          'choices' in (res as UnifiedApiResponse)
+          'choices' in finalResponse
         ) {
-          const restored = this.guardrails.restoreResponse(
-            res as UnifiedApiResponse,
+          finalResponse = this.guardrails.restoreResponse(
+            finalResponse,
             piiVault,
           );
-          if (this.dashboard && !request.stream) {
-            const rAny = restored as unknown as Record<string, unknown>;
+        }
+
+        if ('choices' in finalResponse) {
+          const endTimeMs = Date.now();
+          const rAny = finalResponse as unknown as Record<string, unknown>;
+
+          this.recordSpan({
+            name: `chat ${finalResponse.model || fullReq.model}`,
+            startTimeMs,
+            endTimeMs,
+            attributes: {
+              'gen_ai.operation.name': 'chat',
+              'gen_ai.system':
+                finalResponse.provider || candidateProviderId || 'sinapsai',
+              'gen_ai.request.model': fullReq.model,
+              'gen_ai.response.model': finalResponse.model || fullReq.model,
+              'gen_ai.usage.prompt_tokens':
+                finalResponse.usage?.promptTokens ?? 0,
+              'gen_ai.usage.completion_tokens':
+                finalResponse.usage?.completionTokens ?? 0,
+              'gen_ai.usage.total_tokens':
+                finalResponse.usage?.totalTokens ?? 0,
+              ...(fromClusteredCache && clusterHitMeta
+                ? {
+                    'sinapsai.cache.hit': true,
+                    'sinapsai.cache.cluster_id': clusterHitMeta.clusterId,
+                    'sinapsai.cache.similarity': clusterHitMeta.similarity,
+                  }
+                : {}),
+            },
+          });
+
+          if (this.dashboard) {
             this.dashboard.recordRequest({
-              id: restored.id || `req_${Date.now()}`,
-              timestamp: Date.now(),
-              model: restored.model || fullReq.model,
-              provider: restored.provider || candidateProviderId || 'unknown',
-              latencyMs: Number(rAny.latencyMs ?? 0),
-              promptTokens: restored.usage?.promptTokens || 0,
-              completionTokens: restored.usage?.completionTokens || 0,
-              totalTokens: restored.usage?.totalTokens || 0,
-              cached: Boolean(rAny.cached),
+              id: finalResponse.id || `req_${endTimeMs}`,
+              timestamp: endTimeMs,
+              model: finalResponse.model || fullReq.model,
+              provider:
+                finalResponse.provider || candidateProviderId || 'unknown',
+              latencyMs: Number(rAny.latencyMs ?? endTimeMs - startTimeMs),
+              promptTokens: finalResponse.usage?.promptTokens || 0,
+              completionTokens: finalResponse.usage?.completionTokens || 0,
+              totalTokens: finalResponse.usage?.totalTokens || 0,
+              cached: Boolean(rAny.cached) || fromClusteredCache,
               costUsd: Number(rAny.estimatedCostUsd ?? 0),
               status: 'success',
             });
           }
-          return restored;
         }
 
-        if (
-          this.dashboard &&
-          !request.stream &&
-          'choices' in (res as UnifiedApiResponse)
-        ) {
-          const resp = res as UnifiedApiResponse;
-          const rAny = resp as unknown as Record<string, unknown>;
-          this.dashboard.recordRequest({
-            id: resp.id || `req_${Date.now()}`,
-            timestamp: Date.now(),
-            model: resp.model || fullReq.model,
-            provider: resp.provider || candidateProviderId || 'unknown',
-            latencyMs: Number(rAny.latencyMs ?? 0),
-            promptTokens: resp.usage?.promptTokens || 0,
-            completionTokens: resp.usage?.completionTokens || 0,
-            totalTokens: resp.usage?.totalTokens || 0,
-            cached: Boolean(rAny.cached),
-            costUsd: Number(rAny.estimatedCostUsd ?? 0),
-            status: 'success',
-          });
-        }
-
-        return res;
+        return finalResponse;
       }) as {
         (
           request: CreateChatCompletionRequestStreaming,
@@ -1057,6 +1213,7 @@ export class SinapsClient {
   }
 
   public async clearCache(): Promise<void> {
+    this.clusteredCache.clear();
     return this.router.clearCache();
   }
 
@@ -1214,24 +1371,52 @@ export class SinapsClient {
     return this.exportOtelMetrics(options);
   }
 
-  /**
-   * Formats internal GenAI spans into OpenTelemetry (OTLP v1 JSON) Trace Payload.
-   */
-  public toOtelTraces(
-    spans: GenAiSpan[],
-    options?: OtelTraceExportOptions,
-  ): OtelTracePayload {
-    return toOtelTracePayload(spans, options);
+  private recordSpan(span: GenAiSpan): void {
+    const normalized: GenAiSpan = {
+      traceId: span.traceId || generateTraceId(),
+      spanId: span.spanId || generateSpanId(),
+      ...span,
+    };
+    this.recordedSpans.push(normalized);
+    if (this.recordedSpans.length > this.maxRecordedSpans) {
+      this.recordedSpans.shift();
+    }
   }
 
   /**
-   * Exports OpenTelemetry GenAI traces directly to an OTLP collector endpoint (/v1/traces).
+   * Returns automatically collected OpenTelemetry GenAI spans from client requests.
+   */
+  public getRecordedSpans(): GenAiSpan[] {
+    return [...this.recordedSpans];
+  }
+
+  /**
+   * Clears the internal OpenTelemetry GenAI span ring buffer.
+   */
+  public clearRecordedSpans(): void {
+    this.recordedSpans = [];
+  }
+
+  /**
+   * Formats internal GenAI spans (or automatically recorded client spans if omitted)
+   * into OpenTelemetry (OTLP v1 JSON) Trace Payload.
+   */
+  public toOtelTraces(
+    spans?: GenAiSpan[],
+    options?: OtelTraceExportOptions,
+  ): OtelTracePayload {
+    return toOtelTracePayload(spans ?? this.recordedSpans, options);
+  }
+
+  /**
+   * Exports OpenTelemetry GenAI traces (or automatically recorded client spans if omitted)
+   * directly to an OTLP collector endpoint (/v1/traces).
    */
   public async exportOtelTraces(
-    spans: GenAiSpan[],
+    spans?: GenAiSpan[],
     options?: OtelTraceExportOptions,
   ): Promise<{ success: boolean; status?: number; error?: string }> {
-    return exportOtelTraces(spans, options);
+    return exportOtelTraces(spans ?? this.recordedSpans, options);
   }
 
   /**
@@ -1593,6 +1778,19 @@ export class SinapsClient {
    * supporting role-based specialist delegation, A2A handoffs, and shared memory.
    */
   public swarm(options: AgentSwarmOptions): AgentSwarm {
-    return new AgentSwarm(this, options);
+    return new AgentSwarm(this, {
+      personaRegistry: options.personaRegistry ?? this.personas,
+      ...options,
+    });
+  }
+
+  /**
+   * Instantiate an in-process speculative stream verifier coupling an ultra-fast streaming
+   * draft model with a background heavy reasoning auditor for real-time claim validation.
+   */
+  public createSpeculativeStream(
+    options: SpeculativeStreamOptions,
+  ): SpeculativeStreamVerifier {
+    return new SpeculativeStreamVerifier(options);
   }
 }

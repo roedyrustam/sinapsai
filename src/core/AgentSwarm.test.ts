@@ -1004,4 +1004,169 @@ describe('AgentSwarm', () => {
     );
     expect(dpoRecords[0].rejected).toContain('flat JSON files');
   });
+
+  it('binds agent persona instructions and enforces tool whitelist', async () => {
+    let capturedSystemPrompt = '';
+    let capturedTools: string[] = [];
+
+    const { AgentPersonaRegistry } = await import('./AgentPersonaRegistry.js');
+    const registry = new AgentPersonaRegistry([
+      {
+        id: 'cloud_architect',
+        name: 'Sarah Cloud',
+        role: 'AWS Specialist',
+        systemInstructions: 'Focus exclusively on serverless architectures.',
+        allowedTools: ['query_cost', 'deploy_lambda'],
+        styleGuidelines: ['Always cite FinOps metrics'],
+      },
+    ]);
+
+    const mockClient = {
+      chat: {
+        completions: {
+          create: vi
+            .fn()
+            .mockImplementation(
+              async (req: {
+                messages: Array<{ role: string; content?: string | null }>;
+                tools?: Array<{ function: { name: string } }>;
+              }) => {
+                capturedSystemPrompt =
+                  req.messages.find((m) => m.role === 'system')?.content || '';
+                capturedTools = req.tools?.map((t) => t.function.name) || [];
+                return {
+                  id: 'res-persona',
+                  choices: [
+                    {
+                      message: {
+                        role: 'assistant',
+                        content: 'Persona audit complete.',
+                      },
+                      finishReason: 'stop',
+                    },
+                  ],
+                };
+              },
+            ),
+        },
+      },
+      mcp: { toUnifiedTools: () => [] },
+      getMetrics: () => ({ estimatedCostUsd: 0 }),
+      personas: registry,
+    } as unknown as SinapsClient;
+
+    const swarm = new AgentSwarm(mockClient, {
+      agents: [
+        {
+          id: 'cloud_agent',
+          name: 'Cloud Agent',
+          role: 'Cloud Deployment',
+          instructions: 'Deploy application services.',
+          personaId: 'cloud_architect',
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'query_cost', description: 'Query cost' },
+            },
+            {
+              type: 'function',
+              function: {
+                name: 'destroy_cluster',
+                description: 'Unauthorized tool',
+              },
+            },
+          ],
+        },
+      ],
+      personaRegistry: registry,
+    });
+
+    const result = await swarm.run({ task: 'Analyze serverless architecture' });
+
+    expect(result.content).toBe('Persona audit complete.');
+    expect(capturedSystemPrompt).toContain(
+      'You are Sarah Cloud, acting as AWS Specialist.',
+    );
+    expect(capturedSystemPrompt).toContain(
+      'Focus exclusively on serverless architectures.',
+    );
+    expect(capturedSystemPrompt).toContain('Always cite FinOps metrics');
+    expect(capturedTools).toContain('query_cost');
+    expect(capturedTools).not.toContain('destroy_cluster');
+  });
+
+  it('consumes ephemeral skill turns, prunes expired skills, and detects persona drift in swarm runs', async () => {
+    const { AgentPersonaRegistry } = await import('./AgentPersonaRegistry.js');
+    const registry = new AgentPersonaRegistry([
+      {
+        id: 'strict_lead',
+        name: 'Kael',
+        role: 'Principal Auditor',
+        systemInstructions: 'Return concise JSON audits only.',
+        styleGuidelines: ['Always respond in JSON format'],
+        ephemeralSkills: [
+          {
+            id: 'pci_audit_flash',
+            name: 'PCI-DSS Quick Check',
+            instructions: 'Check tokenization rules.',
+            turnsRemaining: 1,
+          },
+        ],
+      },
+    ]);
+
+    const onDriftMock = vi.fn();
+    const mockClient = {
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue({
+            id: 'res-drift',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    'I apologize, certainly here is plain text without JSON.',
+                },
+                finishReason: 'stop',
+              },
+            ],
+          }),
+        },
+      },
+      mcp: { toUnifiedTools: () => [] },
+      getMetrics: () => ({ estimatedCostUsd: 0 }),
+    } as unknown as SinapsClient;
+
+    const swarm = new AgentSwarm(mockClient, {
+      agents: [
+        {
+          id: 'lead',
+          name: 'Lead',
+          role: 'Auditor',
+          instructions: 'Audit payment gateway.',
+          personaId: 'strict_lead',
+        },
+      ],
+      personaRegistry: registry,
+      onPersonaDrift: onDriftMock,
+    });
+
+    const result = await swarm.run({ task: 'Audit payment handler' });
+
+    // Ephemeral skill with turnsRemaining: 1 must be pruned after turn 1
+    expect(result.prunedEphemeralSkills?.lead).toEqual(['pci_audit_flash']);
+    expect(registry.getPersona('strict_lead')?.ephemeralSkills).toHaveLength(0);
+
+    // Drift detection must flag apology, filler, and missing JSON
+    expect(result.personaDrift?.lead?.hasDrift).toBe(true);
+    expect(result.personaDrift?.lead?.violations.length).toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(onDriftMock).toHaveBeenCalledWith(
+      'lead',
+      'strict_lead',
+      expect.objectContaining({ hasDrift: true }),
+    );
+  });
 });
