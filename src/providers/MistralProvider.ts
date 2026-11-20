@@ -173,17 +173,17 @@ export class MistralProvider implements Provider {
       ],
       usage: data.usage
         ? (() => {
-            const reasoningTokens =
-              data.usage.completion_tokens_details?.reasoning_tokens;
-            return {
-              promptTokens: data.usage.prompt_tokens || 0,
-              completionTokens: data.usage.completion_tokens || 0,
-              totalTokens: data.usage.total_tokens || 0,
-              cachedPromptTokens:
-                data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
-              ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-            };
-          })()
+          const reasoningTokens =
+            data.usage.completion_tokens_details?.reasoning_tokens;
+          return {
+            promptTokens: data.usage.prompt_tokens || 0,
+            completionTokens: data.usage.completion_tokens || 0,
+            totalTokens: data.usage.total_tokens || 0,
+            cachedPromptTokens:
+              data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+          };
+        })()
         : undefined,
     };
   }
@@ -270,7 +270,7 @@ export class MistralProvider implements Provider {
                   usage: chunkUsage,
                 };
                 yield chunk;
-              } catch (_e) {}
+              } catch (_e) { }
             }
           } finally {
             cleanupSignal?.();
@@ -349,9 +349,9 @@ export class MistralProvider implements Provider {
         })),
         usage: data.usage
           ? {
-              promptTokens: data.usage.prompt_tokens || 0,
-              totalTokens: data.usage.total_tokens || 0,
-            }
+            promptTokens: data.usage.prompt_tokens || 0,
+            totalTokens: data.usage.total_tokens || 0,
+          }
           : undefined,
       };
     } finally {
