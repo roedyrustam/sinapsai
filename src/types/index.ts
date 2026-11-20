@@ -6,6 +6,19 @@
  * @license MIT
  */
 
+export type ReasoningEffort =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max';
+
+export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
+
+export type FrontierModelTier = 'high-fast' | 'fast' | 'medium' | 'high';
+
 export interface ToolFunctionDefinition {
   name: string;
   description?: string;
@@ -24,6 +37,11 @@ export interface ToolCall {
     name: string;
     arguments: string;
   };
+  /**
+   * Optional cryptographic thought signature emitted by Gemini 3+/4 models during tool calling.
+   * Must be echoed back on subsequent assistant turns in multi-step tool loops.
+   */
+  thought_signature?: string;
 }
 
 export interface ToolCallChunk {
@@ -70,7 +88,7 @@ export type ContentPart =
   | InputAudioContentPart;
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
   content: string | ContentPart[] | null;
   reasoning_content?: string | null;
   name?: string;
@@ -134,10 +152,39 @@ export interface UnifiedApiRequest {
   responseFormat?: ResponseFormat;
   fallbackModels?: string[];
   thinkingBudget?: number | 'auto';
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * Qualitative thinking depth for Gemini 3+/4 models ('minimal' | 'low' | 'medium' | 'high').
+   */
+  thinkingLevel?: ThinkingLevel;
+  /**
+   * Request thought summary blocks back from Gemini 3+/4 models.
+   */
+  includeThoughts?: boolean;
+  reasoningEffort?: ReasoningEffort;
   cachedContent?: string;
   googleSearch?: boolean;
+  /**
+   * Cross-provider native web search grounding (maps to Gemini googleSearch,
+   * xAI Live Search search_parameters, or OpenAI Responses web_search_preview).
+   */
+  webSearch?: boolean;
   codeExecution?: boolean;
+  /**
+   * OpenAI GPT-5+ output verbosity control ('low' | 'medium' | 'high').
+   */
+  verbosity?: 'low' | 'medium' | 'high';
+  /**
+   * Provider processing tier ('auto' | 'default' | 'flex' | 'priority').
+   */
+  serviceTier?: 'auto' | 'default' | 'flex' | 'priority';
+  /**
+   * OpenAI Responses API stateful chaining reference ID.
+   */
+  previousResponseId?: string;
+  /**
+   * Ephemeral prompt cache TTL on Anthropic Claude ('5m' default or '1h' extended).
+   */
+  promptCacheTtl?: '5m' | '1h';
   /**
    * Optional request-level LLM Optimization overrides (minify, cascade, mode).
    */
@@ -192,6 +239,8 @@ export interface ApiUsage {
   completionTokens: number;
   totalTokens: number;
   cachedPromptTokens?: number;
+  reasoningTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 export interface UnifiedApiStreamChunk {
@@ -262,6 +311,10 @@ export interface ProviderConfig {
    * 'auto' automatically injects cache breakpoints on system instructions exceeding 2,048 chars.
    */
   promptCaching?: boolean | 'auto';
+  /**
+   * Default ephemeral prompt cache TTL on Anthropic ('5m' | '1h').
+   */
+  promptCacheTtl?: '5m' | '1h';
 }
 
 export interface CreateEmbeddingRequest {
@@ -295,6 +348,7 @@ export interface ProviderMetricEntry {
   promptTokens: number;
   completionTokens: number;
   cachedPromptTokens?: number;
+  reasoningTokens?: number;
   latencySumMs: number;
   averageLatencyMs: number;
 }
@@ -307,6 +361,7 @@ export interface SinapsMetrics {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalCachedPromptTokens?: number;
+  totalReasoningTokens?: number;
   totalTokens: number;
   estimatedCostUsd: number;
   providerMetrics: Record<string, ProviderMetricEntry>;
@@ -730,7 +785,7 @@ export interface OtelExportOptions {
    */
   serviceName?: string;
   /**
-   * Service version reported in resource attributes (default: '2.11.0').
+   * Service version reported in resource attributes (default: SINAPSAI_VERSION).
    */
   serviceVersion?: string;
   /**
@@ -950,6 +1005,13 @@ export {
   type MemoryStoreOptions,
 } from '../core/EpisodicMemory.js';
 export {
+  FRONTIER_AVAILABILITY_FALLBACKS,
+  FRONTIER_MODELS,
+  type FrontierModelCapabilities,
+  type FrontierModelProfile,
+  FrontierModelRegistry,
+} from '../core/FrontierModelRegistry.js';
+export {
   type ContextCacheEligibility,
   canonicalizeJsonValue,
   GeminiAgentBooster,
@@ -1065,3 +1127,4 @@ export {
   type OtelTracePayload,
   toOtelTracePayload,
 } from '../utils/tracingExporter.js';
+export { SINAPSAI_VERSION } from '../version.js';

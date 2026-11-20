@@ -17,6 +17,7 @@ import { SinapsClient } from '../core/SinapsClient.js';
 import { AnthropicProvider } from '../providers/AnthropicProvider.js';
 import { AwsBedrockProvider } from '../providers/AwsBedrockProvider.js';
 import { AzureOpenAiProvider } from '../providers/AzureOpenAiProvider.js';
+import { CohereProvider } from '../providers/CohereProvider.js';
 import { DeepSeekProvider } from '../providers/DeepSeekProvider.js';
 import { GeminiProvider } from '../providers/GeminiProvider.js';
 import { GroqProvider } from '../providers/GroqProvider.js';
@@ -25,6 +26,8 @@ import { OllamaProvider } from '../providers/OllamaProvider.js';
 import { OpenAiProvider } from '../providers/OpenAiProvider.js';
 import { OpenRouterProvider } from '../providers/OpenRouterProvider.js';
 import type { Provider } from '../providers/Provider.js';
+import { XAiProvider } from '../providers/XAiProvider.js';
+import { SINAPSAI_VERSION } from '../version.js';
 import { startMcpStdioServer } from './mcpServer.js';
 import { createGatewayServer } from './server.js';
 
@@ -41,6 +44,12 @@ export function buildClientFromEnv(): SinapsClient {
     providers.push(
       new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY }),
     );
+  }
+  if (process.env.XAI_API_KEY) {
+    providers.push(new XAiProvider({ apiKey: process.env.XAI_API_KEY }));
+  }
+  if (process.env.COHERE_API_KEY) {
+    providers.push(new CohereProvider({ apiKey: process.env.COHERE_API_KEY }));
   }
   if (process.env.GROQ_API_KEY) {
     providers.push(new GroqProvider({ apiKey: process.env.GROQ_API_KEY }));
@@ -120,7 +129,7 @@ Options:
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {
-    process.stdout.write('sinapsai v3.0.0\n');
+    process.stdout.write(`sinapsai v${SINAPSAI_VERSION}\n`);
     return;
   }
 

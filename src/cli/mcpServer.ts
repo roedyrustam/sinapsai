@@ -13,7 +13,9 @@
  */
 
 import readline from 'node:readline';
+import { FrontierModelRegistry } from '../core/FrontierModelRegistry.js';
 import type { SinapsClient } from '../core/SinapsClient.js';
+import type { FrontierModelTier } from '../types/index.js';
 import { s } from '../utils/schema.js';
 
 export function startMcpStdioServer(client: SinapsClient): void {
@@ -26,19 +28,52 @@ export function startMcpStdioServer(client: SinapsClient): void {
       .object({
         model: s.string({
           description:
-            'Model identifier (e.g. gemini-2.5-flash, gpt-4o, claude-3-7-sonnet)',
+            'Model identifier (e.g. gemini-3.8-flash, gemini-4-carbon, gpt-5.6-sol-medium, claude-sonnet-5-5)',
         }),
         prompt: s.string({ description: 'The user prompt or query' }),
       })
       .toJsonSchema(),
     handler: async (args) => {
-      const model = String(args.model || 'gemini-2.5-flash');
+      const model = String(args.model || 'gemini-3.8-flash');
       const prompt = String(args.prompt || '');
       const response = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: prompt }],
       });
       return response.choices[0]?.message?.content || '';
+    },
+  });
+
+  client.mcp.registerTool({
+    name: 'sinaps_models',
+    description:
+      'List late-2026 frontier AI models registered in SinapsAI with pricing, context window, tier, and capabilities.',
+    inputSchema: s
+      .object({
+        tier: s
+          .string({
+            description:
+              'Optional execution tier filter: high-fast | fast | medium | high',
+          })
+          .optional(),
+        provider: s
+          .string({
+            description:
+              'Optional provider filter (e.g. gemini, anthropic, openai, xai, deepseek)',
+          })
+          .optional(),
+      })
+      .toJsonSchema(),
+    handler: async (args) => {
+      let list = FrontierModelRegistry.list();
+      if (typeof args.tier === 'string' && args.tier) {
+        list = FrontierModelRegistry.getByTier(args.tier as FrontierModelTier);
+      }
+      if (typeof args.provider === 'string' && args.provider) {
+        const norm = args.provider.toLowerCase();
+        list = list.filter((m) => m.provider.toLowerCase() === norm);
+      }
+      return JSON.stringify(list, null, 2);
     },
   });
 

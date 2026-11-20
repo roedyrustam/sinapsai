@@ -11,7 +11,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Provider } from '../providers/Provider.js';
 import type { ToolCall } from '../types/index.js';
-import { coerceToolArguments, McpToolBridge } from './McpBridge.js';
+import { SINAPSAI_VERSION } from '../version.js';
+import {
+  coerceToolArguments,
+  MCP_PROTOCOL_VERSION,
+  McpToolBridge,
+} from './McpBridge.js';
 import { SinapsClient } from './SinapsClient.js';
 
 describe('McpToolBridge', () => {
@@ -467,7 +472,7 @@ describe('McpToolBridge', () => {
       expect(initRes.id).toBe(10);
       expect(initRes.result.protocolVersion).toBe('2024-11-05');
       expect(initRes.result.serverInfo.name).toBe('sinapsai-mcp');
-      expect(initRes.result.serverInfo.version).toBe('2.11.0');
+      expect(initRes.result.serverInfo.version).toBe(SINAPSAI_VERSION);
 
       const notifRes = await bridge.handleJsonRpc({
         jsonrpc: '2.0',
@@ -953,6 +958,121 @@ describe('SinapsClient.runWithTools', () => {
       expect(res.selfHealingHint).toContain('validate_payment');
       expect(res.selfHealingHint).toContain('Insufficient balance');
       expect(res.selfHealingHint).toContain('amount');
+    });
+  });
+
+  describe('MCP 2025-06-18 protocol & sampling/createMessage', () => {
+    it('negotiates MCP 2025-06-18 protocol version while preserving 2024-11-05 compatibility', async () => {
+      expect(MCP_PROTOCOL_VERSION).toBe('2025-06-18');
+      const bridge = new McpToolBridge();
+
+      const modernInit = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18' },
+      });
+      expect(modernInit?.result.protocolVersion).toBe('2025-06-18');
+      expect(modernInit?.result.capabilities).toEqual({ tools: {} });
+
+      const legacyInit = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05' },
+      });
+      expect(legacyInit?.result.protocolVersion).toBe('2024-11-05');
+    });
+
+    it('routes sampling/createMessage requests and enforces handler & parameter validation', async () => {
+      const bridge = new McpToolBridge();
+
+      const unconfigured = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'sampling/createMessage',
+        params: { messages: [] },
+      });
+      expect(unconfigured?.error?.code).toBe(-32601);
+
+      bridge.setSamplingHandler(async (req) => ({
+        role: 'assistant',
+        content: {
+          type: 'text',
+          text: `Sampled reply for ${req.messages.length} msg(s)`,
+        },
+        model: 'claude-sonnet-5-5',
+        stopReason: 'endTurn',
+      }));
+
+      const withSamplingCap = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 11,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18' },
+      });
+      expect(withSamplingCap?.result.capabilities).toEqual({
+        tools: {},
+        sampling: {},
+      });
+
+      const badParams = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 12,
+        method: 'sampling/createMessage',
+        params: {},
+      });
+      expect(badParams?.error?.code).toBe(-32602);
+
+      const sampled = await bridge.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 13,
+        method: 'sampling/createMessage',
+        params: {
+          messages: [{ role: 'user', content: { type: 'text', text: 'Ping' } }],
+        },
+      });
+      expect(sampled?.result).toEqual({
+        role: 'assistant',
+        content: { type: 'text', text: 'Sampled reply for 1 msg(s)' },
+        model: 'claude-sonnet-5-5',
+        stopReason: 'endTurn',
+      });
+    });
+
+    it('wires a default sampling/createMessage handler inside SinapsClient', async () => {
+      const mockProvider: Provider = {
+        name: 'mock-sampling',
+        generateContent: vi.fn().mockResolvedValue({
+          id: 'samp-1',
+          model: 'gemini-3.8-flash',
+          choices: [
+            {
+              message: { role: 'assistant', content: 'Client sampled text' },
+              finishReason: 'stop',
+            },
+          ],
+        }),
+      };
+      const client = new SinapsClient({ providers: [mockProvider] });
+      expect(client.mcp.hasSamplingHandler()).toBe(true);
+
+      const res = await client.mcp.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 21,
+        method: 'sampling/createMessage',
+        params: {
+          systemPrompt: 'Be helpful',
+          messages: [
+            { role: 'user', content: { type: 'text', text: 'Hello' } },
+          ],
+          maxTokens: 128,
+        },
+      });
+
+      expect(res?.result.role).toBe('assistant');
+      expect(res?.result.content.text).toBe('Client sampled text');
+      expect(res?.result.model).toBe('gemini-3.8-flash');
     });
   });
 });

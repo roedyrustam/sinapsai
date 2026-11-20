@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { SinapsMetrics } from '../types/index.js';
+import { SINAPSAI_VERSION } from '../version.js';
 import {
   formatOtelMetrics,
   formatPrometheusMetrics,
@@ -180,7 +181,7 @@ describe('metricsExporter', () => {
       });
       expect(attrs).toContainEqual({
         key: 'service.version',
-        value: { stringValue: '2.11.0' },
+        value: { stringValue: SINAPSAI_VERSION },
       });
     });
   });

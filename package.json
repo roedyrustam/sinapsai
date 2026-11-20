@@ -1,6 +1,6 @@
 {
   "name": "sinapsai",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Zero-dependency in-process AI Gateway & Control Plane with Vision Token Optimizer, Speculative Stream Verifier, Dynamic Agent Persona Registry, Clustered Semantic Cache, Swarm Tournament Consensus, KV-Cache Prefix Pinning, Semantic Router, Cognitive Brain, Multi-Agent Swarm, A2A Handoff Protocol, Universal MCP Ingestion, OpenTelemetry Tracing, Autonomous Agent Loop, Circuit Breaker, Rate Limiting, PII/Security Guardrails, and Unified LLM API for Node.js, Edge & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -142,13 +142,22 @@
     "reasoning-tokens",
     "deep-reasoning",
     "openai",
+    "responses-api",
+    "gpt-5",
     "anthropic",
     "claude",
-    "claude-3-7",
+    "claude-5-5",
+    "adaptive-thinking",
     "gemini",
     "gemini-4",
+    "gemini-live",
     "deepseek",
-    "deepseek-r1",
+    "deepseek-v4",
+    "grok-4",
+    "ai-sdk-v5",
+    "ai-sdk-v6",
+    "mcp-2025-06-18",
+    "streamable-http",
     "ollama",
     "groq",
     "openrouter",
@@ -173,7 +182,7 @@
     "resilience"
   ],
   "peerDependencies": {
-    "ai": ">=3.0.0 || >=4.0.0"
+    "ai": ">=3.0.0 || >=4.0.0 || >=5.0.0 || >=6.0.0"
   },
   "peerDependenciesMeta": {
     "ai": {

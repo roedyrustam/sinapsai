@@ -21,12 +21,15 @@ import type { Provider } from './Provider.js';
 
 export const COHERE_MODELS = {
   COMMAND_A: 'command-a-03-2025',
+  COMMAND_A_REASONING: 'command-a-reasoning-08-2025',
+  COMMAND_A_VISION: 'command-a-vision-07-2025',
   COMMAND_R_PLUS: 'command-r-plus-08-2024',
   COMMAND_R: 'command-r-08-2024',
   COMMAND_R7B: 'command-r7b-12-2024',
   EMBED_V4: 'embed-v4.0',
   EMBED_MULTILINGUAL_V3: 'embed-multilingual-v3.0',
   EMBED_ENGLISH_V3: 'embed-english-v3.0',
+  RERANK_V3_5: 'rerank-v3.5',
 } as const;
 
 export class CohereProvider implements Provider {
@@ -133,6 +136,33 @@ export class CohereProvider implements Provider {
           json_schema: request.responseFormat.json_schema.schema,
         };
       }
+    }
+    if (request.reasoningEffort === 'none' || request.thinkingBudget === 0) {
+      payload.thinking = { type: 'disabled' };
+    } else if (
+      request.thinkingBudget !== undefined ||
+      request.reasoningEffort !== undefined
+    ) {
+      let tokenBudget =
+        typeof request.thinkingBudget === 'number'
+          ? request.thinkingBudget
+          : 8192;
+      if (request.thinkingBudget === undefined && request.reasoningEffort) {
+        if (request.reasoningEffort === 'minimal') tokenBudget = 512;
+        else if (request.reasoningEffort === 'low') tokenBudget = 2048;
+        else if (request.reasoningEffort === 'medium') tokenBudget = 8192;
+        else if (request.reasoningEffort === 'high') tokenBudget = 16384;
+        else if (
+          request.reasoningEffort === 'xhigh' ||
+          request.reasoningEffort === 'max'
+        ) {
+          tokenBudget = 32768;
+        }
+      }
+      payload.thinking = {
+        type: 'enabled',
+        token_budget: tokenBudget,
+      };
     }
     if (request.stream) {
       payload.stream = true;

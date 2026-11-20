@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/npm/dm/sinapsai.svg" alt="npm downloads" /></a>
   <a href="https://www.npmjs.com/package/sinapsai"><img src="https://img.shields.io/badge/Dependencies-0-brightgreen.svg" alt="Zero Dependencies" /></a>
   <a href="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml"><img src="https://github.com/roedyrustam/sinapsai/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <img src="https://img.shields.io/badge/Tests-608%20Passed-brightgreen.svg" alt="Tests Passed" />
+  <img src="https://img.shields.io/badge/Tests-661%20Passed-brightgreen.svg" alt="Tests Passed" />
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-Strict-blue.svg" alt="TypeScript Strict" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -44,7 +44,7 @@ Sebagian besar gateway AI populer (LiteLLM, Portkey, Helicone) mengharuskan Anda
 | **Perutean Latensi Terendah (Lowest Latency)**| ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Fitur cloud | ⚠️ Kustom |
 | **Round-Robin Load Balancing** | ✅ **Bawaan** | ❌ Tidak ada | ✅ Ya | ✅ Ya |
 | **Perutean Biaya Terendah (Lowest Cost)** | ✅ **Bawaan (Dual Token Pricing)** | ❌ Tidak ada | ⚠️ Paket berbayar | ✅ Ya |
-| **Universal Frontier Reasoning** | ✅ **o1/o3/Claude/Gemini 4/Grok** | ⚠️ Terfragmentasi | ⚠️ Tidak konsisten | ⚠️ Sebagian |
+| **Universal Frontier Reasoning** | ✅ **GPT-5.6 / o3 / Claude 5.5 / Gemini 4 / Grok 4.7 / DeepSeek V4** | ⚠️ Terfragmentasi | ⚠️ Tidak konsisten | ⚠️ Sebagian |
 | **Penjejakan KV-Cache / Prompt Cache**| ✅ **Bawaan (`cachedPromptTokens`)** | ⚠️ Bervariasi | ⚠️ Berbayar | ⚠️ Sebagian |
 | **Telemetri In-Process (`getMetrics`)** | ✅ **Bawaan** | ❌ Tidak ada | ⚠️ Cloud Dashboard | ⚠️ External DB |
 | **Native TypeScript (Zero Runtime Deps)**| ✅ **Native `fetch`** | ⚠️ Bervariasi | ❌ Layanan terpisah | ❌ Python |

@@ -10,6 +10,7 @@
 
 import type { ChatMessage, ToolCall, ToolDefinition } from '../types/index.js';
 import { extractJsonFromText } from '../utils/structuredOutput.js';
+import { SINAPSAI_VERSION } from '../version.js';
 import { AutonomousDriftHealer } from './AutonomousDriftHealer.js';
 import {
   type ExternalMcpServerConfig,
@@ -154,22 +155,83 @@ export function coerceToolArguments(
   return result;
 }
 
+export const MCP_PROTOCOL_VERSION = '2025-06-18';
+export const MCP_SUPPORTED_PROTOCOL_VERSIONS = [
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+] as const;
+
+export interface McpSamplingMessage {
+  role: 'user' | 'assistant';
+  content:
+    | McpTextContent
+    | McpImageContent
+    | { type: string; text?: string; data?: string; mimeType?: string };
+}
+
+export interface McpSamplingRequest {
+  messages: McpSamplingMessage[];
+  modelPreferences?: {
+    hints?: Array<{ name?: string }>;
+    costPriority?: number;
+    speedPriority?: number;
+    intelligencePriority?: number;
+  };
+  systemPrompt?: string;
+  includeContext?: 'none' | 'thisServer' | 'allServers';
+  temperature?: number;
+  maxTokens?: number;
+  stopSequences?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface McpSamplingResult {
+  role: 'assistant';
+  content: McpTextContent | McpImageContent;
+  model: string;
+  stopReason?: 'endTurn' | 'stopSequence' | 'maxTokens' | string;
+}
+
+export type McpSamplingHandler = (
+  request: McpSamplingRequest,
+) => Promise<McpSamplingResult>;
+
 /**
  * In-process Model Context Protocol (MCP) tool bridge.
  *
  * Provides seamless registration of local tools, bi-directional schema conversion
  * to OpenAI/Unified format, error-resilient tool call execution, and standard
- * JSON-RPC 2.0 protocol dispatching for MCP clients.
+ * JSON-RPC 2.0 protocol dispatching (including MCP 2025-06-18 sampling/createMessage).
  */
 export class McpToolBridge {
   private tools = new Map<string, McpToolDefinition>();
+  private samplingHandler?: McpSamplingHandler;
 
-  constructor(tools?: McpToolDefinition[]) {
+  constructor(
+    tools?: McpToolDefinition[],
+    samplingHandler?: McpSamplingHandler,
+  ) {
+    this.samplingHandler = samplingHandler;
     if (tools && Array.isArray(tools)) {
       for (const t of tools) {
         this.registerTool(t);
       }
     }
+  }
+
+  /**
+   * Registers an MCP server-initiated LLM sampling handler (`sampling/createMessage`).
+   */
+  public setSamplingHandler(handler: McpSamplingHandler): void {
+    this.samplingHandler = handler;
+  }
+
+  /**
+   * Returns true if a sampling handler has been registered on this bridge.
+   */
+  public hasSamplingHandler(): boolean {
+    return typeof this.samplingHandler === 'function';
   }
 
   /**
@@ -572,20 +634,82 @@ export class McpToolBridge {
       }
 
       case 'initialize': {
+        const requestedVersion =
+          typeof params?.protocolVersion === 'string'
+            ? params.protocolVersion
+            : undefined;
+        const negotiatedVersion =
+          requestedVersion &&
+          (MCP_SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(
+            requestedVersion,
+          )
+            ? requestedVersion
+            : MCP_PROTOCOL_VERSION;
+        const capabilities: Record<string, unknown> = {
+          tools: {},
+        };
+        if (this.samplingHandler) {
+          capabilities.sampling = {};
+        }
+
         return {
           jsonrpc: '2.0',
           id,
           result: {
-            protocolVersion: '2024-11-05',
-            capabilities: {
-              tools: {},
-            },
+            protocolVersion: negotiatedVersion,
+            capabilities,
             serverInfo: {
               name: 'sinapsai-mcp',
-              version: '2.11.0',
+              version: SINAPSAI_VERSION,
             },
           },
         };
+      }
+
+      case 'sampling/createMessage': {
+        if (!this.samplingHandler) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32601,
+              message: 'MCP sampling/createMessage handler is not configured.',
+            },
+          };
+        }
+        if (!params || !Array.isArray(params.messages)) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32602,
+              message: 'Invalid params: "messages" array is required.',
+            },
+          };
+        }
+
+        try {
+          const result = await this.samplingHandler(
+            params as McpSamplingRequest,
+          );
+          return {
+            jsonrpc: '2.0',
+            id,
+            result,
+          };
+        } catch (err) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32603,
+              message:
+                err instanceof Error
+                  ? err.message
+                  : 'MCP sampling execution failed.',
+            },
+          };
+        }
       }
 
       case 'notifications/initialized': {

@@ -36,19 +36,31 @@ export interface AudioTokenEstimate {
   estimatedCostUsd: number;
 }
 
+export interface VideoTokenEstimate {
+  provider: string;
+  durationSeconds: number;
+  fps: number;
+  mediaResolution: 'low' | 'medium' | 'high';
+  tokens: number;
+  estimatedCostUsd: number;
+}
+
 export interface VisionOptimizerOptions {
   defaultDetail?: 'low' | 'high' | 'auto';
+  mediaResolution?: 'low' | 'medium' | 'high';
   maxAllowedTokensPerImage?: number;
   autoDownsampleDetail?: boolean;
 }
 
 export class VisionOptimizer {
   private defaultDetail: 'low' | 'high' | 'auto';
+  private mediaResolution: 'low' | 'medium' | 'high';
   private maxAllowedTokensPerImage: number;
   private autoDownsampleDetail: boolean;
 
   constructor(options: VisionOptimizerOptions = {}) {
     this.defaultDetail = options.defaultDetail ?? 'auto';
+    this.mediaResolution = options.mediaResolution ?? 'medium';
     this.maxAllowedTokensPerImage = options.maxAllowedTokensPerImage ?? 2000;
     this.autoDownsampleDetail = options.autoDownsampleDetail ?? true;
   }
@@ -167,6 +179,7 @@ export class VisionOptimizer {
     input: string | Uint8Array | ArrayBuffer | ImageDimensions,
     provider = 'openai',
     detailOverride?: 'low' | 'high' | 'auto',
+    mediaResolutionOverride?: 'low' | 'medium' | 'high',
   ): VisionTokenEstimate {
     const dims: ImageDimensions =
       typeof input === 'object' && 'format' in input
@@ -191,13 +204,29 @@ export class VisionOptimizer {
       normProvider.includes('gemini') ||
       normProvider.includes('google')
     ) {
-      // Google Gemini 2.5/3.x: 258 tokens per tile (images <= 384x384 are 258 tokens, larger scale up)
-      const tilesW = Math.ceil(dims.width / 768);
-      const tilesH = Math.ceil(dims.height / 768);
-      tilesCount = Math.max(1, tilesW * tilesH);
-      tokens = tilesCount * 258;
+      if (mediaResolutionOverride === 'low') {
+        tilesCount = 1;
+        tokens = 258;
+      } else if (mediaResolutionOverride === 'high') {
+        const tilesW = Math.ceil(dims.width / 768);
+        const tilesH = Math.ceil(dims.height / 768);
+        tilesCount = Math.max(1, tilesW * tilesH);
+        tokens = Math.max(560, tilesCount * 258);
+      } else {
+        // Google Gemini 2.5/3.x/4: 258 tokens per 768px tile
+        const tilesW = Math.ceil(dims.width / 768);
+        const tilesH = Math.ceil(dims.height / 768);
+        tilesCount = Math.max(1, tilesW * tilesH);
+        tokens = tilesCount * 258;
+      }
+    } else if (normProvider.includes('xai') || normProvider.includes('grok')) {
+      // xAI Grok 4.x Vision: 448x448 tile grid, 256 tokens per tile
+      const tilesW = Math.max(1, Math.ceil(dims.width / 448));
+      const tilesH = Math.max(1, Math.ceil(dims.height / 448));
+      tilesCount = tilesW * tilesH;
+      tokens = tilesCount * 256;
     } else {
-      // OpenAI / GPT-4o / Azure / default:
+      // OpenAI / GPT-5 / GPT-4o / Azure / default:
       // If detail: 'low', fixed 85 tokens.
       // If detail: 'high' or 'auto':
       // 1. Scale down to fit inside 2048x2048
@@ -273,6 +302,45 @@ export class VisionOptimizer {
     return {
       provider,
       estimatedDurationSeconds: safeDuration,
+      tokens,
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
+    };
+  }
+
+  /**
+   * Estimates video token consumption for frontier multimodal models (Gemini 3/4, GPT-5).
+   * Accounts for video frame sampling rate (`fps`) and `mediaResolution` ('low' | 'medium' | 'high').
+   */
+  public estimateVideoTokens(
+    input: {
+      durationSeconds: number;
+      fps?: number;
+      mediaResolution?: 'low' | 'medium' | 'high';
+    },
+    provider = 'gemini',
+  ): VideoTokenEstimate {
+    const safeDuration = Math.max(1, input.durationSeconds);
+    const fps = Math.max(0.1, input.fps ?? 1);
+    const resolution = input.mediaResolution ?? this.mediaResolution;
+
+    // Gemini low mediaResolution ~100 tok/sec (66 frame + 32 audio); medium/default ~290 tok/sec (258 frame + 32 audio); high ~560 tok/sec
+    const tokensPerFrame =
+      resolution === 'low' ? 70 : resolution === 'high' ? 560 : 258;
+    const audioTokensPerSec = provider.toLowerCase().includes('gemini')
+      ? 32
+      : 30;
+
+    const frameTokens = Math.ceil(safeDuration * fps * tokensPerFrame);
+    const audioTokens = Math.ceil(safeDuration * audioTokensPerSec);
+    const tokens = frameTokens + audioTokens;
+    const costPer1k = 0.0025;
+    const estimatedCostUsd = (tokens / 1000) * costPer1k;
+
+    return {
+      provider,
+      durationSeconds: safeDuration,
+      fps,
+      mediaResolution: resolution,
       tokens,
       estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
     };

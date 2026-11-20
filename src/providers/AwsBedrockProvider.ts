@@ -27,14 +27,24 @@ import { linkAbortSignal } from '../utils/signal.js';
 import type { Provider } from './Provider.js';
 
 export const BEDROCK_MODELS = {
+  CLAUDE_SONNET_5_5: 'us.anthropic.claude-sonnet-5-5-v1:0',
+  CLAUDE_OPUS_4_7: 'us.anthropic.claude-opus-4-7-v1:0',
+  CLAUDE_SONNET_4_6: 'us.anthropic.claude-sonnet-4-6-v1:0',
+  CLAUDE_OPUS_4_6: 'us.anthropic.claude-opus-4-6-v1:0',
   CLAUDE_3_7_SONNET: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0',
   CLAUDE_3_5_SONNET: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
   CLAUDE_3_5_HAIKU: 'us.anthropic.claude-3-5-haiku-20241022-v1:0',
+  NOVA_2_LITE: 'amazon.nova-2-lite-v1:0',
+  NOVA_2_PRO: 'amazon.nova-2-pro-v1:0',
+  NOVA_2_SONIC: 'amazon.nova-2-sonic-v1:0',
   NOVA_PRO: 'amazon.nova-pro-v1:0',
   NOVA_LITE: 'amazon.nova-lite-v1:0',
   NOVA_MICRO: 'amazon.nova-micro-v1:0',
+  LLAMA_4_MAVERICK: 'us.meta.llama4-maverick-17b-instruct-v1:0',
+  LLAMA_4_SCOUT: 'us.meta.llama4-scout-17b-instruct-v1:0',
   LLAMA_3_3_70B: 'meta.llama3-3-70b-instruct-v1:0',
   LLAMA_3_1_8B: 'meta.llama3-1-8b-instruct-v1:0',
+  DEEPSEEK_R1: 'us.deepseek.r1-v1:0',
   MISTRAL_LARGE: 'mistral.mistral-large-2407-v1:0',
 } as const;
 
@@ -276,9 +286,11 @@ export class AwsBedrockProvider implements Provider {
   } {
     const modelId = this.resolveModel(request.model);
 
-    // Extract system instructions if present
-    const systemMessages = request.messages.filter((m) => m.role === 'system');
-    const system =
+    // Extract system instructions if present (includes OpenAI-style 'developer' role)
+    const systemMessages = request.messages.filter(
+      (m) => m.role === 'system' || m.role === 'developer',
+    );
+    const system: Array<Record<string, unknown>> | undefined =
       systemMessages.length > 0
         ? systemMessages.map((m) => ({
             text:
@@ -287,10 +299,16 @@ export class AwsBedrockProvider implements Provider {
                 : JSON.stringify(m.content),
           }))
         : undefined;
+    if (
+      system &&
+      (this.config.promptCaching || request.promptCacheTtl !== undefined)
+    ) {
+      system.push({ cachePoint: { type: 'default' } });
+    }
 
     // Convert chat messages to Bedrock converse messages
     const messages = request.messages
-      .filter((m) => m.role !== 'system')
+      .filter((m) => m.role !== 'system' && m.role !== 'developer')
       .map((m) => {
         const role = m.role === 'assistant' ? 'assistant' : 'user';
 
@@ -410,6 +428,63 @@ export class AwsBedrockProvider implements Provider {
       };
     }
 
+    // Claude adaptive / extended thinking on Bedrock Converse API
+    const lowerModelId = modelId.toLowerCase();
+    if (
+      lowerModelId.includes('claude') &&
+      request.reasoningEffort !== 'none' &&
+      request.thinkingBudget !== 0 &&
+      (request.thinkingBudget !== undefined ||
+        request.reasoningEffort !== undefined)
+    ) {
+      const isAdaptive =
+        lowerModelId.includes('sonnet-5') ||
+        lowerModelId.includes('opus-5') ||
+        lowerModelId.includes('fable-5') ||
+        lowerModelId.includes('opus-4-7') ||
+        lowerModelId.includes('sonnet-4-6') ||
+        lowerModelId.includes('opus-4-6');
+
+      if (isAdaptive) {
+        const effortMap: Record<string, string> = {
+          minimal: 'low',
+          low: 'low',
+          medium: 'medium',
+          high: 'high',
+          xhigh: 'max',
+          max: 'max',
+        };
+        const extraFields: Record<string, unknown> = {
+          thinking: { type: 'adaptive' },
+        };
+        const mappedEffort = request.reasoningEffort
+          ? effortMap[request.reasoningEffort]
+          : undefined;
+        if (mappedEffort) {
+          extraFields.output_config = { effort: mappedEffort };
+        }
+        payload.additionalModelRequestFields = extraFields;
+      } else {
+        let budgetTokens =
+          typeof request.thinkingBudget === 'number'
+            ? request.thinkingBudget
+            : 8192;
+        if (request.thinkingBudget === undefined && request.reasoningEffort) {
+          if (request.reasoningEffort === 'minimal') budgetTokens = 1024;
+          else if (request.reasoningEffort === 'low') budgetTokens = 2048;
+          else if (request.reasoningEffort === 'medium') budgetTokens = 8192;
+          else if (request.reasoningEffort === 'high') budgetTokens = 16384;
+          else budgetTokens = 32768;
+        }
+        payload.additionalModelRequestFields = {
+          thinking: {
+            type: 'enabled',
+            budget_tokens: Math.max(1024, budgetTokens),
+          },
+        };
+      }
+    }
+
     return { modelId, payload };
   }
 
@@ -423,12 +498,16 @@ export class AwsBedrockProvider implements Provider {
   ): UnifiedApiResponse {
     const msg = data.output?.message;
     let content: string | null = null;
+    let reasoningContent = '';
     const toolCalls: ToolCall[] = [];
 
     if (Array.isArray(msg?.content)) {
       for (const item of msg.content) {
         if (typeof item.text === 'string') {
           content = (content || '') + item.text;
+        }
+        if (typeof item.reasoningContent?.reasoningText?.text === 'string') {
+          reasoningContent += item.reasoningContent.reasoningText.text;
         }
         if (item.toolUse) {
           toolCalls.push({
@@ -460,6 +539,9 @@ export class AwsBedrockProvider implements Provider {
           message: {
             role: 'assistant',
             content,
+            ...(reasoningContent
+              ? { reasoning_content: reasoningContent }
+              : {}),
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },
           finishReason,
@@ -470,6 +552,12 @@ export class AwsBedrockProvider implements Provider {
             promptTokens: data.usage.inputTokens || 0,
             completionTokens: data.usage.outputTokens || 0,
             totalTokens: data.usage.totalTokens || 0,
+            ...(data.usage.cacheReadInputTokens !== undefined
+              ? { cachedPromptTokens: data.usage.cacheReadInputTokens }
+              : {}),
+            ...(data.usage.cacheWriteInputTokens !== undefined
+              ? { cacheWriteTokens: data.usage.cacheWriteInputTokens }
+              : {}),
           }
         : undefined,
     };

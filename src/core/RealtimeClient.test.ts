@@ -191,4 +191,132 @@ describe('RealtimeClient & RealtimeSession', () => {
 
     expect(client.realtime).toBeInstanceOf(RealtimeClient);
   });
+
+  it('implements Gemini Live v1beta BidiGenerateContent setup, text, audio, video frames & serverContent events', async () => {
+    const onSetupComplete = vi.fn();
+    const onThinkingDelta = vi.fn();
+    const onTextDelta = vi.fn();
+    const onAudioDelta = vi.fn();
+    const onTurnComplete = vi.fn();
+    const onInterrupted = vi.fn();
+
+    const session = new RealtimeSession({
+      provider: 'gemini',
+      apiKey: 'gem-live-key',
+      instructions: 'Be concise.',
+      voice: 'Puck',
+      onSetupComplete,
+      onThinkingDelta,
+      onTextDelta,
+      onAudioDelta,
+      onTurnComplete,
+      onInterrupted,
+    });
+    await session.connect();
+
+    // biome-ignore lint/suspicious/noExplicitAny: mock inspection
+    const ws = (session as any).ws as MockWebSocket;
+    expect(ws.url).toContain('v1beta.GenerativeService.BidiGenerateContent');
+    expect(ws.url).toContain('key=gem-live-key');
+
+    const setupPayload = JSON.parse(ws.sentMessages[0]);
+    expect(setupPayload.setup.model).toBe(
+      'models/gemini-3.1-flash-live-preview',
+    );
+    expect(setupPayload.setup.systemInstruction.parts[0].text).toBe(
+      'Be concise.',
+    );
+
+    session.sendText('Analyze frame');
+    const textPayload = JSON.parse(ws.sentMessages[1]);
+    expect(textPayload.clientContent.turns[0].parts[0].text).toBe(
+      'Analyze frame',
+    );
+    expect(textPayload.clientContent.turnComplete).toBe(true);
+
+    session.sendAudio('UklGRg==');
+    expect(JSON.parse(ws.sentMessages[2])).toEqual({
+      realtimeInput: {
+        audio: { mimeType: 'audio/pcm;rate=16000', data: 'UklGRg==' },
+      },
+    });
+
+    session.sendVideoFrame('/9j/4AAQ', 'image/jpeg');
+    expect(JSON.parse(ws.sentMessages[3])).toEqual({
+      realtimeInput: {
+        video: { mimeType: 'image/jpeg', data: '/9j/4AAQ' },
+      },
+    });
+
+    session.commitAudio();
+    expect(JSON.parse(ws.sentMessages[4])).toEqual({
+      realtimeInput: { audioStreamEnd: true },
+    });
+
+    ws.simulateMessage(JSON.stringify({ setupComplete: {} }));
+    expect(onSetupComplete).toHaveBeenCalledTimes(1);
+
+    ws.simulateMessage(
+      JSON.stringify({
+        serverContent: {
+          modelTurn: {
+            parts: [
+              { thought: true, text: 'Evaluating visual cue...' },
+              { text: 'I see a dashboard.' },
+              { inlineData: { mimeType: 'audio/pcm', data: 'QVVESU8=' } },
+            ],
+          },
+          outputTranscription: { text: 'Dashboard detected.' },
+          turnComplete: true,
+        },
+      }),
+    );
+    expect(onThinkingDelta).toHaveBeenCalledWith('Evaluating visual cue...');
+    expect(onTextDelta).toHaveBeenCalledWith('Dashboard detected.');
+    expect(onTextDelta).toHaveBeenCalledWith('I see a dashboard.');
+    expect(onAudioDelta).toHaveBeenCalledWith('QVVESU8=');
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+
+    ws.simulateMessage(
+      JSON.stringify({ serverContent: { interrupted: true } }),
+    );
+    expect(onInterrupted).toHaveBeenCalledTimes(1);
+
+    session.close();
+  });
+
+  it('handles OpenAI Realtime GA output_text / output_audio / output_audio_transcript deltas', async () => {
+    const onTextDelta = vi.fn();
+    const onAudioDelta = vi.fn();
+
+    const session = new RealtimeSession({
+      provider: 'openai',
+      apiKey: 'sk-ga',
+      onTextDelta,
+      onAudioDelta,
+    });
+    await session.connect();
+
+    // biome-ignore lint/suspicious/noExplicitAny: mock inspection
+    const ws = (session as any).ws as MockWebSocket;
+    expect(ws.url).toContain('model=gpt-realtime');
+
+    ws.simulateMessage(
+      JSON.stringify({ type: 'response.output_text.delta', delta: 'GA text ' }),
+    );
+    ws.simulateMessage(
+      JSON.stringify({
+        type: 'response.output_audio_transcript.delta',
+        delta: 'transcript',
+      }),
+    );
+    ws.simulateMessage(
+      JSON.stringify({ type: 'response.output_audio.delta', delta: 'T0FC' }),
+    );
+
+    expect(onTextDelta).toHaveBeenCalledWith('GA text ');
+    expect(onTextDelta).toHaveBeenCalledWith('transcript');
+    expect(onAudioDelta).toHaveBeenCalledWith('T0FC');
+    session.close();
+  });
 });

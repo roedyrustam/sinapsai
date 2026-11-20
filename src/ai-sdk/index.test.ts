@@ -22,14 +22,20 @@ import {
   convertPromptToSinapsMessages,
   convertToolsAndMode,
   createSinapsAI,
+  createSinapsAIV2,
+  createSinapsAIV3,
   mapFinishReason,
   SinapsEmbeddingModel,
   SinapsLanguageModel,
+  SinapsLanguageModelV2,
+  SinapsLanguageModelV3,
   sinapsai,
 } from './index.js';
 import type {
   LanguageModelV1Prompt,
   LanguageModelV1StreamPart,
+  LanguageModelV2StreamPart,
+  LanguageModelV3StreamPart,
 } from './types.js';
 
 describe('Vercel AI SDK Adapter', () => {
@@ -713,6 +719,235 @@ describe('Vercel AI SDK Adapter', () => {
       expect(result.text).toBe('Recovered via failover!');
       expect(failingProvider.generateContent).toHaveBeenCalled();
       expect(fallbackProvider.generateContent).toHaveBeenCalled();
+    });
+  });
+
+  describe('Vercel AI SDK v5 (LanguageModelV2) & v6 (LanguageModelV3)', () => {
+    it('supports LanguageModelV2 doGenerate and doStream with reasoning, text, and tool calls', async () => {
+      const mockProvider: Provider = {
+        name: 'frontier-v2',
+        generateContent: vi
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'res-v2-1',
+            model: 'claude-sonnet-5-5',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Final Answer',
+                  reasoning_content: 'Internal Chain',
+                  tool_calls: [
+                    {
+                      id: 'tc_1',
+                      type: 'function',
+                      function: { name: 'lookup', arguments: '{"k":"v"}' },
+                    },
+                  ],
+                },
+                finishReason: 'tool_calls',
+              },
+            ],
+            usage: {
+              promptTokens: 100,
+              completionTokens: 50,
+              totalTokens: 150,
+              reasoningTokens: 20,
+              cachedPromptTokens: 60,
+            },
+          })
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                id: 'stream-v2-1',
+                model: 'gemini-4-carbon',
+                choices: [
+                  {
+                    delta: { reasoning_content: 'Think ' },
+                    finishReason: null,
+                  },
+                ],
+              } satisfies UnifiedApiStreamChunk;
+              yield {
+                id: 'stream-v2-1',
+                model: 'gemini-4-carbon',
+                choices: [
+                  {
+                    delta: { content: 'Done' },
+                    finishReason: 'stop',
+                  },
+                ],
+                usage: {
+                  promptTokens: 20,
+                  completionTokens: 10,
+                  totalTokens: 30,
+                  reasoningTokens: 4,
+                  cachedPromptTokens: 8,
+                },
+              } satisfies UnifiedApiStreamChunk;
+            })(),
+          ),
+      };
+
+      const sinapsV2 = createSinapsAIV2({ providers: [mockProvider] });
+      const modelV2 = sinapsV2('claude-sonnet-5-5', {
+        thinkingLevel: 'high',
+        includeThoughts: true,
+      });
+      expect(modelV2).toBeInstanceOf(SinapsLanguageModelV2);
+      expect(modelV2.specificationVersion).toBe('v2');
+
+      const genRes = await modelV2.doGenerate({
+        prompt: [
+          { role: 'system', content: 'Be precise.' },
+          { role: 'user', content: [{ type: 'text', text: 'Inspect' }] },
+        ],
+        maxOutputTokens: 512,
+        responseFormat: {
+          type: 'json',
+          name: 'out',
+          schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+        },
+        providerOptions: { sinapsai: { reasoningEffort: 'high' } },
+      });
+
+      expect(genRes.content).toEqual([
+        { type: 'reasoning', text: 'Internal Chain' },
+        { type: 'text', text: 'Final Answer' },
+        {
+          type: 'tool-call',
+          toolCallId: 'tc_1',
+          toolName: 'lookup',
+          input: '{"k":"v"}',
+        },
+      ]);
+      expect(genRes.finishReason).toBe('tool-calls');
+      expect(genRes.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+        reasoningTokens: 20,
+        cachedInputTokens: 60,
+      });
+
+      const streamRes = await modelV2.doStream({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'Hi' }] }],
+      });
+      const reader = streamRes.stream.getReader();
+      const parts: LanguageModelV2StreamPart[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+      }
+
+      expect(parts.some((p) => p.type === 'reasoning-start')).toBe(true);
+      expect(
+        parts.some((p) => p.type === 'reasoning-delta' && p.delta === 'Think '),
+      ).toBe(true);
+      expect(
+        parts.some((p) => p.type === 'text-delta' && p.delta === 'Done'),
+      ).toBe(true);
+      const finishPart = parts.find((p) => p.type === 'finish');
+      expect(finishPart).toMatchObject({
+        type: 'finish',
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 30,
+          reasoningTokens: 4,
+          cachedInputTokens: 8,
+        },
+      });
+    });
+
+    it('supports LanguageModelV3 (AI SDK v6) unified finishReason and nested token accounting', async () => {
+      const mockProvider: Provider = {
+        name: 'frontier-v3',
+        generateContent: vi
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'res-v3-1',
+            model: 'gpt-5.6-sol-medium',
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'V3 Output',
+                  reasoning_content: 'V3 Thought',
+                },
+                finishReason: 'stop',
+              },
+            ],
+            usage: {
+              promptTokens: 100,
+              completionTokens: 40,
+              totalTokens: 140,
+              reasoningTokens: 15,
+              cachedPromptTokens: 70,
+            },
+          })
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                id: 'stream-v3-1',
+                model: 'gpt-5.6-sol-medium',
+                choices: [
+                  { delta: { content: 'Stream V3' }, finishReason: 'stop' },
+                ],
+                usage: {
+                  promptTokens: 30,
+                  completionTokens: 12,
+                  totalTokens: 42,
+                  reasoningTokens: 4,
+                  cachedPromptTokens: 10,
+                },
+              } satisfies UnifiedApiStreamChunk;
+            })(),
+          ),
+      };
+
+      const sinapsV1Root = createSinapsAI({ providers: [mockProvider] });
+      expect(sinapsV1Root.languageModelV3('gpt-5.6-sol-medium')).toBeInstanceOf(
+        SinapsLanguageModelV3,
+      );
+
+      const sinapsV3 = createSinapsAIV3(sinapsV1Root.client);
+      const modelV3 = sinapsV3('gpt-5.6-sol-medium');
+      expect(modelV3.specificationVersion).toBe('v3');
+
+      const genRes = await modelV3.doGenerate({
+        prompt: [
+          { role: 'user', content: [{ type: 'text', text: 'Ping V3' }] },
+        ],
+      });
+      expect(genRes.finishReason).toEqual({ unified: 'stop', raw: 'stop' });
+      expect(genRes.usage).toEqual({
+        inputTokens: { total: 100, noCache: 30, cacheRead: 70 },
+        outputTokens: { total: 40, text: 25, reasoning: 15 },
+      });
+
+      const streamRes = await modelV3.doStream({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'Stream' }] }],
+      });
+      const reader = streamRes.stream.getReader();
+      const parts: LanguageModelV3StreamPart[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+      }
+
+      const finish = parts.find((p) => p.type === 'finish');
+      expect(finish).toEqual({
+        type: 'finish',
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage: {
+          inputTokens: { total: 30, noCache: 20, cacheRead: 10 },
+          outputTokens: { total: 12, text: 8, reasoning: 4 },
+        },
+      });
     });
   });
 });

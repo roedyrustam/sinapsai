@@ -1033,5 +1033,141 @@ describe('GeminiProvider', () => {
         GeminiProvider.getAvailabilityFallbacks(GEMINI_MODELS.ARGON_4),
       ).toEqual([GEMINI_MODELS.FLASH_3_8]);
     });
+
+    it('supports thinkingLevel, includeThoughts, developer role, webSearch, thoughtSignature round-trip, and reasoningTokens', async () => {
+      const frontierGemini = new GeminiProvider({
+        apiKey: 'test',
+        thinkingLevel: 'high',
+        includeThoughts: true,
+      });
+
+      const payload = frontierGemini.formatRequest({
+        model: GEMINI_MODELS.CARBON_4,
+        messages: [
+          { role: 'developer', content: 'Developer rules' },
+          { role: 'user', content: 'Check weather' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_sig_1',
+                type: 'function',
+                thought_signature: 'sig_gemini_xyz',
+                function: { name: 'get_weather', arguments: '{"city":"NYC"}' },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_sig_1',
+            content: '{"temp":72}',
+          },
+        ],
+        webSearch: true,
+      });
+
+      expect(GEMINI_MODELS.CARBON_4).toBe('gemini-4-carbon');
+      expect(GEMINI_MODELS.LIVE_3_1_FLASH).toBe(
+        'gemini-3.1-flash-live-preview',
+      );
+      expect(payload.systemInstruction.parts[0].text).toBe('Developer rules');
+      expect(payload.contents[1].parts[0].thoughtSignature).toBe(
+        'sig_gemini_xyz',
+      );
+      expect(payload.generationConfig.thinkingConfig).toEqual({
+        thinkingLevel: 'high',
+        includeThoughts: true,
+      });
+      expect(payload.tools).toEqual([{ googleSearch: {} }]);
+
+      const formatted = frontierGemini.formatResponse(
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { name: 'get_weather', args: { city: 'LA' } },
+                    thoughtSignature: 'sig_returned_999',
+                  },
+                ],
+              },
+              finishReason: 'STOP',
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 40,
+            candidatesTokenCount: 20,
+            totalTokenCount: 95,
+            thoughtsTokenCount: 35,
+          },
+        },
+        GEMINI_MODELS.CARBON_4,
+      );
+
+      expect(
+        formatted.choices[0].message.tool_calls?.[0].thought_signature,
+      ).toBe('sig_returned_999');
+      expect(formatted.usage?.reasoningTokens).toBe(35);
+
+      // Also verify streaming preserves thoughtSignature & reasoningTokens
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers(),
+        body: new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder();
+            controller.enqueue(
+              enc.encode(
+                `data: ${JSON.stringify({
+                  candidates: [
+                    {
+                      content: {
+                        parts: [
+                          {
+                            functionCall: {
+                              name: 'get_weather',
+                              args: { city: 'SF' },
+                            },
+                            thoughtSignature: 'sig_stream_1',
+                          },
+                        ],
+                      },
+                      finishReason: 'STOP',
+                    },
+                  ],
+                  usageMetadata: {
+                    promptTokenCount: 15,
+                    candidatesTokenCount: 10,
+                    totalTokenCount: 45,
+                    thoughtsTokenCount: 20,
+                  },
+                })}\n\n`,
+              ),
+            );
+            controller.close();
+          },
+        }),
+      });
+
+      try {
+        const stream = (await frontierGemini.generateContent({
+          model: GEMINI_MODELS.CARBON_4,
+          messages: [{ role: 'user', content: 'Stream' }],
+          stream: true,
+        })) as AsyncIterable<import('../types/index.js').UnifiedApiStreamChunk>;
+
+        const chunks = [];
+        for await (const ch of stream) chunks.push(ch);
+        expect(
+          chunks[0].choices[0].delta.tool_calls?.[0].thought_signature,
+        ).toBe('sig_stream_1');
+        expect(chunks[0].usage?.reasoningTokens).toBe(20);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 });

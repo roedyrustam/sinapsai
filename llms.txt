@@ -6,12 +6,13 @@
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
 - **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits (<0.08ms clustered cache)
-- **Test Suite**: 608 unit & integration tests passing across 60 test suites (100% pass rate)
-- **Quality**: 100% Biome Clean, TypeScript strict mode
+- **Test Suite**: 661 unit & integration tests passing across 64 test suites (100% pass rate)
+- **Quality**: 100% Biome Clean across 140 files, TypeScript strict mode
 
 ## Core Capabilities
 
-- **12 Unified Providers**: OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock (SigV4 Web Crypto), Azure OpenAI (Entra ID & API Key), DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok, Cohere v2.
+- **Unified Late-2026 Frontier Model Registry (`FrontierModelRegistry`, `FRONTIER_MODELS`)**: 4-tier execution catalog (`high-fast`, `fast`, `medium`, `high`) covering Gemini 4 Carbon/Neon/Hydrogen/Argon/Pro & 3.8 Flash, Claude Sonnet/Opus 5.5, Fable 5.1, Opus 4.7, Sonnet/Opus 4.6, GPT-5.6 Sol Medium, GPT-5.5/5.4/5-mini/o3/o4-mini, Grok 4.7/4.6/4.3, DeepSeek V4 Pro/V4.1 Flash/V3.2, Mistral Large/Small 4 & Magistral, Cohere Command A Reasoning/Vision, and Groq Llama 4 / Qwen 3.8 with Availability Fallbacks.
+- **12 Unified Providers + Frontier Protocols**: OpenAI (Chat Completions + Responses API `/v1/responses`, GPT-5 `max_completion_tokens`, `developer` role, `xhigh` effort), Anthropic Claude (Adaptive Thinking `type: 'adaptive'`, native `output_config.format` `json_schema`, 1h prompt cache TTL, 1M context), Google Gemini (`thinkingLevel`, `includeThoughts`, `thoughtSignature` preservation, Context Caching, Grounding), AWS Bedrock (SigV4 Web Crypto, Claude 5.5/Nova 2/Llama 4, Converse thinking & `cachePoint`), Azure OpenAI (Entra ID, `/openai/deployments/*` & `/openai/v1/*`, GPT-5), DeepSeek, Groq LPU, OpenRouter, Mistral AI, Ollama, xAI Grok (Live Search), Cohere v2 (`thinking`).
 - **In-Process Clustered Semantic Cache (`client.clusteredCache`, `ClusteredSemanticCache`)**: Sub-0.08ms spherical K-means centroid index reducing semantic cache lookup from $O(N)$ linear scans to $O(K + N/K)$ with incremental centroid updates and monotonic sequence counter LRU eviction.
 - **Swarm Multi-Model Tournament & Voting Consensus (`client.swarm.runTournament`, `TournamentConsensusEngine`)**: Multi-agent deliberation across diverse models, pairwise similarity matrix, majority/Borda/weighted voting, confidence scoring [0.0–1.0], minority dissent extraction, and automatic DPO pair distillation.
 - **KV-Cache Prefix Pinning Optimizer (`client.kvCache`, `KvCacheOptimizer`)**: 3-tier prompt partitioning, automatic relocation of dynamic ISO timestamps to volatile tail `[RUNTIME_CONTEXT]`, deterministic tool canonicalization, and prompt cache hit/savings prediction.
@@ -27,9 +28,9 @@
 - **Speculative Multi-Draft Consensus & AI Arbitration (`client.consensus.create`)**: Parallel speculative drafting across diverse models, in-process pairwise cosine similarity, and automatic escalation to a Supreme AI Judge Model upon divergence.
 - **In-Process Episodic Vector Memory (`client.memory`)**: Long-term fact store with multi-tenant user isolation, subword n-gram cosine matching, and dynamic prompt injection (`injectIntoMessages`).
 - **In-Process Hybrid RAG (`client.rag`)**: Okapi BM25 keyword precision + dense vector cosine similarity combined via Reciprocal Rank Fusion (RRF) with semantic paragraph chunking.
-- **Real-Time Multimodal Voice & WebSocket Client (`client.realtime.connect`)**: Zero-dependency native WebSocket connectivity to OpenAI Realtime and Gemini Live with bi-directional audio/text delta streaming.
-- **Agent Swarm with Micro-Economy Wallets (`client.swarm`)**: Role-based autonomous specialists, A2A handoffs (`transfer_to_<agent>`), parallel fan-out with atomic context deep-merge (`deepMergeContext`), hard USD & token budget wallets per agent (`SwarmAgentWallet`), and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
-- **Autonomous MCP Tool Self-Healing (`coerceToolArguments`, `selfHealingHint`)**: In-process Model Context Protocol tool registry, automatic argument coercion according to JSON Schema, and schema-guided self-healing error hints for autonomous agent loops (`runWithTools`, `runWithToolsStream`).
+- **Real-Time Multimodal Voice & WebSocket Client (`client.realtime.connect`)**: Zero-dependency native WebSocket connectivity to OpenAI Realtime GA (`gpt-realtime`) and Gemini Live `v1beta` (`BidiGenerateContent`, `gemini-3.1-flash-live-preview`, `sendVideoFrame`, `serverContent` thinking/transcription/interruption) with bi-directional audio/text delta streaming.
+- **Agent Swarm with Micro-Economy Wallets (`client.swarm`)**: Role-based autonomous specialists, A2A handoffs (`transfer_to_<agent>`), parallel fan-out with atomic context deep-merge (`deepMergeContext`), hard USD & token budget wallets per agent (`SwarmAgentWallet`), dynamic `reasoningEffort`/`thinkingLevel`, and Linux Foundation A2A Agent Card exporter (`exportAgentCards()`).
+- **MCP `2025-06-18` Tool Bridge, Streamable HTTP & Sampling (`client.mcp`, `McpToolBridge`, `McpClientConnector`)**: Protocol negotiation for `'2025-06-18'`, `sampling/createMessage` server-initiated sampling RPC + default handler in `SinapsClient`, `'streamable-http'` transport with `Mcp-Session-Id` & SSE responses, automatic argument coercion, and schema-guided self-healing hints (`AutonomousDriftHealer`).
 - **6 Dynamic Routing Strategies**: `adaptive` (smart-hybrid multi-factor reliability/latency/cost), `lowest-cost` (dual-pricing prompt vs completion tokens), `lowest-latency` (moving average latency with auto-probing), `failover` (strict priority), `load-balance` (round-robin).
 - **In-Process Circuit Breaker**: Anti-cascading fault isolation (`CLOSED` -> `OPEN` -> `HALF_OPEN`) with anti-thundering-herd strict single canary probing.
 - **In-Process Gateway Rate Limiter**: Zero-dependency sliding-window counter enforcing RPM and TPM globally, per-user, per-model, and per-provider with post-response token adjustment across streaming & non-streaming.
@@ -43,10 +44,10 @@
   - Code-block-aware prompt minification (lossless & aggressive whitespace pruning).
   - System instruction deduplication.
   - Deterministic KV-cache prefix alignment & tool schema canonicalization.
-  - Multi-signal complexity analysis & 3-tier model cascading (`tier1: fast/cheap`, `tier2: standard`, `tier3: deep reasoning`).
-  - Dynamic thinking budget allocation & FinOps savings telemetry (`client.getMetrics().llmoMetrics`).
-- **Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Official `LanguageModelV1` and `EmbeddingModelV1` implementations supporting `streamText`, `generateText`, and `embed`.
-- **Telemetry Exporters**: Native Prometheus / OpenMetrics (`exportPrometheusMetrics`), OpenTelemetry OTLP JSON (`exportOtelMetrics`), and OpenTelemetry GenAI Semantic Conventions v1.30+ distributed traces (`exportOtelTraces`).
+  - Multi-signal complexity analysis & 3-tier model cascading (`tier1: fast/cheap`, `tier2: standard`, `tier3: deep reasoning`), including `FRONTIER_CASCADE_PRESETS` (`'frontier'`, `'cost-optimized'`, `'speed-first'`).
+  - Dynamic thinking budget & `recommendedReasoningEffort` allocation & FinOps savings telemetry (`client.getMetrics().llmoMetrics`).
+- **Vercel AI SDK Adapter (`sinapsai/ai-sdk`)**: Native `LanguageModelV1`, `LanguageModelV2` (AI SDK v5), `LanguageModelV3` (AI SDK v6), and `EmbeddingModelV1` adapters (`createSinapsAI`, `createSinapsAIV2`, `createSinapsAIV3`) supporting reasoning parts, tool calling, and structured token metrics.
+- **Telemetry Exporters**: Native Prometheus / OpenMetrics (`exportPrometheusMetrics`), OpenTelemetry OTLP JSON (`exportOtelMetrics`, including `reasoning` tokens), and OpenTelemetry GenAI Semantic Conventions v1.30+ distributed traces (`exportOtelTraces`).
 
 ## Installation
 
@@ -101,7 +102,7 @@ console.log(res.choices[0].message.content);
 
 // 2. Real-time streaming
 const stream = await client.chat.completions.create({
-  model: 'gemini-2.5-flash',
+  model: 'gemini-3.8-flash',
   messages: [{ role: 'user', content: 'Stream this response' }],
   stream: true,
 });
@@ -119,4 +120,4 @@ for await (const chunk of stream) {
 - Complete English README: [README.md](README.md)
 - Complete Indonesian README: [README.id.md](README.id.md)
 - Version Roadmap: [ROADMAP.md](ROADMAP.md)
-- 47 Executable Examples: [examples/](examples/)
+- 49 Executable Examples: [examples/](examples/)

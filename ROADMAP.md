@@ -276,6 +276,21 @@
   - Penyatuan `useBrain` (Tri-Memory retrieval & injection), `clusteredCache` / `useClusteredCache` (dengan `onSemanticCacheHit`), dan perekaman otomatis `GenAiSpan` ring buffer (`getRecordedSpans()`, `clearRecordedSpans()`, argumen opsional pada `toOtelTraces()`/`exportOtelTraces()`).
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 48 (`examples/48-vision-optimizer-speculative-stream-and-personas.ts`); total 630/630 unit tests lulus di 63 test suites, 100% Biome Clean (0 error, 0 warning), Strict TypeScript Pass, 100% Zero Runtime Dependencies, Siap Rilis ke NPM v3.5.0.
 
+## Phase 30: Late-2026 Frontier LLM Control Plane, Responses API, Adaptive Thinking, AI SDK v5/v6 & MCP 2025-06-18 (v3.6.0) - *Completed*
+- [x] **Unified Frontier Model Registry (`FrontierModelRegistry`, `FRONTIER_MODELS`, `FRONTIER_AVAILABILITY_FALLBACKS`)**:
+  - Katalog model frontier late-2026 dalam 4 tier (`high-fast`, `fast`, `medium`, `high`): Gemini 4 Carbon/Neon/Hydrogen/Argon/Pro/Flash & Gemini 3.8 Flash / 3.1 Pro / Live, Claude Sonnet/Opus 5.5, Fable 5.1, Opus 4.7, Sonnet/Opus 4.6, OpenAI GPT-5.6 Sol Medium, GPT-5.5/5.4/5-mini/5-nano/o3/o4-mini/gpt-realtime, xAI Grok 4.7/4.6/4.3/4-mini, DeepSeek V4 Pro/V4.1 Flash/V3.2/R1, Mistral Large/Small 4 & Magistral, Cohere Command A Reasoning/Vision, Groq Llama 4 Maverick/Scout & Qwen 3.8.
+- [x] **Kepatuhan Protokol API Frontier Lintas 10+ Provider**:
+  - **OpenAI**: OpenAI Responses API (`/v1/responses` non-streaming & SSE), `max_completion_tokens` pada GPT-5+/o-series, `developer` role (`useDeveloperRole`), `reasoningEffort` hingga `xhigh`/`max`, `verbosity`, `serviceTier`, `reasoningTokens`, dan `dimensions` embedding.
+  - **Anthropic**: Adaptive Thinking (`thinking: { type: 'adaptive' }` + `output_config.effort`) untuk Claude 4.6/4.7/5.x, native JSON Schema (`output_config.format`), `promptCacheTtl: '1h'` (`extended-cache-ttl-2025-04-11`), konteks 1M (`context-1m-2025-08-07`), serta `cacheWriteTokens`.
+  - **Google Gemini**: `thinkingLevel`, `includeThoughts`, `developer` role, `webSearch` alias, preservasi round-trip `thoughtSignature` pada function call (non-stream & stream), serta `thoughtsTokenCount` -> `usage.reasoningTokens`.
+  - **xAI, DeepSeek, Mistral, Cohere, Groq, Bedrock & Azure**: Konstanta model 2026, xAI Live Search, Mistral `prompt_mode: 'reasoning'`, Cohere `thinking`, Groq Llama 4 & normalisasi effort, Bedrock Claude 5.5/Nova 2/Llama 4 + `cachePoint` + Converse thinking + `reasoningContent`, serta Azure `apiMode: 'v1'` (`/openai/v1/*`) dan `max_completion_tokens` GPT-5.
+- [x] **Upgrade Core Protokol, SDK & Gateway HTTP**:
+  - **Gemini Live `BidiGenerateContent` `v1beta` & OpenAI Realtime GA (`RealtimeClient`)**: Siklus lengkap `setup`, `clientContent`, `realtimeInput`, `sendVideoFrame`, `serverContent` (`onThinkingDelta`, `onSetupComplete`, `onTurnComplete`, `onInterrupted`), dan event GA OpenAI (`response.output_text.delta`, `response.output_audio.delta`).
+  - **MCP `2025-06-18` Streamable HTTP & Sampling (`McpBridge`, `McpClientConnector`)**: Negosiasi versi `2025-06-18`, RPC `sampling/createMessage` + handler default pada `SinapsClient`, serta transport `'streamable-http'` dengan pelacakan `Mcp-Session-Id`, `MCP-Protocol-Version`, `notifications/initialized`, dan respons SSE.
+  - **Vercel AI SDK v5 (`LanguageModelV2`) & v6 (`LanguageModelV3`)**: Adapter `SinapsLanguageModelV2`, `SinapsLanguageModelV3`, `createSinapsAIV2`, `createSinapsAIV3`.
+  - **Optimasi, Telemetri & CLI Server**: `FRONTIER_CASCADE_PRESETS`, `AutonomousDriftHealer` diagnosa parameter frontier, `VisionOptimizer.estimateVideoTokens` & Grok tiles, atribut trace OTel GenAI 1.30+, ekspor metrik token `reasoning`, serta endpoint `/v1/models` (katalog frontier), `POST /v1/responses`, dan `POST /mcp` pada gateway server.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 49 (`examples/49-frontier-llm-2026-control-plane.ts`); total 661/661 unit tests lulus di 64 test suites, 100% Biome Clean (140 file, 0 error, 0 warning), Strict TypeScript Pass (`src/` & `examples/`), build ESM/CJS sukses, 100% Zero Runtime Dependencies, Siap Rilis NPM v3.6.0.
+
 
 
 

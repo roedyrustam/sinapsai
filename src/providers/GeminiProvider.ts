@@ -27,12 +27,18 @@ import type { Provider } from './Provider.js';
 export const GEMINI_MODELS = {
   PRO_4: 'gemini-4-pro',
   ARGON_4: 'gemini-4-argon',
+  CARBON_4: 'gemini-4-carbon',
+  NEON_4: 'gemini-4-neon',
+  HYDROGEN_4: 'gemini-4-hydrogen',
   FLASH_4: 'gemini-4-flash',
   PROJECT_ASTRA: 'gemini-4-flash',
   FLASH_3_8: 'gemini-3.8-flash',
   FLASH_3_6: 'gemini-3.6-flash',
   FLASH_LITE_3_5: 'gemini-3.5-flash-lite',
+  PRO_3_1: 'gemini-3.1-pro',
   PRO_3_1_PREVIEW: 'gemini-3.1-pro-preview',
+  LIVE_3_1_FLASH: 'gemini-3.1-flash-live-preview',
+  LIVE_3_8: 'gemini-3.8-live',
   FLASH_2_5: 'gemini-2.5-flash',
   FLASH_LITE_2_5: 'gemini-2.5-flash-lite',
   PRO_2_5: 'gemini-2.5-pro',
@@ -50,6 +56,11 @@ export const GEMINI_MODELS = {
 export const GEMINI_AVAILABILITY_FALLBACKS: Record<string, string[]> = {
   'gemini-4-pro': ['gemini-3.8-flash'],
   'gemini-4-argon': ['gemini-3.8-flash'],
+  'gemini-4-carbon': ['gemini-3.8-flash'],
+  'gemini-4-neon': ['gemini-3.8-flash'],
+  'gemini-4-hydrogen': ['gemini-3.8-flash'],
+  'gemini-4-flash': ['gemini-3.8-flash'],
+  'gemini-3.1-pro': ['gemini-3.8-flash'],
 };
 
 export const GEMINI_DEFAULT_PRICING: Record<
@@ -58,6 +69,15 @@ export const GEMINI_DEFAULT_PRICING: Record<
 > = {
   'gemini-4-pro': { promptCostPer1k: 0.00125, completionCostPer1k: 0.005 },
   'gemini-4-argon': { promptCostPer1k: 0.0005, completionCostPer1k: 0.002 },
+  'gemini-4-carbon': { promptCostPer1k: 0.0001, completionCostPer1k: 0.0004 },
+  'gemini-4-neon': { promptCostPer1k: 0.0004, completionCostPer1k: 0.0016 },
+  'gemini-4-hydrogen': { promptCostPer1k: 0.0003, completionCostPer1k: 0.0012 },
+  'gemini-3.1-pro': { promptCostPer1k: 0.00125, completionCostPer1k: 0.005 },
+  'gemini-3.1-flash-live-preview': {
+    promptCostPer1k: 0.0001,
+    completionCostPer1k: 0.0004,
+  },
+  'gemini-3.8-live': { promptCostPer1k: 0.00015, completionCostPer1k: 0.0006 },
   'gemini-4-flash': { promptCostPer1k: 0.000075, completionCostPer1k: 0.0003 },
   'gemini-3.8-flash': {
     promptCostPer1k: 0.000075,
@@ -131,8 +151,11 @@ export interface GeminiModelInfo {
 export interface GeminiProviderConfig extends ProviderConfig {
   safetySettings?: GeminiSafetySetting[];
   thinkingBudget?: number | 'auto';
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+  includeThoughts?: boolean;
   cachedContent?: string;
   googleSearch?: boolean;
+  webSearch?: boolean;
   codeExecution?: boolean;
   /**
    * Automatically append 'gemini-3.8-flash' fallback when using Gemini 4 frontier models
@@ -293,7 +316,7 @@ export class GeminiProvider implements Provider {
     };
 
     for (const msg of request.messages) {
-      if (msg.role === 'system') {
+      if (msg.role === 'system' || msg.role === 'developer') {
         if (typeof msg.content === 'string') {
           systemParts.push({ text: msg.content });
         } else if (Array.isArray(msg.content)) {
@@ -352,12 +375,17 @@ export class GeminiProvider implements Provider {
           } catch {
             args = {};
           }
-          parts.push({
+          // biome-ignore lint/suspicious/noExplicitAny: gemini functionCall part
+          const fnPart: any = {
             functionCall: {
               name: tc.function.name,
               args,
             },
-          });
+          };
+          if (tc.thought_signature) {
+            fnPart.thoughtSignature = tc.thought_signature;
+          }
+          parts.push(fnPart);
         }
         contents.push({
           role: 'model',
@@ -407,18 +435,44 @@ export class GeminiProvider implements Provider {
       thinkingBudget = rawThinkingBudget;
     }
     if (thinkingBudget === undefined && request.reasoningEffort) {
-      if (request.reasoningEffort === 'low') {
+      if (request.reasoningEffort === 'none') {
+        thinkingBudget = 0;
+      } else if (request.reasoningEffort === 'minimal') {
+        thinkingBudget = 512;
+      } else if (request.reasoningEffort === 'low') {
         thinkingBudget = 2048;
       } else if (request.reasoningEffort === 'medium') {
         thinkingBudget = 8192;
       } else if (request.reasoningEffort === 'high') {
         thinkingBudget = 32768;
+      } else if (
+        request.reasoningEffort === 'xhigh' ||
+        request.reasoningEffort === 'max'
+      ) {
+        thinkingBudget = 65536;
       }
     }
-    if (thinkingBudget !== undefined) {
-      generationConfig.thinkingConfig = {
-        thinkingBudget,
-      };
+    const thinkingLevel = request.thinkingLevel ?? this.config.thinkingLevel;
+    const includeThoughts =
+      request.includeThoughts ?? this.config.includeThoughts;
+    if (
+      thinkingBudget !== undefined ||
+      thinkingLevel !== undefined ||
+      includeThoughts !== undefined
+    ) {
+      const thinkingConfig: NonNullable<
+        typeof generationConfig.thinkingConfig
+      > = {};
+      if (thinkingBudget !== undefined) {
+        thinkingConfig.thinkingBudget = thinkingBudget;
+      }
+      if (thinkingLevel !== undefined) {
+        thinkingConfig.thinkingLevel = thinkingLevel;
+      }
+      if (includeThoughts !== undefined) {
+        thinkingConfig.includeThoughts = includeThoughts;
+      }
+      generationConfig.thinkingConfig = thinkingConfig;
     }
 
     // biome-ignore lint/suspicious/noExplicitAny: request format varies by provider
@@ -453,7 +507,11 @@ export class GeminiProvider implements Provider {
       });
     }
 
-    const useGoogleSearch = request.googleSearch ?? this.config.googleSearch;
+    const useGoogleSearch =
+      request.googleSearch ??
+      request.webSearch ??
+      this.config.googleSearch ??
+      this.config.webSearch;
     if (useGoogleSearch) {
       tools.push({ googleSearch: {} });
     }
@@ -521,6 +579,9 @@ export class GeminiProvider implements Provider {
               name: part.functionCall.name,
               arguments: JSON.stringify(part.functionCall.args || {}),
             },
+            ...(part.thoughtSignature
+              ? { thought_signature: part.thoughtSignature }
+              : {}),
           });
         }
       }
@@ -584,13 +645,17 @@ export class GeminiProvider implements Provider {
       ],
       grounding,
       usage: data.usageMetadata
-        ? {
-            promptTokens: data.usageMetadata.promptTokenCount || 0,
-            completionTokens: data.usageMetadata.candidatesTokenCount || 0,
-            totalTokens: data.usageMetadata.totalTokenCount || 0,
-            cachedPromptTokens:
-              data.usageMetadata.cachedContentTokenCount || undefined,
-          }
+        ? (() => {
+            const reasoningTokens = data.usageMetadata.thoughtsTokenCount;
+            return {
+              promptTokens: data.usageMetadata.promptTokenCount || 0,
+              completionTokens: data.usageMetadata.candidatesTokenCount || 0,
+              totalTokens: data.usageMetadata.totalTokenCount || 0,
+              cachedPromptTokens:
+                data.usageMetadata.cachedContentTokenCount || undefined,
+              ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+            };
+          })()
         : undefined,
     };
   }
@@ -680,6 +745,9 @@ export class GeminiProvider implements Provider {
                             part.functionCall.args || {},
                           ),
                         },
+                        ...(part.thoughtSignature
+                          ? { thought_signature: part.thoughtSignature }
+                          : {}),
                       });
                     }
                   }
@@ -706,6 +774,8 @@ export class GeminiProvider implements Provider {
                   };
                 }
 
+                const streamReasoningTokens =
+                  parsed.usageMetadata?.thoughtsTokenCount;
                 const usage = parsed.usageMetadata
                   ? {
                       promptTokens: parsed.usageMetadata.promptTokenCount || 0,
@@ -715,6 +785,9 @@ export class GeminiProvider implements Provider {
                       cachedPromptTokens:
                         parsed.usageMetadata.cachedContentTokenCount ||
                         undefined,
+                      ...(streamReasoningTokens !== undefined
+                        ? { reasoningTokens: streamReasoningTokens }
+                        : {}),
                     }
                   : undefined;
 

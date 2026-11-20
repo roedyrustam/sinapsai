@@ -16,15 +16,18 @@
  * @license MIT
  */
 
+import { parseSSE } from '../utils/stream.js';
+import { SINAPSAI_VERSION } from '../version.js';
 import { AutonomousDriftHealer } from './AutonomousDriftHealer.js';
-import type {
-  McpContent,
-  McpJsonRpcRequest,
-  McpJsonRpcResponse,
-  McpTool,
-  McpToolContext,
-  McpToolDefinition,
-  McpToolResult,
+import {
+  MCP_PROTOCOL_VERSION,
+  type McpContent,
+  type McpJsonRpcRequest,
+  type McpJsonRpcResponse,
+  type McpTool,
+  type McpToolContext,
+  type McpToolDefinition,
+  type McpToolResult,
 } from './McpBridge.js';
 
 export interface ExternalMcpServerConfig {
@@ -34,10 +37,11 @@ export interface ExternalMcpServerConfig {
   name: string;
   /**
    * Transport mechanism:
-   * - 'http' | 'sse': HTTP POST endpoint (works on all runtimes including Cloudflare Workers).
+   * - 'streamable-http': Modern MCP Streamable HTTP (`2025-06-18`) with session ID & SSE support.
+   * - 'http' | 'sse': Standard Web-compliant JSON-RPC over HTTP/SSE (Edge & Serverless compatible).
    * - 'stdio': Command line subprocess via stdin/stdout (Node.js & Bun only).
    */
-  transport: 'http' | 'sse' | 'stdio';
+  transport: 'http' | 'streamable-http' | 'sse' | 'stdio';
   /**
    * Command to execute for stdio transport (e.g. 'npx', 'node', 'python').
    */
@@ -51,7 +55,7 @@ export interface ExternalMcpServerConfig {
    */
   env?: Record<string, string>;
   /**
-   * URL for 'http' or 'sse' transport.
+   * URL for 'http', 'streamable-http', or 'sse' transport.
    */
   url?: string;
   /**
@@ -94,7 +98,7 @@ export class McpClientConnector {
   }
 
   /**
-   * Ingests tools from an HTTP / SSE MCP server using standard fetch.
+   * Ingests tools from an HTTP / Streamable-HTTP / SSE MCP server using standard fetch.
    */
   private static async ingestHttpServer(
     config: ExternalMcpServerConfig,
@@ -107,24 +111,71 @@ export class McpClientConnector {
 
     const endpoint = config.url;
     let rpcId = 1;
+    let sessionId: string | undefined;
+    let negotiatedProtocolVersion = MCP_PROTOCOL_VERSION;
+
+    const parseJsonRpcHttpResponse = async (
+      res: Response,
+      targetId?: number | string,
+    ): Promise<McpJsonRpcResponse> => {
+      const incomingSessionId = res.headers?.get?.('mcp-session-id');
+      if (incomingSessionId) {
+        sessionId = incomingSessionId;
+      }
+
+      const contentType = res.headers?.get?.('content-type') || '';
+      if (contentType.includes('text/event-stream')) {
+        let fallbackResponse: McpJsonRpcResponse | undefined;
+        for await (const evt of parseSSE(res)) {
+          if (!evt.data || evt.data.trim() === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(evt.data) as McpJsonRpcResponse;
+            if (targetId !== undefined && parsed.id === targetId) {
+              return parsed;
+            }
+            if (parsed.result !== undefined || parsed.error !== undefined) {
+              fallbackResponse = parsed;
+            }
+          } catch {
+            // ignore non-JSON SSE keepalives
+          }
+        }
+        if (fallbackResponse) {
+          return fallbackResponse;
+        }
+        throw new Error(
+          `MCP server "${config.name}" returned an empty SSE stream.`,
+        );
+      }
+
+      return (await res.json()) as McpJsonRpcResponse;
+    };
 
     const callRpc = async (
       method: string,
       params?: Record<string, unknown>,
     ): Promise<unknown> => {
+      const id = rpcId++;
       const payload: McpJsonRpcRequest = {
         jsonrpc: '2.0',
-        id: rpcId++,
+        id,
         method,
         params,
       };
 
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'MCP-Protocol-Version': negotiatedProtocolVersion,
+        ...(config.headers || {}),
+      };
+      if (sessionId) {
+        headers['Mcp-Session-Id'] = sessionId;
+      }
+
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(config.headers || {}),
-        },
+        headers,
         body: JSON.stringify(payload),
       });
 
@@ -134,7 +185,7 @@ export class McpClientConnector {
         );
       }
 
-      const json = (await res.json()) as McpJsonRpcResponse;
+      const json = await parseJsonRpcHttpResponse(res, id);
       if (json.error) {
         throw new Error(
           `MCP RPC error [${json.error.code}]: ${json.error.message}`,
@@ -144,12 +195,44 @@ export class McpClientConnector {
       return json.result;
     };
 
+    const sendNotification = async (
+      method: string,
+      params?: Record<string, unknown>,
+    ): Promise<void> => {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'MCP-Protocol-Version': negotiatedProtocolVersion,
+        ...(config.headers || {}),
+      };
+      if (sessionId) {
+        headers['Mcp-Session-Id'] = sessionId;
+      }
+      await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method,
+          ...(params ? { params } : {}),
+        }),
+      });
+    };
+
     // 1. Initialize Handshake
-    await callRpc('initialize', {
-      protocolVersion: '2024-11-05',
+    const initResult = (await callRpc('initialize', {
+      protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'SinapsAI', version: '2.15.0' },
-    });
+      clientInfo: { name: 'SinapsAI', version: SINAPSAI_VERSION },
+    })) as { protocolVersion?: string } | undefined;
+
+    if (initResult?.protocolVersion) {
+      negotiatedProtocolVersion = initResult.protocolVersion;
+    }
+
+    if (config.transport === 'streamable-http') {
+      await sendNotification('notifications/initialized');
+    }
 
     // 2. Discover Tools
     const listRes = (await callRpc('tools/list')) as { tools?: McpTool[] };
@@ -289,7 +372,7 @@ export class McpClientConnector {
     await callRpc('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'SinapsAI', version: '2.15.0' },
+      clientInfo: { name: 'SinapsAI', version: SINAPSAI_VERSION },
     });
 
     // 2. Discover Tools

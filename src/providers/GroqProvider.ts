@@ -226,6 +226,36 @@ export const GROQ_MODELS: Record<string, GroqModelMeta> = {
     inputPricePer1M: 0,
     outputPricePer1M: 0,
   },
+  'meta-llama/llama-4-maverick-17b-128e-instruct': {
+    id: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+    name: 'Llama 4 Maverick 17B 128E (Groq)',
+    contextWindow: 131_072,
+    maxCompletionTokens: 8_192,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: true,
+      audio: false,
+    },
+    inputPricePer1M: 0.2,
+    outputPricePer1M: 0.6,
+  },
+  'meta-llama/llama-4-scout-17b-16e-instruct': {
+    id: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    name: 'Llama 4 Scout 17B 16E (Groq)',
+    contextWindow: 131_072,
+    maxCompletionTokens: 8_192,
+    capabilities: {
+      tools: true,
+      jsonMode: true,
+      reasoning: false,
+      vision: true,
+      audio: false,
+    },
+    inputPricePer1M: 0.11,
+    outputPricePer1M: 0.34,
+  },
   'whisper-large-v3-turbo': {
     id: 'whisper-large-v3-turbo',
     name: 'Whisper Large V3 Turbo',
@@ -429,8 +459,20 @@ export class GroqProvider implements Provider {
       payload.reasoning_format = 'parsed';
     }
 
-    if (request.reasoningEffort !== undefined) {
-      payload.reasoning_effort = request.reasoningEffort;
+    if (
+      request.reasoningEffort !== undefined &&
+      request.reasoningEffort !== 'none'
+    ) {
+      if (
+        request.reasoningEffort === 'xhigh' ||
+        request.reasoningEffort === 'max'
+      ) {
+        payload.reasoning_effort = 'high';
+      } else if (request.reasoningEffort === 'minimal') {
+        payload.reasoning_effort = 'low';
+      } else {
+        payload.reasoning_effort = request.reasoningEffort;
+      }
     }
 
     if (request.stream) {

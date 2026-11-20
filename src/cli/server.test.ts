@@ -95,4 +95,56 @@ describe('Standalone Gateway HTTP Server', () => {
       'Hello from SinapsAI Gateway Server!',
     );
   });
+
+  it('serves FrontierModelRegistry models on /v1/models and supports POST /v1/responses and POST /mcp', async () => {
+    const modelsRes = await fetch(`${baseUrl}/v1/models`);
+    const modelsData = (await modelsRes.json()) as {
+      data: Array<{ id: string }>;
+    };
+    expect(modelsData.data.some((m) => m.id === 'gemini-4-carbon')).toBe(true);
+    expect(modelsData.data.some((m) => m.id === 'claude-sonnet-5-5')).toBe(
+      true,
+    );
+    expect(modelsData.data.some((m) => m.id === 'gpt-5.6-sol-medium')).toBe(
+      true,
+    );
+
+    const respRes = await fetch(`${baseUrl}/v1/responses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol-medium',
+        instructions: 'Be brief.',
+        input: 'Ping responses',
+        reasoning: { effort: 'high' },
+      }),
+    });
+    expect(respRes.status).toBe(200);
+    const respJson = (await respRes.json()) as {
+      object: string;
+      status: string;
+      output_text: string;
+    };
+    expect(respJson.object).toBe('response');
+    expect(respJson.status).toBe('completed');
+    expect(respJson.output_text).toBe('Hello from SinapsAI Gateway Server!');
+
+    const mcpRes = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18' },
+      }),
+    });
+    expect(mcpRes.status).toBe(200);
+    expect(mcpRes.headers.get('mcp-protocol-version')).toBe('2025-06-18');
+    expect(mcpRes.headers.get('mcp-session-id')).toBeTruthy();
+    const mcpJson = (await mcpRes.json()) as {
+      result: { protocolVersion: string };
+    };
+    expect(mcpJson.result.protocolVersion).toBe('2025-06-18');
+  });
 });

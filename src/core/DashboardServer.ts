@@ -17,6 +17,7 @@
 
 import http from 'node:http';
 import type { SinapsMetrics } from '../types/index.js';
+import { SINAPSAI_VERSION } from '../version.js';
 import type { CanaryProviderHealth } from './CanaryProber.js';
 import type { SinapsClient } from './SinapsClient.js';
 
@@ -227,7 +228,7 @@ export class DashboardServer {
 
     const summary = {
       title: this.title,
-      version: '3.0.0',
+      version: SINAPSAI_VERSION,
       uptimeSeconds,
       strategy: this.client.getStrategy(),
       metrics: {

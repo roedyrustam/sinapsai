@@ -18,11 +18,14 @@ import type {
   ChatMessage,
   ContentPart,
   CreateChatCompletionRequest,
+  ReasoningEffort,
+  ThinkingLevel,
   ToolCall,
   ToolDefinition,
   UnifiedApiResponse,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
+import { SINAPSAI_VERSION } from '../version.js';
 import type {
   AgentPersonaRegistry,
   PersonaDriftResult,
@@ -97,6 +100,14 @@ export interface SwarmAgentConfig {
    * Optional reasoning thinking budget ('auto' or specific token count)
    */
   thinkingBudget?: number | 'auto';
+  /**
+   * Optional normalized reasoning effort ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max')
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * Optional Gemini 3/4 symbolic thinking level ('minimal' | 'low' | 'medium' | 'high')
+   */
+  thinkingLevel?: ThinkingLevel;
   /**
    * Specific tool definitions allowed for this agent.
    * If not specified, the agent can access tools registered in the swarm or client.mcp.
@@ -734,7 +745,7 @@ export class AgentSwarm {
       url: baseUrl
         ? `${baseUrl.replace(/\/$/, '')}/agents/${agent.id}`
         : undefined,
-      version: '2.11.0',
+      version: SINAPSAI_VERSION,
       capabilities: {
         streaming: true,
         handoffs: (agent.handoffs && agent.handoffs.length > 0) || false,
@@ -878,6 +889,8 @@ export class AgentSwarm {
         messages: stepMessages,
         tools: tools.length > 0 ? tools : undefined,
         thinkingBudget: agent.thinkingBudget,
+        reasoningEffort: agent.reasoningEffort,
+        thinkingLevel: agent.thinkingLevel,
       };
 
       const response = (await this.client.chat.completions.create(
@@ -1159,6 +1172,8 @@ export class AgentSwarm {
         messages: stepMessages,
         tools: tools.length > 0 ? tools : undefined,
         thinkingBudget: agent.thinkingBudget,
+        reasoningEffort: agent.reasoningEffort,
+        thinkingLevel: agent.thinkingLevel,
         stream: true,
       };
 

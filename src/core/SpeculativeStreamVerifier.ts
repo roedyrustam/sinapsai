@@ -254,7 +254,7 @@ export class SpeculativeStreamVerifier {
 
     try {
       const auditReq: UnifiedApiRequest = {
-        model: this.auditorModel ?? 'claude-3-7-sonnet',
+        model: this.auditorModel ?? 'claude-sonnet-5-5',
         messages: [
           { role: 'system', content: this.auditorInstructions },
           {

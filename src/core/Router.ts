@@ -33,6 +33,7 @@ import {
 } from '../utils/metricsExporter.js';
 import { cosineSimilarity, extractPromptText } from '../utils/similarity.js';
 import type { CircuitBreaker } from './CircuitBreaker.js';
+import { FrontierModelRegistry } from './FrontierModelRegistry.js';
 import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import { HedgedExecutor, type HedgingOptions } from './HedgedExecutor.js';
 import type { StateStorage } from './StateStorage.js';
@@ -95,6 +96,7 @@ export class Router {
     cachedRequests: 0,
     totalPromptTokens: 0,
     totalCompletionTokens: 0,
+    totalReasoningTokens: 0,
     totalTokens: 0,
     estimatedCostUsd: 0,
     providerMetrics: {},
@@ -316,6 +318,7 @@ export class Router {
     completionTokens = 0,
     costUsd = 0,
     cachedPromptTokens = 0,
+    reasoningTokens = 0,
   ): void {
     if (!this.metrics.providerMetrics[providerId]) {
       this.metrics.providerMetrics[providerId] = {
@@ -350,6 +353,11 @@ export class Router {
       this.metrics.totalCachedPromptTokens =
         (this.metrics.totalCachedPromptTokens || 0) + cachedPromptTokens;
       pm.cachedPromptTokens = (pm.cachedPromptTokens || 0) + cachedPromptTokens;
+    }
+    if (reasoningTokens > 0) {
+      this.metrics.totalReasoningTokens =
+        (this.metrics.totalReasoningTokens || 0) + reasoningTokens;
+      pm.reasoningTokens = (pm.reasoningTokens || 0) + reasoningTokens;
     }
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6),
@@ -512,9 +520,16 @@ export class Router {
       rf: request.responseFormat,
       tb: request.thinkingBudget,
       re: request.reasoningEffort,
+      tl: request.thinkingLevel,
+      it: request.includeThoughts,
       cc: request.cachedContent,
       gs: request.googleSearch,
+      ws: request.webSearch,
       ce: request.codeExecution,
+      v: request.verbosity,
+      st: request.serviceTier,
+      pr: request.previousResponseId,
+      pct: request.promptCacheTtl,
     });
     return `cache:${request.model}:${this.hashString64(raw)}`;
   }
@@ -564,15 +579,22 @@ export class Router {
       }
     }
 
-    // Automatic Frontier Availability Fallback Invariant (Gemini 4 -> Gemini 3.8 Flash)
-    if (
-      (request.model === 'gemini-4-pro' ||
-        request.model === 'gemini-4-argon' ||
-        request.model === 'gemini-4-flash') &&
-      provider.name === 'Gemini' &&
-      !list.includes('gemini-3.8-flash')
-    ) {
-      list.push('gemini-3.8-flash');
+    // Automatic Frontier Availability Fallback Invariant via FrontierModelRegistry
+    if (request.model) {
+      const profile = FrontierModelRegistry.get(request.model);
+      const providerName = provider.name.toLowerCase();
+      const modelProvider = profile?.provider.toLowerCase();
+      const isCompatibleProvider =
+        !modelProvider ||
+        providerName.includes(modelProvider) ||
+        modelProvider === providerName;
+      if (isCompatibleProvider) {
+        for (const fb of FrontierModelRegistry.getFallbacks(request.model)) {
+          if (fb && !list.includes(fb)) {
+            list.push(fb);
+          }
+        }
+      }
     }
 
     return list.length > 0 ? list : ['default'];
@@ -867,6 +889,7 @@ export class Router {
                 let collectedPromptTokens = 0;
                 let collectedCompletionTokens = 0;
                 let collectedCachedPromptTokens = 0;
+                let collectedReasoningTokens = 0;
 
                 return (async function* () {
                   try {
@@ -883,6 +906,9 @@ export class Router {
                         collectedCachedPromptTokens =
                           chunk.usage.cachedPromptTokens ||
                           collectedCachedPromptTokens;
+                        collectedReasoningTokens =
+                          chunk.usage.reasoningTokens ||
+                          collectedReasoningTokens;
                       }
                       yield {
                         ...chunk,
@@ -930,6 +956,7 @@ export class Router {
                       collectedCompletionTokens,
                       costUsd,
                       collectedCachedPromptTokens,
+                      collectedReasoningTokens,
                     );
 
                     self.hooks?.onStreamSuccess?.(
@@ -1086,6 +1113,7 @@ export class Router {
             const promptTokens = apiRes.usage?.promptTokens ?? 0;
             const completionTokens = apiRes.usage?.completionTokens ?? 0;
             const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
+            const reasoningTokens = apiRes.usage?.reasoningTokens ?? 0;
             let costUsd = 0;
             if (
               provider.promptCostPer1k !== undefined &&
@@ -1110,6 +1138,7 @@ export class Router {
               completionTokens,
               costUsd,
               cachedPromptTokens,
+              reasoningTokens,
             );
 
             // Adaptive rate-limit handling

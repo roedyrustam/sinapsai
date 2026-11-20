@@ -18,6 +18,42 @@ import { parseRateLimitHeaders } from '../utils/rateLimit.js';
 import { linkAbortSignal } from '../utils/signal.js';
 import type { Provider } from './Provider.js';
 
+export const MISTRAL_MODELS = {
+  LARGE_4: 'mistral-large-4',
+  SMALL_4: 'mistral-small-4',
+  MAGISTRAL_MEDIUM: 'magistral-medium-latest',
+  CODESTRAL: 'codestral-latest',
+  LARGE_LATEST: 'mistral-large-latest',
+  SMALL_LATEST: 'mistral-small-latest',
+  EMBED: 'mistral-embed',
+} as const;
+
+export const MISTRAL_AVAILABILITY_FALLBACKS: Record<string, string[]> = {
+  'mistral-large-4': ['mistral-small-4', 'mistral-large-latest'],
+};
+
+export const MISTRAL_DEFAULT_PRICING: Record<
+  string,
+  { promptCostPer1k: number; completionCostPer1k: number }
+> = {
+  'mistral-large-4': { promptCostPer1k: 0.002, completionCostPer1k: 0.006 },
+  'mistral-small-4': { promptCostPer1k: 0.0001, completionCostPer1k: 0.0003 },
+  'magistral-medium-latest': {
+    promptCostPer1k: 0.002,
+    completionCostPer1k: 0.005,
+  },
+  'codestral-latest': { promptCostPer1k: 0.0003, completionCostPer1k: 0.0009 },
+  'mistral-large-latest': {
+    promptCostPer1k: 0.002,
+    completionCostPer1k: 0.006,
+  },
+  'mistral-small-latest': {
+    promptCostPer1k: 0.0001,
+    completionCostPer1k: 0.0003,
+  },
+  'mistral-embed': { promptCostPer1k: 0.0001, completionCostPer1k: 0 },
+};
+
 export class MistralProvider implements Provider {
   id: string;
   name = 'Mistral';
@@ -104,6 +140,14 @@ export class MistralProvider implements Provider {
     if (request.responseFormat) {
       payload.response_format = request.responseFormat;
     }
+    const wantsReasoning =
+      (request.reasoningEffort && request.reasoningEffort !== 'none') ||
+      (typeof request.thinkingBudget === 'number' &&
+        request.thinkingBudget > 0) ||
+      request.thinkingBudget === 'auto';
+    if (wantsReasoning) {
+      payload.prompt_mode = 'reasoning';
+    }
     return payload;
   }
 
@@ -128,13 +172,18 @@ export class MistralProvider implements Provider {
         },
       ],
       usage: data.usage
-        ? {
-            promptTokens: data.usage.prompt_tokens || 0,
-            completionTokens: data.usage.completion_tokens || 0,
-            totalTokens: data.usage.total_tokens || 0,
-            cachedPromptTokens:
-              data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
-          }
+        ? (() => {
+            const reasoningTokens =
+              data.usage.completion_tokens_details?.reasoning_tokens;
+            return {
+              promptTokens: data.usage.prompt_tokens || 0,
+              completionTokens: data.usage.completion_tokens || 0,
+              totalTokens: data.usage.total_tokens || 0,
+              cachedPromptTokens:
+                data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
+              ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+            };
+          })()
         : undefined,
     };
   }
@@ -185,6 +234,8 @@ export class MistralProvider implements Provider {
                 const parsed = JSON.parse(msg.data);
                 let chunkUsage: UnifiedApiStreamChunk['usage'] | undefined;
                 if (parsed.usage) {
+                  const streamReasoningTokens =
+                    parsed.usage.completion_tokens_details?.reasoning_tokens;
                   chunkUsage = {
                     promptTokens: parsed.usage.prompt_tokens || 0,
                     completionTokens: parsed.usage.completion_tokens || 0,
@@ -192,6 +243,9 @@ export class MistralProvider implements Provider {
                     cachedPromptTokens:
                       parsed.usage.prompt_tokens_details?.cached_tokens ??
                       undefined,
+                    ...(streamReasoningTokens !== undefined
+                      ? { reasoningTokens: streamReasoningTokens }
+                      : {}),
                   };
                 }
 

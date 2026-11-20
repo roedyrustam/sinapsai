@@ -13,6 +13,7 @@ import type {
   PrometheusExportOptions,
   SinapsMetrics,
 } from '../types/index.js';
+import { SINAPSAI_VERSION } from '../version.js';
 
 function escapePrometheusLabelValue(value: string): string {
   return value
@@ -71,6 +72,7 @@ export function formatPrometheusMetrics(
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: 'prompt' })} ${metrics.totalPromptTokens}${timestampSuffix}`,
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: 'completion' })} ${metrics.totalCompletionTokens}${timestampSuffix}`,
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: 'cached_prompt' })} ${metrics.totalCachedPromptTokens ?? 0}${timestampSuffix}`,
+    `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: 'reasoning' })} ${metrics.totalReasoningTokens ?? 0}${timestampSuffix}`,
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: 'total' })} ${metrics.totalTokens}${timestampSuffix}`,
   );
 
@@ -154,7 +156,7 @@ export function formatOtelMetrics(
   options: OtelExportOptions = {},
 ): OtelResourceMetrics {
   const serviceName = options.serviceName || 'sinapsai-gateway';
-  const serviceVersion = options.serviceVersion || '2.11.0';
+  const serviceVersion = options.serviceVersion || SINAPSAI_VERSION;
   const nowNano = `${Date.now()}000000`;
 
   const resourceAttrs: Array<{
@@ -273,6 +275,10 @@ export function formatOtelMetrics(
         {
           asInt: metrics.totalCachedPromptTokens ?? 0,
           attributes: { type: 'cached_prompt' },
+        },
+        {
+          asInt: metrics.totalReasoningTokens ?? 0,
+          attributes: { type: 'reasoning' },
         },
         { asInt: metrics.totalTokens, attributes: { type: 'total' } },
       ],

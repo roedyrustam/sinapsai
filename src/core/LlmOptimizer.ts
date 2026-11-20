@@ -18,6 +18,7 @@
 import type {
   ChatMessage,
   ContentPart,
+  ReasoningEffort,
   TextContentPart,
   ToolDefinition,
   UnifiedApiRequest,
@@ -28,20 +29,26 @@ import {
 } from './ContextCompressor.js';
 import { canonicalizeJsonValue } from './GeminiAgentBooster.js';
 
+export type LlmCascadePreset =
+  | 'legacy'
+  | 'frontier'
+  | 'cost-optimized'
+  | 'speed-first';
+
 export interface LlmCascadeTiers {
   /**
    * Tier 1 (Light/Fast): For greetings, simple QA, basic classification (complexity <= 0.35).
-   * e.g., 'gemini-2.5-flash-lite', 'gpt-4o-mini', 'llama-3.3-70b-versatile'
+   * e.g., 'gemini-4-carbon', 'grok-4-6-high-fast', 'gemini-2.5-flash-lite'
    */
   tier1?: string;
   /**
    * Tier 2 (Standard): For general reasoning, summaries, standard coding (0.35 < complexity <= 0.70).
-   * e.g., 'gemini-2.5-flash', 'gpt-4o', 'claude-3-5-haiku'
+   * e.g., 'gemini-4-neon', 'deepseek-v4.1-flash', 'gemini-2.5-flash'
    */
   tier2?: string;
   /**
    * Tier 3 (Deep Reasoning): For complex architecture, math, proofs, multi-step debugging (complexity > 0.70).
-   * e.g., 'gemini-2.5-pro', 'claude-3-7-sonnet', 'o3-mini', 'deepseek-r1'
+   * e.g., 'claude-sonnet-5-5', 'gemini-4-pro', 'deepseek-v4-pro'
    */
   tier3?: string;
 }
@@ -77,7 +84,12 @@ export interface LlmOptimizationOptions {
    */
   autoCascadeModel?: boolean;
   /**
-   * Custom model tier mapping for cascading.
+   * Preconfigured model tier preset ('legacy' | 'frontier' | 'cost-optimized' | 'speed-first').
+   * Defaults to 'legacy' when omitted to preserve backward compatibility.
+   */
+  cascadePreset?: LlmCascadePreset;
+  /**
+   * Custom model tier mapping for cascading (overrides `cascadePreset`).
    */
   cascadeTiers?: LlmCascadeTiers;
   /**
@@ -124,6 +136,10 @@ export interface LlmComplexityAnalysis {
    * Recommended thinking budget token count (0, 2048, 8192, or 32768).
    */
   recommendedThinkingBudget?: number;
+  /**
+   * Recommended normalized reasoning effort ('minimal' | 'medium' | 'high').
+   */
+  recommendedReasoningEffort?: ReasoningEffort;
 }
 
 export interface LlmOptimizationResult {
@@ -136,6 +152,7 @@ export interface LlmOptimizationResult {
   cascadeModel?: string;
   tools?: ToolDefinition[];
   thinkingBudget?: number | 'auto';
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface LlmOptimizationMetrics {
@@ -224,6 +241,30 @@ export const DEFAULT_CASCADE_TIERS: Required<LlmCascadeTiers> = {
   tier1: 'gemini-2.5-flash-lite',
   tier2: 'gemini-2.5-flash',
   tier3: 'gemini-2.5-pro',
+};
+
+export const FRONTIER_CASCADE_TIERS: Required<LlmCascadeTiers> = {
+  tier1: 'gemini-4-carbon',
+  tier2: 'gemini-4-neon',
+  tier3: 'claude-sonnet-5-5',
+};
+
+export const FRONTIER_CASCADE_PRESETS: Record<
+  LlmCascadePreset,
+  Required<LlmCascadeTiers>
+> = {
+  legacy: DEFAULT_CASCADE_TIERS,
+  frontier: FRONTIER_CASCADE_TIERS,
+  'cost-optimized': {
+    tier1: 'gemini-4-carbon',
+    tier2: 'deepseek-v4.1-flash',
+    tier3: 'deepseek-v4-pro',
+  },
+  'speed-first': {
+    tier1: 'grok-4-6-high-fast',
+    tier2: 'grok-4-7-high-fast',
+    tier3: 'gemini-4-pro',
+  },
 };
 
 /**
@@ -382,6 +423,9 @@ export class LlmOptimizer {
   };
 
   constructor(options: LlmOptimizationOptions = {}) {
+    const presetTiers =
+      FRONTIER_CASCADE_PRESETS[options.cascadePreset ?? 'legacy'] ??
+      DEFAULT_CASCADE_TIERS;
     this.options = {
       enabled: options.enabled ?? true,
       minifyPrompts: options.minifyPrompts ?? true,
@@ -389,7 +433,8 @@ export class LlmOptimizer {
       deduplicateSystem: options.deduplicateSystem ?? true,
       alignKvCachePrefix: options.alignKvCachePrefix ?? true,
       autoCascadeModel: options.autoCascadeModel ?? false,
-      cascadeTiers: options.cascadeTiers ?? DEFAULT_CASCADE_TIERS,
+      cascadePreset: options.cascadePreset ?? 'legacy',
+      cascadeTiers: options.cascadeTiers ?? presetTiers,
       dynamicThinking: options.dynamicThinking ?? true,
     };
   }
@@ -474,15 +519,18 @@ export class LlmOptimizer {
 
     let tier: LlmComplexityTier = 'tier2';
     let recommendedBudget = 2048;
+    let recommendedReasoningEffort: ReasoningEffort = 'medium';
     let recommendedModel = resolvedTiers.tier2;
 
     if (score <= 0.35) {
       tier = 'tier1';
       recommendedBudget = 0;
+      recommendedReasoningEffort = 'minimal';
       recommendedModel = resolvedTiers.tier1;
     } else if (score > 0.7) {
       tier = 'tier3';
       recommendedBudget = 8192;
+      recommendedReasoningEffort = 'high';
       recommendedModel = resolvedTiers.tier3;
     }
 
@@ -492,6 +540,7 @@ export class LlmOptimizer {
       signals,
       recommendedModel,
       recommendedThinkingBudget: recommendedBudget,
+      recommendedReasoningEffort,
     };
   }
 
@@ -516,6 +565,7 @@ export class LlmOptimizer {
         complexity,
         tools: request.tools,
         thinkingBudget: request.thinkingBudget,
+        reasoningEffort: request.reasoningEffort,
       };
     }
 
@@ -578,11 +628,21 @@ export class LlmOptimizer {
       cascadeModel = complexity.recommendedModel;
     }
 
-    // 5. Dynamic Thinking Budget
+    // 5. Dynamic Thinking Budget & Reasoning Effort
     let thinkingBudget = request.thinkingBudget;
-    if (this.options.dynamicThinking && thinkingBudget === undefined) {
-      if (complexity.recommendedThinkingBudget !== undefined) {
+    let reasoningEffort = request.reasoningEffort;
+    if (this.options.dynamicThinking) {
+      if (
+        thinkingBudget === undefined &&
+        complexity.recommendedThinkingBudget !== undefined
+      ) {
         thinkingBudget = complexity.recommendedThinkingBudget;
+      }
+      if (
+        reasoningEffort === undefined &&
+        complexity.recommendedReasoningEffort !== undefined
+      ) {
+        reasoningEffort = complexity.recommendedReasoningEffort;
       }
     }
 
@@ -611,6 +671,7 @@ export class LlmOptimizer {
       cascadeModel,
       tools,
       thinkingBudget,
+      reasoningEffort,
     };
   }
 

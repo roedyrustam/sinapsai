@@ -561,5 +561,36 @@ describe('GroqProvider', () => {
       expect(parsed?.remainingTokens).toBe(17997);
       expect(parsed?.resetMs).toBe(7660);
     });
+
+    it('exposes Llama 4 Maverick/Scout metadata and normalizes xhigh/minimal/none reasoningEffort', () => {
+      expect(
+        GROQ_MODELS['meta-llama/llama-4-maverick-17b-128e-instruct']
+          ?.capabilities.vision,
+      ).toBe(true);
+      expect(
+        GROQ_MODELS['meta-llama/llama-4-scout-17b-16e-instruct']?.contextWindow,
+      ).toBe(131_072);
+
+      const xhighPayload = provider.formatRequest({
+        model: 'openai/gpt-oss-120b',
+        messages: [{ role: 'user', content: 'Reason' }],
+        reasoningEffort: 'xhigh',
+      });
+      expect(xhighPayload.reasoning_effort).toBe('high');
+
+      const minimalPayload = provider.formatRequest({
+        model: 'openai/gpt-oss-120b',
+        messages: [{ role: 'user', content: 'Quick' }],
+        reasoningEffort: 'minimal',
+      });
+      expect(minimalPayload.reasoning_effort).toBe('low');
+
+      const nonePayload = provider.formatRequest({
+        model: 'openai/gpt-oss-120b',
+        messages: [{ role: 'user', content: 'No reasoning' }],
+        reasoningEffort: 'none',
+      });
+      expect(nonePayload.reasoning_effort).toBeUndefined();
+    });
   });
 });

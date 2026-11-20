@@ -9,12 +9,18 @@ import type { Provider } from './Provider.js';
 export declare const GEMINI_MODELS: {
     readonly PRO_4: 'gemini-4-pro';
     readonly ARGON_4: 'gemini-4-argon';
+    readonly CARBON_4: 'gemini-4-carbon';
+    readonly NEON_4: 'gemini-4-neon';
+    readonly HYDROGEN_4: 'gemini-4-hydrogen';
     readonly FLASH_4: 'gemini-4-flash';
     readonly PROJECT_ASTRA: 'gemini-4-flash';
     readonly FLASH_3_8: 'gemini-3.8-flash';
     readonly FLASH_3_6: 'gemini-3.6-flash';
     readonly FLASH_LITE_3_5: 'gemini-3.5-flash-lite';
+    readonly PRO_3_1: 'gemini-3.1-pro';
     readonly PRO_3_1_PREVIEW: 'gemini-3.1-pro-preview';
+    readonly LIVE_3_1_FLASH: 'gemini-3.1-flash-live-preview';
+    readonly LIVE_3_8: 'gemini-3.8-live';
     readonly FLASH_2_5: 'gemini-2.5-flash';
     readonly FLASH_LITE_2_5: 'gemini-2.5-flash-lite';
     readonly PRO_2_5: 'gemini-2.5-pro';
@@ -48,8 +54,11 @@ export interface GeminiModelInfo {
 export interface GeminiProviderConfig extends ProviderConfig {
     safetySettings?: GeminiSafetySetting[];
     thinkingBudget?: number | 'auto';
+    thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+    includeThoughts?: boolean;
     cachedContent?: string;
     googleSearch?: boolean;
+    webSearch?: boolean;
     codeExecution?: boolean;
     /**
      * Automatically append 'gemini-3.8-flash' fallback when using Gemini 4 frontier models

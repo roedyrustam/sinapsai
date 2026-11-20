@@ -20,6 +20,8 @@ import {
   deduplicateSystemInstructions,
   estimateTextTokens,
   estimateTotalTokens,
+  FRONTIER_CASCADE_PRESETS,
+  FRONTIER_CASCADE_TIERS,
   LlmOptimizer,
   minifyProsePreservingCode,
 } from './LlmOptimizer.js';
@@ -338,6 +340,46 @@ Perform a security audit, root cause analysis, and formal verification step-by-s
       expect(truncated.signals).toContain(
         'Response truncated due to length limits',
       );
+    });
+
+    it('supports frontier cascade presets and outputs recommendedReasoningEffort', () => {
+      expect(FRONTIER_CASCADE_TIERS.tier1).toBe('gemini-4-carbon');
+      expect(FRONTIER_CASCADE_TIERS.tier2).toBe('gemini-4-neon');
+      expect(FRONTIER_CASCADE_TIERS.tier3).toBe('claude-sonnet-5-5');
+      expect(FRONTIER_CASCADE_PRESETS['cost-optimized'].tier3).toBe(
+        'deepseek-v4-pro',
+      );
+      expect(FRONTIER_CASCADE_PRESETS['speed-first'].tier1).toBe(
+        'grok-4-6-high-fast',
+      );
+
+      const frontierOpt = new LlmOptimizer({
+        cascadePreset: 'frontier',
+        autoCascadeModel: true,
+        dynamicThinking: true,
+      });
+
+      const simple = frontierOpt.optimize({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(simple.cascadeModel).toBe('gemini-4-carbon');
+      expect(simple.complexity.recommendedReasoningEffort).toBe('minimal');
+      expect(simple.reasoningEffort).toBe('minimal');
+
+      const complex = frontierOpt.optimize({
+        model: 'auto',
+        messages: [
+          {
+            role: 'user',
+            content:
+              'Design a distributed consensus algorithm and prove linearizability step by step: ```ts\nasync function commit() {}\n```',
+          },
+        ],
+      });
+      expect(complex.cascadeModel).toBe('claude-sonnet-5-5');
+      expect(complex.complexity.recommendedReasoningEffort).toBe('high');
+      expect(complex.reasoningEffort).toBe('high');
     });
   });
 });

@@ -177,5 +177,67 @@ describe('XAiProvider & CohereProvider', () => {
       expect(customCohere.promptCostPer1k).toBe(0.002);
       expect(customCohere.completionCostPer1k).toBe(0.01);
     });
+
+    it('should support Grok 4.7 frontier models, webSearch, xhigh/none effort, and reasoningTokens', () => {
+      const frontierXai = new XAiProvider({ apiKey: 'xai-test-key' });
+      const searchPayload = frontierXai.formatRequest({
+        model: XAI_MODELS.GROK_4_7_HIGH_FAST,
+        messages: [{ role: 'user', content: 'Latest LLM benchmarks' }],
+        reasoningEffort: 'xhigh',
+        webSearch: true,
+      });
+      expect(searchPayload.model).toBe('grok-4-7-high-fast');
+      expect(searchPayload.reasoning_effort).toBe('high');
+      expect(searchPayload.search_parameters).toEqual({
+        mode: 'auto',
+        return_citations: true,
+      });
+
+      const disabledReasoningPayload = frontierXai.formatRequest({
+        model: XAI_MODELS.GROK_4_7,
+        messages: [{ role: 'user', content: 'Quick answer' }],
+        reasoningEffort: 'none',
+      });
+      expect(disabledReasoningPayload.reasoning_effort).toBeUndefined();
+
+      const res = frontierXai.formatResponse({
+        id: 'xai-47',
+        model: 'grok-4-7-high-fast',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Benchmark summary.' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          total_tokens: 150,
+          completion_tokens_details: { reasoning_tokens: 30 },
+        },
+      });
+      expect(res.usage?.reasoningTokens).toBe(30);
+    });
+
+    it('should format Cohere v2 Command A Reasoning thinking budgets cleanly', () => {
+      const cohere = new CohereProvider({ apiKey: 'coh-key' });
+      const enabledPayload = cohere.formatRequest({
+        model: COHERE_MODELS.COMMAND_A_REASONING,
+        messages: [{ role: 'user', content: 'Derive bound' }],
+        thinkingBudget: 12000,
+      });
+      expect(enabledPayload.model).toBe('command-a-reasoning-08-2025');
+      expect(enabledPayload.thinking).toEqual({
+        type: 'enabled',
+        token_budget: 12000,
+      });
+
+      const disabledPayload = cohere.formatRequest({
+        model: COHERE_MODELS.COMMAND_A_REASONING,
+        messages: [{ role: 'user', content: 'Short reply' }],
+        reasoningEffort: 'none',
+      });
+      expect(disabledPayload.thinking).toEqual({ type: 'disabled' });
+    });
   });
 });

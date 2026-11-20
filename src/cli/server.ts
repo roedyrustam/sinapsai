@@ -15,10 +15,14 @@
  */
 
 import http from 'node:http';
+import { FrontierModelRegistry } from '../core/FrontierModelRegistry.js';
+import { MCP_PROTOCOL_VERSION } from '../core/McpBridge.js';
 import type { SinapsClient } from '../core/SinapsClient.js';
 import type {
+  ChatMessage,
   CreateChatCompletionRequestNonStreaming,
   CreateChatCompletionRequestStreaming,
+  UnifiedApiResponse,
 } from '../types/index.js';
 
 export interface GatewayServerOptions {
@@ -39,7 +43,7 @@ export function createGatewayServer(
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, x-api-key',
+      'Content-Type, Authorization, x-api-key, MCP-Protocol-Version, Mcp-Session-Id',
     );
 
     if (req.method === 'OPTIONS') {
@@ -88,20 +92,228 @@ export function createGatewayServer(
       return;
     }
 
-    // List Models
+    // List Frontier Models
     if (pathname === '/v1/models' && req.method === 'GET') {
-      const models = [
-        { id: 'gemini-2.5-flash', object: 'model', owned_by: 'google' },
-        { id: 'gemini-2.5-pro', object: 'model', owned_by: 'google' },
-        { id: 'gpt-4o', object: 'model', owned_by: 'openai' },
-        { id: 'gpt-4o-mini', object: 'model', owned_by: 'openai' },
-        { id: 'claude-3-7-sonnet', object: 'model', owned_by: 'anthropic' },
-        { id: 'llama-3.3-70b-versatile', object: 'model', owned_by: 'groq' },
-        { id: 'deepseek-chat', object: 'model', owned_by: 'deepseek' },
-      ];
+      const models = FrontierModelRegistry.list().map((m) => ({
+        id: m.id,
+        object: 'model',
+        owned_by: m.provider,
+        tier: m.tier,
+        context_window: m.contextWindow,
+        max_output_tokens: m.maxOutputTokens,
+        capabilities: m.capabilities,
+      }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ object: 'list', data: models }));
       return;
+    }
+
+    // OpenAI Responses API (/v1/responses)
+    if (pathname === '/v1/responses' && req.method === 'POST') {
+      try {
+        const bodyText = await readBody(req);
+        const body = JSON.parse(bodyText) as Record<string, unknown>;
+        const messages: ChatMessage[] = [];
+        if (typeof body.instructions === 'string' && body.instructions) {
+          messages.push({ role: 'system', content: body.instructions });
+        }
+        if (typeof body.input === 'string') {
+          messages.push({ role: 'user', content: body.input });
+        } else if (Array.isArray(body.input)) {
+          for (const item of body.input) {
+            if (typeof item === 'string') {
+              messages.push({ role: 'user', content: item });
+            } else if (item && typeof item === 'object') {
+              const rec = item as Record<string, unknown>;
+              messages.push({
+                role: (rec.role as ChatMessage['role']) || 'user',
+                content:
+                  typeof rec.content === 'string'
+                    ? rec.content
+                    : JSON.stringify(rec.content ?? ''),
+              });
+            }
+          }
+        }
+
+        const reasoning = body.reasoning as { effort?: string } | undefined;
+        const textCfg = body.text as
+          | { format?: Record<string, unknown>; verbosity?: string }
+          | undefined;
+
+        const baseReq = {
+          model: String(body.model || 'gpt-5.6-sol-medium'),
+          messages,
+          maxTokens:
+            typeof body.max_output_tokens === 'number'
+              ? body.max_output_tokens
+              : undefined,
+          temperature:
+            typeof body.temperature === 'number' ? body.temperature : undefined,
+          reasoningEffort:
+            reasoning?.effort as CreateChatCompletionRequestNonStreaming['reasoningEffort'],
+          verbosity:
+            textCfg?.verbosity as CreateChatCompletionRequestNonStreaming['verbosity'],
+          responseFormat:
+            textCfg?.format as CreateChatCompletionRequestNonStreaming['responseFormat'],
+          tools: body.tools as CreateChatCompletionRequestNonStreaming['tools'],
+        };
+
+        if (body.stream) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          });
+
+          const responseId = `resp_${Date.now()}`;
+          res.write(
+            `event: response.created\ndata: ${JSON.stringify({ type: 'response.created', response: { id: responseId, object: 'response', status: 'in_progress', model: baseReq.model } })}\n\n`,
+          );
+
+          const stream = await client.chat.completions.create({
+            ...baseReq,
+            stream: true,
+          } as CreateChatCompletionRequestStreaming);
+
+          let accumulatedText = '';
+          let finalUsage: Record<string, unknown> | undefined;
+          for await (const chunk of stream) {
+            const deltaText = chunk.choices?.[0]?.delta?.content;
+            if (deltaText) {
+              accumulatedText += deltaText;
+              res.write(
+                `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', item_id: `msg_${responseId}`, output_index: 0, content_index: 0, delta: deltaText })}\n\n`,
+              );
+            }
+            if (chunk.usage) {
+              finalUsage = {
+                input_tokens: chunk.usage.promptTokens,
+                output_tokens: chunk.usage.completionTokens,
+                total_tokens: chunk.usage.totalTokens,
+                output_tokens_details: {
+                  reasoning_tokens: chunk.usage.reasoningTokens ?? 0,
+                },
+              };
+            }
+          }
+
+          res.write(
+            `event: response.completed\ndata: ${JSON.stringify({
+              type: 'response.completed',
+              response: {
+                id: responseId,
+                object: 'response',
+                status: 'completed',
+                model: baseReq.model,
+                output_text: accumulatedText,
+                usage: finalUsage,
+              },
+            })}\n\n`,
+          );
+          res.end();
+          return;
+        }
+
+        const apiRes = (await client.chat.completions.create({
+          ...baseReq,
+          stream: false,
+        } as CreateChatCompletionRequestNonStreaming)) as UnifiedApiResponse;
+
+        const msg = apiRes.choices?.[0]?.message;
+        const outputText = msg?.content || '';
+        const responseId = apiRes.id || `resp_${Date.now()}`;
+        const output: Array<Record<string, unknown>> = [];
+        if (msg?.reasoning_content) {
+          output.push({
+            id: `rs_${responseId}`,
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: msg.reasoning_content }],
+          });
+        }
+        output.push({
+          id: `msg_${responseId}`,
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: outputText, annotations: [] }],
+        });
+        if (msg?.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            output.push({
+              type: 'function_call',
+              call_id: tc.id,
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            });
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: responseId,
+            object: 'response',
+            status: 'completed',
+            model: apiRes.model || baseReq.model,
+            output_text: outputText,
+            output,
+            usage: apiRes.usage
+              ? {
+                  input_tokens: apiRes.usage.promptTokens,
+                  output_tokens: apiRes.usage.completionTokens,
+                  total_tokens: apiRes.usage.totalTokens,
+                  input_tokens_details: {
+                    cached_tokens: apiRes.usage.cachedPromptTokens ?? 0,
+                  },
+                  output_tokens_details: {
+                    reasoning_tokens: apiRes.usage.reasoningTokens ?? 0,
+                  },
+                }
+              : undefined,
+          }),
+        );
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: { message, type: 'sinapsai_responses_error' },
+          }),
+        );
+        return;
+      }
+    }
+
+    // Streamable HTTP MCP Endpoint (POST /mcp)
+    if (pathname === '/mcp' && req.method === 'POST') {
+      try {
+        const bodyText = await readBody(req);
+        const rpcRequest = JSON.parse(bodyText);
+        const rpcResponse = await client.mcp.handleJsonRpc(rpcRequest);
+        const sessionHeader =
+          (req.headers['mcp-session-id'] as string | undefined) ||
+          `sinaps-mcp-${Date.now()}`;
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
+          'Mcp-Session-Id': sessionHeader,
+        });
+        res.end(JSON.stringify(rpcResponse));
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: null,
+            error: { code: -32700, message },
+          }),
+        );
+        return;
+      }
     }
 
     // Chat Completions

@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
-import { MistralProvider } from './MistralProvider.js';
+import { MISTRAL_MODELS, MistralProvider } from './MistralProvider.js';
 
 describe('MistralProvider', () => {
   const provider = new MistralProvider({ apiKey: 'test-key' });
@@ -248,6 +248,44 @@ describe('MistralProvider', () => {
       expect(response.model).toBe('mistral-embed');
       expect(response.data[0].embedding).toEqual(mockValues);
       expect(response.usage?.promptTokens).toBe(6);
+    });
+
+    it('supports MISTRAL_MODELS, prompt_mode reasoning, and reasoningTokens extraction', () => {
+      expect(MISTRAL_MODELS.LARGE_4).toBe('mistral-large-4');
+      expect(MISTRAL_MODELS.SMALL_4).toBe('mistral-small-4');
+      expect(MISTRAL_MODELS.MAGISTRAL_MEDIUM).toBe('magistral-medium-latest');
+
+      const reasoningPayload = provider.formatRequest({
+        model: MISTRAL_MODELS.LARGE_4,
+        messages: [{ role: 'user', content: 'Prove convergence' }],
+        reasoningEffort: 'high',
+      });
+      expect(reasoningPayload.prompt_mode).toBe('reasoning');
+
+      const nonReasoningPayload = provider.formatRequest({
+        model: MISTRAL_MODELS.SMALL_4,
+        messages: [{ role: 'user', content: 'Hi' }],
+        reasoningEffort: 'none',
+      });
+      expect(nonReasoningPayload.prompt_mode).toBeUndefined();
+
+      const res = provider.formatResponse({
+        id: 'mis-4',
+        model: MISTRAL_MODELS.LARGE_4,
+        choices: [
+          {
+            message: { role: 'assistant', content: 'Converges.' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 60,
+          total_tokens: 100,
+          completion_tokens_details: { reasoning_tokens: 44 },
+        },
+      });
+      expect(res.usage?.reasoningTokens).toBe(44);
     });
   });
 });

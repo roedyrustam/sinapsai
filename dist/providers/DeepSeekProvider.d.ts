@@ -7,6 +7,19 @@
  */
 import type { ProviderConfig, UnifiedApiRequest, UnifiedApiResponse, UnifiedApiStreamChunk } from '../types/index.js';
 import type { Provider } from './Provider.js';
+export declare const DEEPSEEK_MODELS: {
+    readonly V4_PRO: 'deepseek-v4-pro';
+    readonly V4_1_FLASH: 'deepseek-v4.1-flash';
+    readonly V3_2: 'deepseek-v3.2';
+    readonly REASONER: 'deepseek-reasoner';
+    readonly R1: 'deepseek-r1';
+    readonly CHAT: 'deepseek-chat';
+};
+export declare const DEEPSEEK_AVAILABILITY_FALLBACKS: Record<string, string[]>;
+export declare const DEEPSEEK_DEFAULT_PRICING: Record<string, {
+    promptCostPer1k: number;
+    completionCostPer1k: number;
+}>;
 export declare class DeepSeekProvider implements Provider {
     id: string;
     name: string;

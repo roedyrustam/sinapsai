@@ -11,7 +11,7 @@ import type {
   UnifiedApiRequest,
   UnifiedApiStreamChunk,
 } from '../types/index.js';
-import { AnthropicProvider } from './AnthropicProvider.js';
+import { ANTHROPIC_MODELS, AnthropicProvider } from './AnthropicProvider.js';
 
 describe('AnthropicProvider', () => {
   const provider = new AnthropicProvider({ apiKey: 'test-key' });
@@ -569,6 +569,99 @@ describe('AnthropicProvider', () => {
           cache_control: { type: 'ephemeral' },
         },
       ]);
+    });
+
+    it('uses Adaptive Thinking, native json_schema output_config, 1h cache TTL, and developer role on Claude 5.5/4.6+', async () => {
+      const frontierProvider = new AnthropicProvider({
+        apiKey: 'test-key',
+        promptCaching: true,
+        promptCacheTtl: '1h',
+        extendedContext: true,
+        enableAvailabilityFallback: true,
+        defaultModel: ANTHROPIC_MODELS.CLAUDE_SONNET_5_5,
+      });
+
+      expect(frontierProvider.fallbackModels).toEqual([
+        ANTHROPIC_MODELS.CLAUDE_SONNET_4_6,
+        ANTHROPIC_MODELS.CLAUDE_OPUS_4_6,
+      ]);
+
+      const payload = frontierProvider.formatRequest({
+        model: ANTHROPIC_MODELS.CLAUDE_SONNET_5_5,
+        messages: [
+          { role: 'developer', content: 'Strict JSON only.' },
+          { role: 'user', content: 'Plan migration' },
+        ],
+        thinkingBudget: 'auto',
+        reasoningEffort: 'xhigh',
+        responseFormat: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'plan',
+            schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+          },
+        },
+      });
+
+      expect(payload.thinking).toEqual({ type: 'adaptive' });
+      expect(payload.output_config).toEqual({
+        effort: 'max',
+        format: {
+          type: 'json_schema',
+          schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+        },
+      });
+      expect(payload.system).toEqual([
+        {
+          type: 'text',
+          text: 'Strict JSON only.',
+          cache_control: { type: 'ephemeral', ttl: '1h' },
+        },
+      ]);
+
+      // Verify beta headers & cacheWriteTokens extraction in generateContent
+      let capturedHeaders: Record<string, string> = {};
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+        return {
+          ok: true,
+          headers: new Headers(),
+          json: async () => ({
+            id: 'msg_55',
+            model: 'claude-sonnet-5-5',
+            stop_reason: 'end_turn',
+            content: [{ type: 'text', text: '{"ok":true}' }],
+            usage: {
+              input_tokens: 100,
+              output_tokens: 25,
+              cache_read_input_tokens: 80,
+              cache_creation_input_tokens: 200,
+            },
+          }),
+        } as unknown as Response;
+      }) as typeof fetch;
+
+      try {
+        const res = (await frontierProvider.generateContent({
+          model: ANTHROPIC_MODELS.CLAUDE_SONNET_5_5,
+          messages: [
+            { role: 'system', content: 'Cacheable system instructions' },
+            { role: 'user', content: 'Hi' },
+          ],
+        })) as import('../types/index.js').UnifiedApiResponse;
+
+        expect(capturedHeaders['anthropic-beta']).toContain(
+          'extended-cache-ttl-2025-04-11',
+        );
+        expect(capturedHeaders['anthropic-beta']).toContain(
+          'context-1m-2025-08-07',
+        );
+        expect(res.usage?.cachedPromptTokens).toBe(80);
+        expect(res.usage?.cacheWriteTokens).toBe(200);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

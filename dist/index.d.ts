@@ -24,6 +24,7 @@ export * from './core/DatasetDistiller.js';
 export * from './core/DurableWorkflow.js';
 export * from './core/EpisodicMemory.js';
 export * from './core/FaithfulnessSentinel.js';
+export * from './core/FrontierModelRegistry.js';
 export * from './core/GeminiAgentBooster.js';
 export * from './core/HedgedExecutor.js';
 export * from './core/HybridRag.js';
@@ -56,4 +57,5 @@ export * from './utils/similarity.js';
 export * from './utils/streamAccumulator.js';
 export * from './utils/structuredOutput.js';
 export * from './utils/tracingExporter.js';
+export * from './version.js';
 //# sourceMappingURL=index.d.ts.map

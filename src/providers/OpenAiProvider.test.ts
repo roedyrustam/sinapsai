@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
-import { OpenAiProvider } from './OpenAiProvider.js';
+import { OPENAI_MODELS, OpenAiProvider } from './OpenAiProvider.js';
 
 describe('OpenAiProvider', () => {
   const provider = new OpenAiProvider({ apiKey: 'test-key' });
@@ -232,6 +232,200 @@ describe('OpenAiProvider', () => {
         expect(response.model).toBe('text-embedding-3-small');
         expect(response.data[0].embedding).toEqual([0.1, 0.2, 0.3]);
         expect(response.usage?.promptTokens).toBe(4);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('passes optional dimensions parameter to OpenAI embeddings API', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          object: 'list',
+          data: [{ object: 'embedding', index: 0, embedding: [0.5, 0.6] }],
+          model: 'text-embedding-3-large',
+          usage: { prompt_tokens: 3, total_tokens: 3 },
+        }),
+      });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mockFetch;
+
+      try {
+        await provider.generateEmbedding({
+          model: 'text-embedding-3-large',
+          input: 'Short dim vector',
+          dimensions: 512,
+        });
+        const body = JSON.parse(
+          (mockFetch.mock.calls[0]?.[1] as RequestInit)?.body as string,
+        );
+        expect(body.dimensions).toBe(512);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('GPT-5 / Frontier & Responses API (/v1/responses)', () => {
+    it('uses max_completion_tokens, developer role, xhigh effort, and omits temperature on GPT-5 models', () => {
+      const devProvider = new OpenAiProvider({
+        apiKey: 'test-key',
+        useDeveloperRole: true,
+      });
+
+      const payload = devProvider.formatRequest({
+        model: OPENAI_MODELS.GPT_5_6_SOL,
+        messages: [
+          { role: 'system', content: 'Strict contracts only.' },
+          { role: 'user', content: 'Audit lock protocol.' },
+        ],
+        maxTokens: 2048,
+        temperature: 0.7,
+        reasoningEffort: 'max',
+        verbosity: 'high',
+        serviceTier: 'priority',
+      });
+
+      expect(payload.messages[0]).toEqual({
+        role: 'developer',
+        content: 'Strict contracts only.',
+      });
+      expect(payload.max_completion_tokens).toBe(2048);
+      expect(payload.max_tokens).toBeUndefined();
+      expect(payload.temperature).toBeUndefined();
+      expect(payload.reasoning_effort).toBe('xhigh');
+      expect(payload.verbosity).toBe('high');
+      expect(payload.service_tier).toBe('priority');
+    });
+
+    it('formats and executes OpenAI Responses API (/v1/responses) for non-streaming and SSE streaming', async () => {
+      const respProvider = new OpenAiProvider({
+        apiKey: 'sk-resp',
+        apiMode: 'responses',
+      });
+
+      const reqPayload = respProvider.formatResponsesRequest({
+        model: OPENAI_MODELS.GPT_5_6_SOL,
+        messages: [
+          { role: 'system', content: 'System guide' },
+          { role: 'user', content: 'Summarize diff' },
+        ],
+        maxTokens: 1024,
+        reasoningEffort: 'xhigh',
+        webSearch: true,
+        previousResponseId: 'resp_prev_1',
+      });
+
+      expect(reqPayload.instructions).toBe('System guide');
+      expect(reqPayload.max_output_tokens).toBe(1024);
+      expect(reqPayload.reasoning).toEqual({ effort: 'xhigh' });
+      expect(reqPayload.previous_response_id).toBe('resp_prev_1');
+      expect(reqPayload.tools).toContainEqual({ type: 'web_search_preview' });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Headers(),
+          json: async () => ({
+            id: 'resp_123',
+            model: 'gpt-5.6-sol-medium',
+            status: 'completed',
+            output: [
+              {
+                type: 'reasoning',
+                summary: [
+                  { type: 'summary_text', text: 'Checking invariants.' },
+                ],
+              },
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Diff verified.' }],
+              },
+              {
+                type: 'function_call',
+                call_id: 'call_resp_1',
+                name: 'get_diff',
+                arguments: '{"id":1}',
+              },
+            ],
+            usage: {
+              input_tokens: 120,
+              output_tokens: 80,
+              total_tokens: 200,
+              input_tokens_details: { cached_tokens: 60 },
+              output_tokens_details: { reasoning_tokens: 45 },
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Headers(),
+          body: new ReadableStream({
+            start(controller) {
+              const enc = new TextEncoder();
+              controller.enqueue(
+                enc.encode(
+                  'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"Thinking... "}\n\n',
+                ),
+              );
+              controller.enqueue(
+                enc.encode(
+                  'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
+                ),
+              );
+              controller.enqueue(
+                enc.encode(
+                  'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_stream_1","model":"gpt-5.6-sol-medium","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":3}}}}\n\n',
+                ),
+              );
+              controller.close();
+            },
+          }),
+        });
+
+      try {
+        const res = (await respProvider.generateContent({
+          model: OPENAI_MODELS.GPT_5_6_SOL,
+          messages: [{ role: 'user', content: 'Go' }],
+        })) as import('../types/index.js').UnifiedApiResponse;
+
+        expect(globalThis.fetch).toHaveBeenNthCalledWith(
+          1,
+          'https://api.openai.com/v1/responses',
+          expect.objectContaining({ method: 'POST' }),
+        );
+        expect(res.choices[0].message.content).toBe('Diff verified.');
+        expect(res.choices[0].message.reasoning_content).toBe(
+          'Checking invariants.',
+        );
+        expect(res.choices[0].message.tool_calls?.[0].function.name).toBe(
+          'get_diff',
+        );
+        expect(res.usage?.reasoningTokens).toBe(45);
+        expect(res.usage?.cachedPromptTokens).toBe(60);
+
+        const stream = (await respProvider.generateContent({
+          model: OPENAI_MODELS.GPT_5_6_SOL,
+          messages: [{ role: 'user', content: 'Go stream' }],
+          stream: true,
+        })) as AsyncIterable<import('../types/index.js').UnifiedApiStreamChunk>;
+
+        const chunks = [];
+        for await (const c of stream) {
+          chunks.push(c);
+        }
+        expect(
+          chunks.some(
+            (c) => c.choices[0]?.delta?.reasoning_content === 'Thinking... ',
+          ),
+        ).toBe(true);
+        expect(
+          chunks.some((c) => c.choices[0]?.delta?.content === 'Hello'),
+        ).toBe(true);
+        expect(chunks.find((c) => c.usage)?.usage?.reasoningTokens).toBe(3);
       } finally {
         globalThis.fetch = originalFetch;
       }

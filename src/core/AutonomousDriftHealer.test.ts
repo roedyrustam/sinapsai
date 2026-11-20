@@ -96,5 +96,20 @@ describe('AutonomousDriftHealer (API Schema Drift & Self-Healing)', () => {
     );
     expect(deprecated.category).toBe('model_deprecated');
     expect(deprecated.recommendedAction).toBe('switch_to_fallback_model');
+    expect(deprecated.suggestedFallbackModel).toBe('gemini-3.8-flash');
+
+    const maxTokensDrift = AutonomousDriftHealer.diagnoseProviderError(
+      new Error(
+        "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+      ),
+    );
+    expect(maxTokensDrift.category).toBe('max_tokens_unsupported');
+    expect(maxTokensDrift.recommendedAction).toBe('use_max_completion_tokens');
+
+    const thinkingDrift = AutonomousDriftHealer.diagnoseProviderError(
+      new Error('Invalid thinkingBudget parameter: budget_tokens deprecated'),
+    );
+    expect(thinkingDrift.category).toBe('thinking_budget_unsupported');
+    expect(thinkingDrift.recommendedAction).toBe('adjust_thinking_config');
   });
 });

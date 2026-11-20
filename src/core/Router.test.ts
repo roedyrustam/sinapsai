@@ -1044,5 +1044,47 @@ describe('Router', () => {
         expect.objectContaining({ model: 'gemini-3.8-flash' }),
       );
     });
+
+    it('appends Anthropic 5.5 availability fallback and accumulates totalReasoningTokens metrics', async () => {
+      const claudeProvider = createMockProvider('anthropic-p');
+      claudeProvider.name = 'Anthropic';
+      claudeProvider.generateContent = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error('404 not provisioned'), { status: 404 }),
+        )
+        .mockResolvedValueOnce({
+          id: 'ok-4-6',
+          model: 'claude-sonnet-4-6',
+          choices: [
+            {
+              message: { role: 'assistant', content: 'Recovered via 4.6' },
+              finishReason: 'stop',
+            },
+          ],
+          usage: {
+            promptTokens: 50,
+            completionTokens: 40,
+            totalTokens: 90,
+            reasoningTokens: 25,
+          },
+        });
+
+      const router = new Router([claudeProvider], circuitBreaker);
+      const res = await router.execute({
+        model: 'claude-sonnet-5-5',
+        messages: [{ role: 'user', content: 'Synthesize' }],
+      });
+
+      expect(res.choices[0].message.content).toBe('Recovered via 4.6');
+      expect(claudeProvider.generateContent).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ model: 'claude-sonnet-4-6' }),
+      );
+
+      const metrics = router.getMetrics();
+      expect(metrics.totalReasoningTokens).toBe(25);
+      expect(metrics.providerMetrics['anthropic-p']?.reasoningTokens).toBe(25);
+    });
   });
 });

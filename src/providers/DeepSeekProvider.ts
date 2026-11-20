@@ -16,6 +16,37 @@ import { parseRateLimitHeaders } from '../utils/rateLimit.js';
 import { linkAbortSignal } from '../utils/signal.js';
 import type { Provider } from './Provider.js';
 
+export const DEEPSEEK_MODELS = {
+  V4_PRO: 'deepseek-v4-pro',
+  V4_1_FLASH: 'deepseek-v4.1-flash',
+  V3_2: 'deepseek-v3.2',
+  REASONER: 'deepseek-reasoner',
+  R1: 'deepseek-r1',
+  CHAT: 'deepseek-chat',
+} as const;
+
+export const DEEPSEEK_AVAILABILITY_FALLBACKS: Record<string, string[]> = {
+  'deepseek-v4-pro': ['deepseek-reasoner', 'deepseek-v3.2'],
+};
+
+export const DEEPSEEK_DEFAULT_PRICING: Record<
+  string,
+  { promptCostPer1k: number; completionCostPer1k: number }
+> = {
+  'deepseek-v4-pro': { promptCostPer1k: 0.00055, completionCostPer1k: 0.00219 },
+  'deepseek-v4.1-flash': {
+    promptCostPer1k: 0.00014,
+    completionCostPer1k: 0.00055,
+  },
+  'deepseek-v3.2': { promptCostPer1k: 0.00027, completionCostPer1k: 0.0011 },
+  'deepseek-reasoner': {
+    promptCostPer1k: 0.00055,
+    completionCostPer1k: 0.00219,
+  },
+  'deepseek-r1': { promptCostPer1k: 0.00055, completionCostPer1k: 0.00219 },
+  'deepseek-chat': { promptCostPer1k: 0.00027, completionCostPer1k: 0.0011 },
+};
+
 export class DeepSeekProvider implements Provider {
   id: string;
   name = 'DeepSeek';
@@ -128,12 +159,17 @@ export class DeepSeekProvider implements Provider {
         },
       ],
       usage: data.usage
-        ? {
+        ? (() => {
+          const reasoningTokens =
+            data.usage.completion_tokens_details?.reasoning_tokens;
+          return {
             promptTokens: data.usage.prompt_tokens || 0,
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
             cachedPromptTokens,
-          }
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+          };
+        })()
         : undefined,
     };
   }
@@ -190,24 +226,32 @@ export class DeepSeekProvider implements Provider {
                   model: parsed.model,
                   choices: chunk
                     ? [
-                        {
-                          delta: {
-                            role: chunk.delta?.role,
-                            content: chunk.delta?.content,
-                            reasoning_content: chunk.delta?.reasoning_content,
-                            tool_calls: chunk.delta?.tool_calls,
-                          },
-                          finishReason: chunk.finish_reason || null,
+                      {
+                        delta: {
+                          role: chunk.delta?.role,
+                          content: chunk.delta?.content,
+                          reasoning_content: chunk.delta?.reasoning_content,
+                          tool_calls: chunk.delta?.tool_calls,
                         },
-                      ]
+                        finishReason: chunk.finish_reason || null,
+                      },
+                    ]
                     : [],
                   usage: parsed.usage
-                    ? {
+                    ? (() => {
+                      const streamReasoningTokens =
+                        parsed.usage.completion_tokens_details
+                          ?.reasoning_tokens;
+                      return {
                         promptTokens: parsed.usage.prompt_tokens || 0,
                         completionTokens: parsed.usage.completion_tokens || 0,
                         totalTokens: parsed.usage.total_tokens || 0,
                         cachedPromptTokens,
-                      }
+                        ...(streamReasoningTokens !== undefined
+                          ? { reasoningTokens: streamReasoningTokens }
+                          : {}),
+                      };
+                    })()
                     : undefined,
                 };
               } catch (_e) {

@@ -17,6 +17,8 @@
  * @license MIT
  */
 
+import { SINAPSAI_VERSION } from '../version.js';
+
 export interface GenAiSpanAttribute {
   key: string;
   value: {
@@ -128,7 +130,7 @@ export function toOtelTracePayload(
   options: OtelTraceExportOptions = {},
 ): OtelTracePayload {
   const serviceName = options.serviceName ?? 'sinapsai-gateway';
-  const serviceVersion = options.serviceVersion ?? '3.0.0';
+  const serviceVersion = options.serviceVersion ?? SINAPSAI_VERSION;
 
   const resourceAttributes: GenAiSpanAttribute[] = [
     { key: 'service.name', value: { stringValue: serviceName } },

@@ -149,4 +149,38 @@ describe('VisionOptimizer', () => {
     expect(updated.image_url.detail).toBe('low');
     expect(updated.imageUrl?.detail).toBe('low');
   });
+
+  it('estimates xAI Grok vision tiles, Gemini mediaResolution tiers, and video tokens', () => {
+    const png = createMockPng(1000, 1000);
+    const grokEst = optimizer.estimateVisionTokens(png, 'xai');
+    expect(grokEst.tilesCount).toBe(9);
+    expect(grokEst.tokens).toBe(9 * 256);
+
+    const lowGem = optimizer.estimateVisionTokens(
+      png,
+      'gemini',
+      undefined,
+      'low',
+    );
+    expect(lowGem.tokens).toBe(258);
+
+    const highGem = optimizer.estimateVisionTokens(
+      png,
+      'gemini',
+      undefined,
+      'high',
+    );
+    expect(highGem.tokens).toBeGreaterThanOrEqual(560);
+
+    const vidLow = optimizer.estimateVideoTokens(
+      { durationSeconds: 10, fps: 1, mediaResolution: 'low' },
+      'gemini',
+    );
+    const vidHigh = optimizer.estimateVideoTokens(
+      { durationSeconds: 10, fps: 1, mediaResolution: 'high' },
+      'gemini',
+    );
+    expect(vidLow.tokens).toBe(10 * 70 + 10 * 32);
+    expect(vidHigh.tokens).toBe(10 * 560 + 10 * 32);
+  });
 });

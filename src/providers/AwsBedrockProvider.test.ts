@@ -224,4 +224,66 @@ describe('AwsBedrockProvider', () => {
     expect(callArgs[0]).toContain('/model/');
     expect(callArgs[1].headers.authorization).toContain('AWS4-HMAC-SHA256');
   });
+
+  it('supports Claude 5.5/4.7 adaptive thinking, developer role, cachePoint, and reasoningContent', () => {
+    const provider = new AwsBedrockProvider({
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'SECRETEXAMPLE',
+      promptCaching: true,
+    });
+
+    const { modelId, payload } = provider.formatRequest({
+      model: BEDROCK_MODELS.CLAUDE_SONNET_5_5,
+      messages: [
+        { role: 'developer', content: 'Enforce strict schema invariants.' },
+        { role: 'user', content: 'Design distributed lock.' },
+      ],
+      thinkingBudget: 'auto',
+      reasoningEffort: 'xhigh',
+    });
+
+    expect(modelId).toBe(BEDROCK_MODELS.CLAUDE_SONNET_5_5);
+    expect(payload.system).toEqual([
+      { text: 'Enforce strict schema invariants.' },
+      { cachePoint: { type: 'default' } },
+    ]);
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'max' },
+    });
+
+    const parsed = provider.formatResponse(
+      {
+        output: {
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                reasoningContent: {
+                  reasoningText: { text: 'Considering Quorum...' },
+                },
+              },
+              { text: 'Use fencing tokens.' },
+            ],
+          },
+        },
+        stopReason: 'end_turn',
+        usage: {
+          inputTokens: 500,
+          outputTokens: 120,
+          totalTokens: 620,
+          cacheReadInputTokens: 400,
+          cacheWriteInputTokens: 50,
+        },
+      },
+      modelId,
+    );
+
+    expect(parsed.choices[0].message.reasoning_content).toBe(
+      'Considering Quorum...',
+    );
+    expect(parsed.choices[0].message.content).toBe('Use fencing tokens.');
+    expect(parsed.usage?.cachedPromptTokens).toBe(400);
+    expect(parsed.usage?.cacheWriteTokens).toBe(50);
+  });
 });

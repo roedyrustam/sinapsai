@@ -198,4 +198,64 @@ describe('AzureOpenAiProvider', () => {
       '/openai/deployments/text-embedding-3-small/embeddings?api-version=2024-10-21',
     );
   });
+
+  it('supports Azure OpenAI v1 API mode, GPT-5 max_completion_tokens, xhigh effort, and reasoningTokens', async () => {
+    const provider = new AzureOpenAiProvider({
+      resourceName: 'contoso-ai',
+      apiKey: 'secret-azure-key',
+      apiMode: 'v1',
+    });
+
+    const { payload } = provider.formatRequest({
+      model: 'gpt-5.4',
+      messages: [{ role: 'user', content: 'Analyze latency' }],
+      maxTokens: 1500,
+      temperature: 0.7,
+      reasoningEffort: 'max',
+    });
+
+    expect(payload.model).toBe('gpt-5.4');
+    expect(payload.max_completion_tokens).toBe(1500);
+    expect(payload.max_tokens).toBeUndefined();
+    expect(payload.temperature).toBeUndefined();
+    expect(payload.reasoning_effort).toBe('xhigh');
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({
+        id: 'az-v1',
+        model: 'gpt-5.4',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'v1 OK' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 40,
+          total_tokens: 60,
+          completion_tokens_details: { reasoning_tokens: 28 },
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const response = await provider.generateContent({
+        model: 'gpt-5.4',
+        messages: [{ role: 'user', content: 'Hi' }],
+      });
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        'https://contoso-ai.openai.azure.com/openai/v1/chat/completions',
+      );
+      if ('usage' in response && response.usage) {
+        expect(response.usage.reasoningTokens).toBe(28);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

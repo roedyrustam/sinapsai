@@ -21,7 +21,7 @@ export interface RealtimeConnectOptions {
    */
   provider?: RealtimeProviderType;
   /**
-   * Model identifier (e.g. 'gpt-4o-realtime-preview' or 'gemini-2.0-flash-exp')
+   * Model identifier (e.g. 'gpt-realtime', 'gpt-4o-realtime-preview', or 'gemini-3.1-flash-live-preview')
    */
   model?: string;
   /**
@@ -33,7 +33,7 @@ export interface RealtimeConnectOptions {
    */
   url?: string;
   /**
-   * Desired voice output (e.g. 'alloy', 'echo', 'shimmer', 'Puck', 'Charon', 'Aoede')
+   * Desired voice output (e.g. 'alloy', 'marin', 'cedar', 'Puck', 'Charon', 'Aoede')
    */
   voice?: string;
   /**
@@ -48,10 +48,14 @@ export interface RealtimeConnectOptions {
    * Event handlers
    */
   onOpen?: () => void;
+  onSetupComplete?: () => void;
   onClose?: (code: number, reason: string) => void;
   onError?: (err: Error) => void;
   onTextDelta?: (text: string) => void;
+  onThinkingDelta?: (text: string) => void;
   onAudioDelta?: (base64Audio: string) => void;
+  onTurnComplete?: () => void;
+  onInterrupted?: () => void;
   onRawMessage?: (data: unknown) => void;
 }
 
@@ -64,24 +68,32 @@ export class RealtimeSession {
     this.options = options;
   }
 
+  private getProvider(): RealtimeProviderType {
+    return this.options.provider || 'openai';
+  }
+
+  private getModel(): string {
+    const provider = this.getProvider();
+    return (
+      this.options.model ||
+      (provider === 'openai' ? 'gpt-realtime' : 'gemini-3.1-flash-live-preview')
+    );
+  }
+
   /**
    * Resolves the WebSocket URL based on provider and model.
    */
   private resolveUrl(): string {
     if (this.options.url) return this.options.url;
 
-    const provider = this.options.provider || 'openai';
-    const model =
-      this.options.model ||
-      (provider === 'openai'
-        ? 'gpt-4o-realtime-preview'
-        : 'gemini-2.0-flash-exp');
+    const provider = this.getProvider();
+    const model = this.getModel();
 
     if (provider === 'openai') {
-      return `wss://api.openai.com/v1/realtime?model=${model}`;
+      return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
     if (provider === 'gemini') {
-      return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.options.apiKey}`;
+      return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.options.apiKey ?? ''}`;
     }
 
     throw new Error(
@@ -106,7 +118,7 @@ export class RealtimeSession {
     return new Promise((resolve, reject) => {
       try {
         const protocols =
-          this.options.provider === 'openai'
+          this.getProvider() === 'openai'
             ? ['realtime', `openai-insecure-api-key.${this.options.apiKey}`]
             : undefined;
         this.ws = protocols
@@ -150,7 +162,8 @@ export class RealtimeSession {
   private initializeSession(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    if (this.options.provider === 'openai') {
+    const provider = this.getProvider();
+    if (provider === 'openai') {
       const sessionUpdate = {
         type: 'session.update',
         session: {
@@ -168,6 +181,37 @@ export class RealtimeSession {
         },
       };
       this.ws.send(JSON.stringify(sessionUpdate));
+    } else if (provider === 'gemini') {
+      const model = this.getModel();
+      const modelPath = model.startsWith('models/') ? model : `models/${model}`;
+      const modalities = this.options.modalities
+        ? this.options.modalities.map((m) => m.toUpperCase())
+        : ['AUDIO'];
+      const generationConfig: Record<string, unknown> = {
+        responseModalities: modalities,
+      };
+      if (this.options.voice) {
+        generationConfig.speechConfig = {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: this.options.voice,
+            },
+          },
+        };
+      }
+
+      const setup: Record<string, unknown> = {
+        model: modelPath,
+        generationConfig,
+        outputAudioTranscription: {},
+      };
+      if (this.options.instructions) {
+        setup.systemInstruction = {
+          parts: [{ text: this.options.instructions }],
+        };
+      }
+
+      this.ws.send(JSON.stringify({ setup }));
     }
   }
 
@@ -177,25 +221,79 @@ export class RealtimeSession {
   private handleIncomingMessage(rawData: unknown): void {
     try {
       const text = typeof rawData === 'string' ? rawData : String(rawData);
-      const parsed = JSON.parse(text) as Record<string, unknown>;
+      // biome-ignore lint/suspicious/noExplicitAny: dynamic wire event payload
+      const parsed = JSON.parse(text) as Record<string, any>;
       this.options.onRawMessage?.(parsed);
 
-      // Handle OpenAI Realtime Protocol
+      // Handle OpenAI Realtime Beta & GA Protocol
       if (
-        parsed.type === 'response.audio_transcript.delta' &&
+        (parsed.type === 'response.audio_transcript.delta' ||
+          parsed.type === 'response.output_audio_transcript.delta') &&
         typeof parsed.delta === 'string'
       ) {
         this.options.onTextDelta?.(parsed.delta);
       } else if (
-        parsed.type === 'response.audio.delta' &&
+        (parsed.type === 'response.audio.delta' ||
+          parsed.type === 'response.output_audio.delta') &&
         typeof parsed.delta === 'string'
       ) {
         this.options.onAudioDelta?.(parsed.delta);
       } else if (
-        parsed.type === 'response.text.delta' &&
+        (parsed.type === 'response.text.delta' ||
+          parsed.type === 'response.output_text.delta') &&
         typeof parsed.delta === 'string'
       ) {
         this.options.onTextDelta?.(parsed.delta);
+      } else if (parsed.type === 'response.done') {
+        this.options.onTurnComplete?.();
+      } else if (parsed.type === 'input_audio_buffer.speech_started') {
+        this.options.onInterrupted?.();
+      }
+
+      // Handle Gemini Live BidiGenerateContent Server Events
+      if (parsed.setupComplete !== undefined) {
+        this.options.onSetupComplete?.();
+      }
+      if (parsed.serverContent && typeof parsed.serverContent === 'object') {
+        const sc = parsed.serverContent as Record<string, unknown>;
+        if (sc.interrupted === true) {
+          this.options.onInterrupted?.();
+        }
+        const outTrans = sc.outputTranscription as
+          | { text?: string }
+          | undefined;
+        if (typeof outTrans?.text === 'string' && outTrans.text) {
+          this.options.onTextDelta?.(outTrans.text);
+        }
+        const modelTurn = sc.modelTurn as
+          | {
+              parts?: Array<{
+                text?: string;
+                thought?: boolean | string;
+                inlineData?: { mimeType?: string; data?: string };
+              }>;
+            }
+          | undefined;
+        if (Array.isArray(modelTurn?.parts)) {
+          for (const part of modelTurn.parts) {
+            if (typeof part.thought === 'string') {
+              this.options.onThinkingDelta?.(part.thought);
+            } else if (part.thought && typeof part.text === 'string') {
+              this.options.onThinkingDelta?.(part.text);
+            } else if (typeof part.text === 'string' && part.text) {
+              this.options.onTextDelta?.(part.text);
+            }
+            if (
+              part.inlineData?.data &&
+              part.inlineData.mimeType?.startsWith('audio/')
+            ) {
+              this.options.onAudioDelta?.(part.inlineData.data);
+            }
+          }
+        }
+        if (sc.turnComplete === true) {
+          this.options.onTurnComplete?.();
+        }
       }
     } catch {
       // Discard unparseable binary or raw frames
@@ -208,6 +306,18 @@ export class RealtimeSession {
   public sendText(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Realtime session is not open.');
+    }
+
+    if (this.getProvider() === 'gemini') {
+      this.ws.send(
+        JSON.stringify({
+          clientContent: {
+            turns: [{ role: 'user', parts: [{ text }] }],
+            turnComplete: true,
+          },
+        }),
+      );
+      return;
     }
 
     const event = {
@@ -227,9 +337,26 @@ export class RealtimeSession {
   /**
    * Appends PCM16 audio chunks in base64 format.
    */
-  public sendAudio(base64Audio: string): void {
+  public sendAudio(
+    base64Audio: string,
+    mimeType = 'audio/pcm;rate=16000',
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Realtime session is not open.');
+    }
+
+    if (this.getProvider() === 'gemini') {
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            audio: {
+              mimeType,
+              data: base64Audio,
+            },
+          },
+        }),
+      );
+      return;
     }
 
     const event = {
@@ -240,10 +367,61 @@ export class RealtimeSession {
   }
 
   /**
+   * Streams an image/video frame into the live multimodal session (Gemini Live / OpenAI Realtime).
+   */
+  public sendVideoFrame(base64Data: string, mimeType = 'image/jpeg'): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('Realtime session is not open.');
+    }
+
+    if (this.getProvider() === 'gemini') {
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            video: {
+              mimeType,
+              data: base64Data,
+            },
+          },
+        }),
+      );
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_image',
+              image_url: `data:${mimeType};base64,${base64Data}`,
+            },
+          ],
+        },
+      }),
+    );
+  }
+
+  /**
    * Commits the current audio buffer to trigger model response.
    */
   public commitAudio(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    if (this.getProvider() === 'gemini') {
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            audioStreamEnd: true,
+          },
+        }),
+      );
+      return;
+    }
+
     this.ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
     this.ws.send(JSON.stringify({ type: 'response.create' }));
   }
@@ -285,7 +463,7 @@ export class RealtimeClient {
     model?: string;
     baseUrl?: string;
   }): Promise<{ answerSdp: string }> {
-    const model = params.model || 'gpt-4o-realtime-preview';
+    const model = params.model || 'gpt-realtime';
     const baseUrl = params.baseUrl || 'https://api.openai.com/v1/realtime';
     const url = `${baseUrl}?model=${encodeURIComponent(model)}`;
 

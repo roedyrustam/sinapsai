@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { UnifiedApiRequest } from '../types/index.js';
-import { DeepSeekProvider } from './DeepSeekProvider.js';
+import { DEEPSEEK_MODELS, DeepSeekProvider } from './DeepSeekProvider.js';
 
 describe('DeepSeekProvider', () => {
   const provider = new DeepSeekProvider({ apiKey: 'test-key' });
@@ -274,6 +274,67 @@ describe('DeepSeekProvider', () => {
         totalTokens: 45,
         cachedPromptTokens: 24,
       });
+    });
+
+    it('exposes DeepSeek V4 frontier model constants and extracts reasoningTokens in non-stream and stream', async () => {
+      expect(DEEPSEEK_MODELS.V4_PRO).toBe('deepseek-v4-pro');
+      expect(DEEPSEEK_MODELS.V4_1_FLASH).toBe('deepseek-v4.1-flash');
+      expect(DEEPSEEK_MODELS.V3_2).toBe('deepseek-v3.2');
+
+      const formatted = provider.formatResponse({
+        id: 'ds-v4',
+        model: DEEPSEEK_MODELS.V4_PRO,
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Result: 42',
+              reasoning_content: 'Step-by-step...',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 50,
+          completion_tokens: 90,
+          total_tokens: 140,
+          completion_tokens_details: { reasoning_tokens: 70 },
+        },
+      });
+      expect(formatted.usage?.reasoningTokens).toBe(70);
+
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers(),
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"id":"ds-s","model":"deepseek-v4-pro","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"completion_tokens_details":{"reasoning_tokens":12}}}\n\n',
+              ),
+            );
+            controller.close();
+          },
+        }),
+      });
+
+      try {
+        const stream = await provider.generateContent({
+          model: DEEPSEEK_MODELS.V4_PRO,
+          messages: [{ role: 'user', content: 'Prove' }],
+          stream: true,
+        });
+        const chunks = [];
+        for await (const c of stream as AsyncIterable<
+          import('../types/index.js').UnifiedApiStreamChunk
+        >) {
+          chunks.push(c);
+        }
+        expect(chunks[0].usage?.reasoningTokens).toBe(12);
+      } finally {
+        global.fetch = originalFetch;
+      }
     });
   });
 });

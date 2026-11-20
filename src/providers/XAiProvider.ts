@@ -20,12 +20,44 @@ import { parseSSE } from '../utils/stream.js';
 import type { Provider } from './Provider.js';
 
 export const XAI_MODELS = {
+  GROK_4_7_HIGH_FAST: 'grok-4-7-high-fast',
+  GROK_4_7: 'grok-4.7',
+  GROK_4_6_HIGH_FAST: 'grok-4-6-high-fast',
+  GROK_4_3: 'grok-4.3',
+  GROK_4_MINI: 'grok-4-mini',
   GROK_3: 'grok-3-beta',
   GROK_3_FAST: 'grok-3-fast-beta',
   GROK_3_MINI: 'grok-3-mini-beta',
   GROK_3_MINI_FAST: 'grok-3-mini-fast-beta',
   GROK_2_VISION: 'grok-2-vision-1212',
 } as const;
+
+export const XAI_AVAILABILITY_FALLBACKS: Record<string, string[]> = {
+  'grok-4-7-high-fast': ['grok-4-6-high-fast', 'grok-4.3'],
+  'grok-4.7': ['grok-4-6-high-fast', 'grok-4.3'],
+};
+
+export const XAI_DEFAULT_PRICING: Record<
+  string,
+  { promptCostPer1k: number; completionCostPer1k: number }
+> = {
+  'grok-4-7-high-fast': { promptCostPer1k: 0.001, completionCostPer1k: 0.003 },
+  'grok-4.7': { promptCostPer1k: 0.002, completionCostPer1k: 0.006 },
+  'grok-4-6-high-fast': {
+    promptCostPer1k: 0.0005,
+    completionCostPer1k: 0.0015,
+  },
+  'grok-4.3': { promptCostPer1k: 0.0015, completionCostPer1k: 0.005 },
+  'grok-4-mini': { promptCostPer1k: 0.0003, completionCostPer1k: 0.0005 },
+  'grok-3-beta': { promptCostPer1k: 0.003, completionCostPer1k: 0.015 },
+  'grok-3-fast-beta': { promptCostPer1k: 0.005, completionCostPer1k: 0.025 },
+  'grok-3-mini-beta': { promptCostPer1k: 0.0003, completionCostPer1k: 0.0005 },
+  'grok-3-mini-fast-beta': {
+    promptCostPer1k: 0.0006,
+    completionCostPer1k: 0.004,
+  },
+  'grok-2-vision-1212': { promptCostPer1k: 0.002, completionCostPer1k: 0.01 },
+};
 
 export class XAiProvider implements Provider {
   id: string;
@@ -110,12 +142,27 @@ export class XAiProvider implements Provider {
       request.thinkingBudget === 'auto'
         ? GeminiAgentBooster.computeDynamicThinkingBudget(request)
         : request.thinkingBudget;
-    if (request.reasoningEffort) {
-      payload.reasoning_effort =
-        request.reasoningEffort === 'medium' ? 'high' : request.reasoningEffort;
+    if (request.reasoningEffort && request.reasoningEffort !== 'none') {
+      if (
+        request.reasoningEffort === 'medium' ||
+        request.reasoningEffort === 'xhigh' ||
+        request.reasoningEffort === 'max'
+      ) {
+        payload.reasoning_effort = 'high';
+      } else if (request.reasoningEffort === 'minimal') {
+        payload.reasoning_effort = 'low';
+      } else {
+        payload.reasoning_effort = request.reasoningEffort;
+      }
     } else if (resolvedThinkingBudget && resolvedThinkingBudget > 0) {
       payload.reasoning_effort =
         resolvedThinkingBudget >= 2048 ? 'high' : 'low';
+    }
+    if (request.webSearch) {
+      payload.search_parameters = {
+        mode: 'auto',
+        return_citations: true,
+      };
     }
     if (request.tools) {
       payload.tools = request.tools;
@@ -139,6 +186,8 @@ export class XAiProvider implements Provider {
     const choice = data.choices?.[0];
     const cachedPromptTokens =
       data.usage?.prompt_tokens_details?.cached_tokens ?? undefined;
+    const reasoningTokens =
+      data.usage?.completion_tokens_details?.reasoning_tokens;
 
     return {
       id: data.id || `xai-${Date.now()}`,
@@ -160,6 +209,7 @@ export class XAiProvider implements Provider {
             completionTokens: data.usage.completion_tokens || 0,
             totalTokens: data.usage.total_tokens || 0,
             cachedPromptTokens,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           }
         : undefined,
     };
@@ -229,12 +279,20 @@ export class XAiProvider implements Provider {
                       ]
                     : [],
                   usage: parsed.usage
-                    ? {
-                        promptTokens: parsed.usage.prompt_tokens || 0,
-                        completionTokens: parsed.usage.completion_tokens || 0,
-                        totalTokens: parsed.usage.total_tokens || 0,
-                        cachedPromptTokens,
-                      }
+                    ? (() => {
+                        const streamReasoningTokens =
+                          parsed.usage.completion_tokens_details
+                            ?.reasoning_tokens;
+                        return {
+                          promptTokens: parsed.usage.prompt_tokens || 0,
+                          completionTokens: parsed.usage.completion_tokens || 0,
+                          totalTokens: parsed.usage.total_tokens || 0,
+                          cachedPromptTokens,
+                          ...(streamReasoningTokens !== undefined
+                            ? { reasoningTokens: streamReasoningTokens }
+                            : {}),
+                        };
+                      })()
                     : undefined,
                 };
               } catch (_e) {}

@@ -55,6 +55,12 @@ export interface AzureOpenAiProviderConfig extends ProviderConfig {
    * Sent as `Authorization: Bearer {bearerToken}`.
    */
   bearerToken?: string;
+  /**
+   * Endpoint mode:
+   * - 'deployments': Legacy `/openai/deployments/{deployment}/chat/completions?api-version=...` (default)
+   * - 'v1': Next-generation unified Azure OpenAI `/openai/v1/chat/completions` & `/openai/v1/embeddings`
+   */
+  apiMode?: 'deployments' | 'v1';
 }
 
 export class AzureOpenAiProvider implements Provider {
@@ -163,13 +169,21 @@ export class AzureOpenAiProvider implements Provider {
       messages,
     };
 
+    const lowerDeployment = deployment.toLowerCase();
     const isReasoningModel =
-      deployment.startsWith('o1') ||
-      deployment.startsWith('o3') ||
-      deployment.startsWith('o4');
+      lowerDeployment.startsWith('o1') ||
+      lowerDeployment.startsWith('o3') ||
+      lowerDeployment.startsWith('o4') ||
+      lowerDeployment.startsWith('gpt-5') ||
+      lowerDeployment.startsWith('gpt-6');
+
+    if (this.config.apiMode === 'v1') {
+      payload.model = deployment;
+    }
 
     if (request.reasoningEffort) {
-      payload.reasoning_effort = request.reasoningEffort;
+      payload.reasoning_effort =
+        request.reasoningEffort === 'max' ? 'xhigh' : request.reasoningEffort;
     }
     if (request.temperature !== undefined && !isReasoningModel) {
       payload.temperature = request.temperature;
@@ -203,6 +217,8 @@ export class AzureOpenAiProvider implements Provider {
     const choice = data.choices?.[0];
     const reasoningContent =
       choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? null;
+    const reasoningTokens =
+      data.usage?.completion_tokens_details?.reasoning_tokens;
 
     return {
       id: data.id || `azure-${Date.now()}`,
@@ -225,6 +241,7 @@ export class AzureOpenAiProvider implements Provider {
             totalTokens: data.usage.total_tokens,
             cachedPromptTokens:
               data.usage.prompt_tokens_details?.cached_tokens ?? undefined,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           }
         : undefined,
     };
@@ -244,7 +261,11 @@ export class AzureOpenAiProvider implements Provider {
 
     const baseUrl =
       this.config.baseUrl || `https://${this.resourceName}.openai.azure.com`;
-    const url = `${baseUrl.replace(/\/+$/, '')}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${this.apiVersion}`;
+    const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+    const url =
+      this.config.apiMode === 'v1'
+        ? `${cleanBaseUrl}/openai/v1/chat/completions`
+        : `${cleanBaseUrl}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${this.apiVersion}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -279,6 +300,8 @@ export class AzureOpenAiProvider implements Provider {
                 const chunk = parsed.choices?.[0];
                 let chunkUsage: UnifiedApiStreamChunk['usage'] | undefined;
                 if (parsed.usage) {
+                  const streamReasoningTokens =
+                    parsed.usage.completion_tokens_details?.reasoning_tokens;
                   chunkUsage = {
                     promptTokens: parsed.usage.prompt_tokens || 0,
                     completionTokens: parsed.usage.completion_tokens || 0,
@@ -286,6 +309,9 @@ export class AzureOpenAiProvider implements Provider {
                     cachedPromptTokens:
                       parsed.usage.prompt_tokens_details?.cached_tokens ??
                       undefined,
+                    ...(streamReasoningTokens !== undefined
+                      ? { reasoningTokens: streamReasoningTokens }
+                      : {}),
                   };
                 }
                 yield {
@@ -347,7 +373,11 @@ export class AzureOpenAiProvider implements Provider {
 
     const baseUrl =
       this.config.baseUrl || `https://${this.resourceName}.openai.azure.com`;
-    const url = `${baseUrl.replace(/\/+$/, '')}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${this.apiVersion}`;
+    const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+    const url =
+      this.config.apiMode === 'v1'
+        ? `${cleanBaseUrl}/openai/v1/embeddings`
+        : `${cleanBaseUrl}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${this.apiVersion}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -361,6 +391,7 @@ export class AzureOpenAiProvider implements Provider {
         method: 'POST',
         headers,
         body: JSON.stringify({
+          ...(this.config.apiMode === 'v1' ? { model: deployment } : {}),
           input: request.input,
           dimensions: request.dimensions,
         }),

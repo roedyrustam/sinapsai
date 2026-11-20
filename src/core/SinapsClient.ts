@@ -345,6 +345,43 @@ export class SinapsClient {
     this.storage = options.storage || new InMemoryStorage();
     this.hooks = options.hooks;
     this.mcp = options.mcpBridge || new McpToolBridge();
+    if (!this.mcp.hasSamplingHandler()) {
+      this.mcp.setSamplingHandler(async (samplingReq) => {
+        const hintModel =
+          samplingReq.modelPreferences?.hints?.find((h) => h.name)?.name ||
+          'gemini-3.8-flash';
+        const messages: ChatMessage[] = [];
+        if (samplingReq.systemPrompt) {
+          messages.push({ role: 'system', content: samplingReq.systemPrompt });
+        }
+        for (const msg of samplingReq.messages) {
+          messages.push({
+            role: msg.role,
+            content:
+              msg.content.type === 'text' && msg.content.text
+                ? msg.content.text
+                : JSON.stringify(msg.content),
+          });
+        }
+        const completion = (await this.chat.completions.create({
+          model: hintModel,
+          messages,
+          maxTokens: samplingReq.maxTokens,
+          temperature: samplingReq.temperature,
+        })) as UnifiedApiResponse;
+        const choice = completion.choices?.[0];
+        return {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: choice?.message?.content || '',
+          },
+          model: completion.model || hintModel,
+          stopReason:
+            choice?.finishReason === 'length' ? 'maxTokens' : 'endTurn',
+        };
+      });
+    }
 
     if (options.modelAliases) {
       for (const [alias, target] of Object.entries(options.modelAliases)) {
@@ -706,10 +743,17 @@ export class SinapsClient {
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
           thinkingBudget,
+          thinkingLevel: request.thinkingLevel,
+          includeThoughts: request.includeThoughts,
           reasoningEffort: request.reasoningEffort,
           cachedContent: request.cachedContent,
           googleSearch: request.googleSearch,
+          webSearch: request.webSearch,
           codeExecution: request.codeExecution,
+          verbosity: request.verbosity,
+          serviceTier: request.serviceTier,
+          previousResponseId: request.previousResponseId,
+          promptCacheTtl: request.promptCacheTtl,
           user: request.user,
           llmo: request.llmo,
         };
@@ -885,8 +929,30 @@ export class SinapsClient {
                 finalResponse.usage?.promptTokens ?? 0,
               'gen_ai.usage.completion_tokens':
                 finalResponse.usage?.completionTokens ?? 0,
+              'gen_ai.usage.input_tokens':
+                finalResponse.usage?.promptTokens ?? 0,
+              'gen_ai.usage.output_tokens':
+                finalResponse.usage?.completionTokens ?? 0,
               'gen_ai.usage.total_tokens':
                 finalResponse.usage?.totalTokens ?? 0,
+              ...(finalResponse.usage?.reasoningTokens !== undefined
+                ? {
+                    'gen_ai.usage.reasoning_tokens':
+                      finalResponse.usage.reasoningTokens,
+                  }
+                : {}),
+              ...(finalResponse.usage?.cachedPromptTokens !== undefined
+                ? {
+                    'gen_ai.usage.cache_read.input_tokens':
+                      finalResponse.usage.cachedPromptTokens,
+                  }
+                : {}),
+              ...(finalResponse.usage?.cacheWriteTokens !== undefined
+                ? {
+                    'gen_ai.usage.cache_creation.input_tokens':
+                      finalResponse.usage.cacheWriteTokens,
+                  }
+                : {}),
               ...(fromClusteredCache && clusterHitMeta
                 ? {
                     'sinapsai.cache.hit': true,

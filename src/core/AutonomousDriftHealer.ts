@@ -35,13 +35,17 @@ export interface ProviderErrorRemediation {
     | 'context_length_exceeded'
     | 'model_deprecated'
     | 'auth_failure'
+    | 'max_tokens_unsupported'
+    | 'thinking_budget_unsupported'
     | 'transient';
   isTransient: boolean;
   recommendedAction:
     | 'retry_with_backoff'
     | 'switch_to_fallback_model'
     | 'compress_context'
-    | 'check_api_key';
+    | 'check_api_key'
+    | 'use_max_completion_tokens'
+    | 'adjust_thinking_config';
   suggestedFallbackModel?: string;
   normalizedMessage: string;
 }
@@ -296,7 +300,43 @@ export class AutonomousDriftHealer {
       };
     }
 
-    // 2. Context Length Exceeded
+    // 2. Frontier max_tokens vs max_completion_tokens drift (GPT-5 / o3 / o4)
+    if (
+      lower.includes('max_completion_tokens') ||
+      (lower.includes('max_tokens') &&
+        (lower.includes('unsupported') || lower.includes('not supported')))
+    ) {
+      return {
+        category: 'max_tokens_unsupported',
+        isTransient: false,
+        recommendedAction: 'use_max_completion_tokens',
+        normalizedMessage:
+          'Target reasoning/GPT-5 model requires max_completion_tokens instead of max_tokens.',
+      };
+    }
+
+    // 3. Frontier thinking / reasoning configuration drift (Adaptive Thinking / thinkingLevel)
+    if (
+      (lower.includes('budget_tokens') ||
+        lower.includes('thinkingbudget') ||
+        lower.includes('thinking_budget') ||
+        lower.includes('thinkinglevel') ||
+        lower.includes('reasoning_effort')) &&
+      (lower.includes('unsupported') ||
+        lower.includes('invalid') ||
+        lower.includes('not allowed') ||
+        lower.includes('deprecated'))
+    ) {
+      return {
+        category: 'thinking_budget_unsupported',
+        isTransient: false,
+        recommendedAction: 'adjust_thinking_config',
+        normalizedMessage:
+          'Model rejected thinking or reasoning configuration parameter; use adaptive thinking or thinkingLevel.',
+      };
+    }
+
+    // 4. Context Length Exceeded
     if (
       lower.includes('context length') ||
       lower.includes('maximum context') ||
@@ -307,12 +347,12 @@ export class AutonomousDriftHealer {
         category: 'context_length_exceeded',
         isTransient: false,
         recommendedAction: 'compress_context',
-        suggestedFallbackModel: 'gemini-2.5-flash', // 1M context window
+        suggestedFallbackModel: 'gemini-4-argon', // 2M context window
         normalizedMessage: 'Prompt exceeded model context window limit.',
       };
     }
 
-    // 3. Model Deprecated / Not Found
+    // 5. Model Deprecated / Not Found
     if (
       lower.includes('model_not_found') ||
       lower.includes('does not exist') ||
@@ -323,13 +363,13 @@ export class AutonomousDriftHealer {
         category: 'model_deprecated',
         isTransient: false,
         recommendedAction: 'switch_to_fallback_model',
-        suggestedFallbackModel: 'gemini-2.5-flash',
+        suggestedFallbackModel: 'gemini-3.8-flash',
         normalizedMessage:
           'Target model was not found or has been deprecated by provider.',
       };
     }
 
-    // 4. Authentication Failure
+    // 6. Authentication Failure
     if (
       lower.includes('401') ||
       lower.includes('invalid api key') ||
@@ -344,7 +384,7 @@ export class AutonomousDriftHealer {
       };
     }
 
-    // 5. Transient Server Errors (500, 502, 503, 504, timeout, network)
+    // 7. Transient Server Errors (500, 502, 503, 504, timeout, network)
     return {
       category: 'transient',
       isTransient: true,

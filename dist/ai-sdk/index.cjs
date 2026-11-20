@@ -386,11 +386,25 @@ var GEMINI_MODELS = {
   EMBEDDING_001: "gemini-embedding-001"};
 var GEMINI_AVAILABILITY_FALLBACKS = {
   "gemini-4-pro": ["gemini-3.8-flash"],
-  "gemini-4-argon": ["gemini-3.8-flash"]
+  "gemini-4-argon": ["gemini-3.8-flash"],
+  "gemini-4-carbon": ["gemini-3.8-flash"],
+  "gemini-4-neon": ["gemini-3.8-flash"],
+  "gemini-4-hydrogen": ["gemini-3.8-flash"],
+  "gemini-4-flash": ["gemini-3.8-flash"],
+  "gemini-3.1-pro": ["gemini-3.8-flash"]
 };
 var GEMINI_DEFAULT_PRICING = {
   "gemini-4-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
   "gemini-4-argon": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
+  "gemini-4-carbon": { promptCostPer1k: 1e-4, completionCostPer1k: 4e-4 },
+  "gemini-4-neon": { promptCostPer1k: 4e-4, completionCostPer1k: 16e-4 },
+  "gemini-4-hydrogen": { promptCostPer1k: 3e-4, completionCostPer1k: 12e-4 },
+  "gemini-3.1-pro": { promptCostPer1k: 125e-5, completionCostPer1k: 5e-3 },
+  "gemini-3.1-flash-live-preview": {
+    promptCostPer1k: 1e-4,
+    completionCostPer1k: 4e-4
+  },
+  "gemini-3.8-live": { promptCostPer1k: 15e-5, completionCostPer1k: 6e-4 },
   "gemini-4-flash": { promptCostPer1k: 75e-6, completionCostPer1k: 3e-4 },
   "gemini-3.8-flash": {
     promptCostPer1k: 75e-6,
@@ -564,7 +578,7 @@ var GeminiProvider = class {
       return [{ text: "" }];
     };
     for (const msg of request.messages) {
-      if (msg.role === "system") {
+      if (msg.role === "system" || msg.role === "developer") {
         if (typeof msg.content === "string") {
           systemParts.push({ text: msg.content });
         } else if (Array.isArray(msg.content)) {
@@ -610,12 +624,16 @@ var GeminiProvider = class {
           } catch {
             args = {};
           }
-          parts.push({
+          const fnPart = {
             functionCall: {
               name: tc.function.name,
               args
             }
-          });
+          };
+          if (tc.thought_signature) {
+            fnPart.thoughtSignature = tc.thought_signature;
+          }
+          parts.push(fnPart);
         }
         contents.push({
           role: "model",
@@ -658,18 +676,34 @@ var GeminiProvider = class {
       thinkingBudget = rawThinkingBudget;
     }
     if (thinkingBudget === void 0 && request.reasoningEffort) {
-      if (request.reasoningEffort === "low") {
+      if (request.reasoningEffort === "none") {
+        thinkingBudget = 0;
+      } else if (request.reasoningEffort === "minimal") {
+        thinkingBudget = 512;
+      } else if (request.reasoningEffort === "low") {
         thinkingBudget = 2048;
       } else if (request.reasoningEffort === "medium") {
         thinkingBudget = 8192;
       } else if (request.reasoningEffort === "high") {
         thinkingBudget = 32768;
+      } else if (request.reasoningEffort === "xhigh" || request.reasoningEffort === "max") {
+        thinkingBudget = 65536;
       }
     }
-    if (thinkingBudget !== void 0) {
-      generationConfig.thinkingConfig = {
-        thinkingBudget
-      };
+    const thinkingLevel = request.thinkingLevel ?? this.config.thinkingLevel;
+    const includeThoughts = request.includeThoughts ?? this.config.includeThoughts;
+    if (thinkingBudget !== void 0 || thinkingLevel !== void 0 || includeThoughts !== void 0) {
+      const thinkingConfig = {};
+      if (thinkingBudget !== void 0) {
+        thinkingConfig.thinkingBudget = thinkingBudget;
+      }
+      if (thinkingLevel !== void 0) {
+        thinkingConfig.thinkingLevel = thinkingLevel;
+      }
+      if (includeThoughts !== void 0) {
+        thinkingConfig.includeThoughts = includeThoughts;
+      }
+      generationConfig.thinkingConfig = thinkingConfig;
     }
     const payload = { contents };
     if (systemParts.length > 0) {
@@ -698,7 +732,7 @@ var GeminiProvider = class {
         }))
       });
     }
-    const useGoogleSearch = request.googleSearch ?? this.config.googleSearch;
+    const useGoogleSearch = request.googleSearch ?? request.webSearch ?? this.config.googleSearch ?? this.config.webSearch;
     if (useGoogleSearch) {
       tools.push({ googleSearch: {} });
     }
@@ -765,7 +799,8 @@ ${part.codeExecutionResult.output || ""}
             function: {
               name: part.functionCall.name,
               arguments: JSON.stringify(part.functionCall.args || {})
-            }
+            },
+            ...part.thoughtSignature ? { thought_signature: part.thoughtSignature } : {}
           });
         }
       }
@@ -825,12 +860,16 @@ ${part.codeExecutionResult.output || ""}
         }
       ],
       grounding,
-      usage: data.usageMetadata ? {
-        promptTokens: data.usageMetadata.promptTokenCount || 0,
-        completionTokens: data.usageMetadata.candidatesTokenCount || 0,
-        totalTokens: data.usageMetadata.totalTokenCount || 0,
-        cachedPromptTokens: data.usageMetadata.cachedContentTokenCount || void 0
-      } : void 0
+      usage: data.usageMetadata ? (() => {
+        const reasoningTokens = data.usageMetadata.thoughtsTokenCount;
+        return {
+          promptTokens: data.usageMetadata.promptTokenCount || 0,
+          completionTokens: data.usageMetadata.candidatesTokenCount || 0,
+          totalTokens: data.usageMetadata.totalTokenCount || 0,
+          cachedPromptTokens: data.usageMetadata.cachedContentTokenCount || void 0,
+          ...reasoningTokens !== void 0 ? { reasoningTokens } : {}
+        };
+      })() : void 0
     };
   }
   async generateContent(request) {
@@ -909,7 +948,8 @@ ${part.codeExecutionResult.output || ""}
                           arguments: JSON.stringify(
                             part.functionCall.args || {}
                           )
-                        }
+                        },
+                        ...part.thoughtSignature ? { thought_signature: part.thoughtSignature } : {}
                       });
                     }
                   }
@@ -934,11 +974,13 @@ ${part.codeExecutionResult.output || ""}
                     searchEntryPoint: gm.searchEntryPoint?.renderedContent
                   };
                 }
+                const streamReasoningTokens = parsed.usageMetadata?.thoughtsTokenCount;
                 const usage = parsed.usageMetadata ? {
                   promptTokens: parsed.usageMetadata.promptTokenCount || 0,
                   completionTokens: parsed.usageMetadata.candidatesTokenCount || 0,
                   totalTokens: parsed.usageMetadata.totalTokenCount || 0,
-                  cachedPromptTokens: parsed.usageMetadata.cachedContentTokenCount || void 0
+                  cachedPromptTokens: parsed.usageMetadata.cachedContentTokenCount || void 0,
+                  ...streamReasoningTokens !== void 0 ? { reasoningTokens: streamReasoningTokens } : {}
                 } : void 0;
                 yield {
                   id: `gemini-${Date.now()}`,
@@ -1638,6 +1680,9 @@ function tryExtractJson(text) {
   }
 }
 
+// src/version.ts
+var SINAPSAI_VERSION = "3.6.0";
+
 // src/utils/tracingExporter.ts
 function generateTraceId() {
   let hex = "";
@@ -1667,7 +1712,7 @@ function formatAttribute(key, val) {
 }
 function toOtelTracePayload(spans, options = {}) {
   const serviceName = options.serviceName ?? "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion ?? "3.0.0";
+  const serviceVersion = options.serviceVersion ?? SINAPSAI_VERSION;
   const resourceAttributes = [
     { key: "service.name", value: { stringValue: serviceName } },
     { key: "service.version", value: { stringValue: serviceVersion } },
@@ -2584,7 +2629,7 @@ var AgentSwarm = class {
       name: agent.name,
       description: `${agent.role}: ${agent.instructions.slice(0, 200)}`,
       url: baseUrl ? `${baseUrl.replace(/\/$/, "")}/agents/${agent.id}` : void 0,
-      version: "2.11.0",
+      version: SINAPSAI_VERSION,
       capabilities: {
         streaming: true,
         handoffs: agent.handoffs && agent.handoffs.length > 0 || false
@@ -2696,7 +2741,9 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         model: agent.model || this.defaultModel || "default",
         messages: stepMessages,
         tools: tools.length > 0 ? tools : void 0,
-        thinkingBudget: agent.thinkingBudget
+        thinkingBudget: agent.thinkingBudget,
+        reasoningEffort: agent.reasoningEffort,
+        thinkingLevel: agent.thinkingLevel
       };
       const response = await this.client.chat.completions.create(
         req
@@ -2888,6 +2935,8 @@ You are specialist: ${agent.name} (${agent.role}).${context.toPromptSection()}`;
         messages: stepMessages,
         tools: tools.length > 0 ? tools : void 0,
         thinkingBudget: agent.thinkingBudget,
+        reasoningEffort: agent.reasoningEffort,
+        thinkingLevel: agent.thinkingLevel,
         stream: true
       };
       const stream = await this.client.chat.completions.create(
@@ -5829,7 +5878,7 @@ var DashboardServer = class {
     const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1e3);
     const summary = {
       title: this.title,
-      version: "3.0.0",
+      version: SINAPSAI_VERSION,
       uptimeSeconds,
       strategy: this.client.getStrategy(),
       metrics: {
@@ -7344,6 +7393,25 @@ var DEFAULT_CASCADE_TIERS = {
   tier2: "gemini-2.5-flash",
   tier3: "gemini-2.5-pro"
 };
+var FRONTIER_CASCADE_TIERS = {
+  tier1: "gemini-4-carbon",
+  tier2: "gemini-4-neon",
+  tier3: "claude-sonnet-5-5"
+};
+var FRONTIER_CASCADE_PRESETS = {
+  legacy: DEFAULT_CASCADE_TIERS,
+  frontier: FRONTIER_CASCADE_TIERS,
+  "cost-optimized": {
+    tier1: "gemini-4-carbon",
+    tier2: "deepseek-v4.1-flash",
+    tier3: "deepseek-v4-pro"
+  },
+  "speed-first": {
+    tier1: "grok-4-6-high-fast",
+    tier2: "grok-4-7-high-fast",
+    tier3: "gemini-4-pro"
+  }
+};
 function minifyProsePreservingCode(text, mode = "lossless") {
   if (!text || text.length === 0) {
     return text;
@@ -7425,6 +7493,7 @@ var LlmOptimizer = class {
     cascadedRequestsCount: 0
   };
   constructor(options = {}) {
+    const presetTiers = FRONTIER_CASCADE_PRESETS[options.cascadePreset ?? "legacy"] ?? DEFAULT_CASCADE_TIERS;
     this.options = {
       enabled: options.enabled ?? true,
       minifyPrompts: options.minifyPrompts ?? true,
@@ -7432,7 +7501,8 @@ var LlmOptimizer = class {
       deduplicateSystem: options.deduplicateSystem ?? true,
       alignKvCachePrefix: options.alignKvCachePrefix ?? true,
       autoCascadeModel: options.autoCascadeModel ?? false,
-      cascadeTiers: options.cascadeTiers ?? DEFAULT_CASCADE_TIERS,
+      cascadePreset: options.cascadePreset ?? "legacy",
+      cascadeTiers: options.cascadeTiers ?? presetTiers,
       dynamicThinking: options.dynamicThinking ?? true
     };
   }
@@ -7488,14 +7558,17 @@ var LlmOptimizer = class {
     score = Math.max(0, Math.min(1, Number(score.toFixed(3))));
     let tier = "tier2";
     let recommendedBudget = 2048;
+    let recommendedReasoningEffort = "medium";
     let recommendedModel = resolvedTiers.tier2;
     if (score <= 0.35) {
       tier = "tier1";
       recommendedBudget = 0;
+      recommendedReasoningEffort = "minimal";
       recommendedModel = resolvedTiers.tier1;
     } else if (score > 0.7) {
       tier = "tier3";
       recommendedBudget = 8192;
+      recommendedReasoningEffort = "high";
       recommendedModel = resolvedTiers.tier3;
     }
     return {
@@ -7503,7 +7576,8 @@ var LlmOptimizer = class {
       tier,
       signals,
       recommendedModel,
-      recommendedThinkingBudget: recommendedBudget
+      recommendedThinkingBudget: recommendedBudget,
+      recommendedReasoningEffort
     };
   }
   /**
@@ -7522,7 +7596,8 @@ var LlmOptimizer = class {
         savingsRatio: 0,
         complexity: complexity2,
         tools: request.tools,
-        thinkingBudget: request.thinkingBudget
+        thinkingBudget: request.thinkingBudget,
+        reasoningEffort: request.reasoningEffort
       };
     }
     let messages = [...request.messages];
@@ -7570,9 +7645,13 @@ var LlmOptimizer = class {
       cascadeModel = complexity.recommendedModel;
     }
     let thinkingBudget = request.thinkingBudget;
-    if (this.options.dynamicThinking && thinkingBudget === void 0) {
-      if (complexity.recommendedThinkingBudget !== void 0) {
+    let reasoningEffort = request.reasoningEffort;
+    if (this.options.dynamicThinking) {
+      if (thinkingBudget === void 0 && complexity.recommendedThinkingBudget !== void 0) {
         thinkingBudget = complexity.recommendedThinkingBudget;
+      }
+      if (reasoningEffort === void 0 && complexity.recommendedReasoningEffort !== void 0) {
+        reasoningEffort = complexity.recommendedReasoningEffort;
       }
     }
     const optimizedTokens = estimateTotalTokens(messages);
@@ -7593,7 +7672,8 @@ var LlmOptimizer = class {
       complexity,
       cascadeModel,
       tools,
-      thinkingBudget
+      thinkingBudget,
+      reasoningEffort
     };
   }
   recordMetrics(tokensSaved, originalTokens, optimizedTokens, cascaded) {
@@ -7830,13 +7910,29 @@ var AutonomousDriftHealer = class _AutonomousDriftHealer {
         normalizedMessage: "Upstream provider rate limit or quota exceeded."
       };
     }
+    if (lower.includes("max_completion_tokens") || lower.includes("max_tokens") && (lower.includes("unsupported") || lower.includes("not supported"))) {
+      return {
+        category: "max_tokens_unsupported",
+        isTransient: false,
+        recommendedAction: "use_max_completion_tokens",
+        normalizedMessage: "Target reasoning/GPT-5 model requires max_completion_tokens instead of max_tokens."
+      };
+    }
+    if ((lower.includes("budget_tokens") || lower.includes("thinkingbudget") || lower.includes("thinking_budget") || lower.includes("thinkinglevel") || lower.includes("reasoning_effort")) && (lower.includes("unsupported") || lower.includes("invalid") || lower.includes("not allowed") || lower.includes("deprecated"))) {
+      return {
+        category: "thinking_budget_unsupported",
+        isTransient: false,
+        recommendedAction: "adjust_thinking_config",
+        normalizedMessage: "Model rejected thinking or reasoning configuration parameter; use adaptive thinking or thinkingLevel."
+      };
+    }
     if (lower.includes("context length") || lower.includes("maximum context") || lower.includes("too many tokens") || lower.includes("prompt is too long")) {
       return {
         category: "context_length_exceeded",
         isTransient: false,
         recommendedAction: "compress_context",
-        suggestedFallbackModel: "gemini-2.5-flash",
-        // 1M context window
+        suggestedFallbackModel: "gemini-4-argon",
+        // 2M context window
         normalizedMessage: "Prompt exceeded model context window limit."
       };
     }
@@ -7845,7 +7941,7 @@ var AutonomousDriftHealer = class _AutonomousDriftHealer {
         category: "model_deprecated",
         isTransient: false,
         recommendedAction: "switch_to_fallback_model",
-        suggestedFallbackModel: "gemini-2.5-flash",
+        suggestedFallbackModel: "gemini-3.8-flash",
         normalizedMessage: "Target model was not found or has been deprecated by provider."
       };
     }
@@ -7886,7 +7982,7 @@ var McpClientConnector = class _McpClientConnector {
     return _McpClientConnector.ingestHttpServer(config);
   }
   /**
-   * Ingests tools from an HTTP / SSE MCP server using standard fetch.
+   * Ingests tools from an HTTP / Streamable-HTTP / SSE MCP server using standard fetch.
    */
   static async ingestHttpServer(config) {
     if (!config.url) {
@@ -7896,19 +7992,58 @@ var McpClientConnector = class _McpClientConnector {
     }
     const endpoint = config.url;
     let rpcId = 1;
+    let sessionId;
+    let negotiatedProtocolVersion = MCP_PROTOCOL_VERSION;
+    const parseJsonRpcHttpResponse = async (res, targetId) => {
+      const incomingSessionId = res.headers?.get?.("mcp-session-id");
+      if (incomingSessionId) {
+        sessionId = incomingSessionId;
+      }
+      const contentType = res.headers?.get?.("content-type") || "";
+      if (contentType.includes("text/event-stream")) {
+        let fallbackResponse;
+        for await (const evt of parseSSE(res)) {
+          if (!evt.data || evt.data.trim() === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(evt.data);
+            if (targetId !== void 0 && parsed.id === targetId) {
+              return parsed;
+            }
+            if (parsed.result !== void 0 || parsed.error !== void 0) {
+              fallbackResponse = parsed;
+            }
+          } catch {
+          }
+        }
+        if (fallbackResponse) {
+          return fallbackResponse;
+        }
+        throw new Error(
+          `MCP server "${config.name}" returned an empty SSE stream.`
+        );
+      }
+      return await res.json();
+    };
     const callRpc = async (method, params) => {
+      const id = rpcId++;
       const payload = {
         jsonrpc: "2.0",
-        id: rpcId++,
+        id,
         method,
         params
       };
+      const headers = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": negotiatedProtocolVersion,
+        ...config.headers || {}
+      };
+      if (sessionId) {
+        headers["Mcp-Session-Id"] = sessionId;
+      }
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...config.headers || {}
-        },
+        headers,
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
@@ -7916,7 +8051,7 @@ var McpClientConnector = class _McpClientConnector {
           `MCP server "${config.name}" HTTP error: ${res.status} ${res.statusText}`
         );
       }
-      const json = await res.json();
+      const json = await parseJsonRpcHttpResponse(res, id);
       if (json.error) {
         throw new Error(
           `MCP RPC error [${json.error.code}]: ${json.error.message}`
@@ -7924,11 +8059,37 @@ var McpClientConnector = class _McpClientConnector {
       }
       return json.result;
     };
-    await callRpc("initialize", {
-      protocolVersion: "2024-11-05",
+    const sendNotification = async (method, params) => {
+      const headers = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": negotiatedProtocolVersion,
+        ...config.headers || {}
+      };
+      if (sessionId) {
+        headers["Mcp-Session-Id"] = sessionId;
+      }
+      await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method,
+          ...{}
+        })
+      });
+    };
+    const initResult = await callRpc("initialize", {
+      protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "SinapsAI", version: "2.15.0" }
+      clientInfo: { name: "SinapsAI", version: SINAPSAI_VERSION }
     });
+    if (initResult?.protocolVersion) {
+      negotiatedProtocolVersion = initResult.protocolVersion;
+    }
+    if (config.transport === "streamable-http") {
+      await sendNotification("notifications/initialized");
+    }
     const listRes = await callRpc("tools/list");
     const rawTools = listRes?.tools || [];
     return rawTools.map((t) => {
@@ -8030,7 +8191,7 @@ var McpClientConnector = class _McpClientConnector {
     await callRpc("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "SinapsAI", version: "2.15.0" }
+      clientInfo: { name: "SinapsAI", version: SINAPSAI_VERSION }
     });
     const listRes = await callRpc("tools/list");
     const rawTools = listRes?.tools || [];
@@ -8076,14 +8237,34 @@ var McpClientConnector = class _McpClientConnector {
 };
 
 // src/core/McpBridge.ts
+var MCP_PROTOCOL_VERSION = "2025-06-18";
+var MCP_SUPPORTED_PROTOCOL_VERSIONS = [
+  "2025-06-18",
+  "2025-03-26",
+  "2024-11-05"
+];
 var McpToolBridge = class _McpToolBridge {
   tools = /* @__PURE__ */ new Map();
-  constructor(tools) {
+  samplingHandler;
+  constructor(tools, samplingHandler) {
+    this.samplingHandler = samplingHandler;
     if (tools && Array.isArray(tools)) {
       for (const t of tools) {
         this.registerTool(t);
       }
     }
+  }
+  /**
+   * Registers an MCP server-initiated LLM sampling handler (`sampling/createMessage`).
+   */
+  setSamplingHandler(handler) {
+    this.samplingHandler = handler;
+  }
+  /**
+   * Returns true if a sampling handler has been registered on this bridge.
+   */
+  hasSamplingHandler() {
+    return typeof this.samplingHandler === "function";
   }
   /**
    * Registers a new in-process MCP tool with its execution handler.
@@ -8416,20 +8597,69 @@ var McpToolBridge = class _McpToolBridge {
         };
       }
       case "initialize": {
+        const requestedVersion = typeof params?.protocolVersion === "string" ? params.protocolVersion : void 0;
+        const negotiatedVersion = requestedVersion && MCP_SUPPORTED_PROTOCOL_VERSIONS.includes(
+          requestedVersion
+        ) ? requestedVersion : MCP_PROTOCOL_VERSION;
+        const capabilities = {
+          tools: {}
+        };
+        if (this.samplingHandler) {
+          capabilities.sampling = {};
+        }
         return {
           jsonrpc: "2.0",
           id,
           result: {
-            protocolVersion: "2024-11-05",
-            capabilities: {
-              tools: {}
-            },
+            protocolVersion: negotiatedVersion,
+            capabilities,
             serverInfo: {
               name: "sinapsai-mcp",
-              version: "2.11.0"
+              version: SINAPSAI_VERSION
             }
           }
         };
+      }
+      case "sampling/createMessage": {
+        if (!this.samplingHandler) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32601,
+              message: "MCP sampling/createMessage handler is not configured."
+            }
+          };
+        }
+        if (!params || !Array.isArray(params.messages)) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32602,
+              message: 'Invalid params: "messages" array is required.'
+            }
+          };
+        }
+        try {
+          const result = await this.samplingHandler(
+            params
+          );
+          return {
+            jsonrpc: "2.0",
+            id,
+            result
+          };
+        } catch (err) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32603,
+              message: err instanceof Error ? err.message : "MCP sampling execution failed."
+            }
+          };
+        }
       }
       case "notifications/initialized": {
         return {
@@ -9147,18 +9377,25 @@ var RealtimeSession = class {
   constructor(options) {
     this.options = options;
   }
+  getProvider() {
+    return this.options.provider || "openai";
+  }
+  getModel() {
+    const provider = this.getProvider();
+    return this.options.model || (provider === "openai" ? "gpt-realtime" : "gemini-3.1-flash-live-preview");
+  }
   /**
    * Resolves the WebSocket URL based on provider and model.
    */
   resolveUrl() {
     if (this.options.url) return this.options.url;
-    const provider = this.options.provider || "openai";
-    const model = this.options.model || (provider === "openai" ? "gpt-4o-realtime-preview" : "gemini-2.0-flash-exp");
+    const provider = this.getProvider();
+    const model = this.getModel();
     if (provider === "openai") {
-      return `wss://api.openai.com/v1/realtime?model=${model}`;
+      return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
     if (provider === "gemini") {
-      return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.options.apiKey}`;
+      return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.options.apiKey ?? ""}`;
     }
     throw new Error(
       `Unable to resolve WebSocket URL for custom provider without explicit options.url.`
@@ -9177,7 +9414,7 @@ var RealtimeSession = class {
     }
     return new Promise((resolve, reject) => {
       try {
-        const protocols = this.options.provider === "openai" ? ["realtime", `openai-insecure-api-key.${this.options.apiKey}`] : void 0;
+        const protocols = this.getProvider() === "openai" ? ["realtime", `openai-insecure-api-key.${this.options.apiKey}`] : void 0;
         this.ws = protocols ? new WebSocketCtor(targetUrl, protocols) : new WebSocketCtor(targetUrl);
         this.ws.onopen = () => {
           this.isAlive = true;
@@ -9209,7 +9446,8 @@ var RealtimeSession = class {
    */
   initializeSession() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (this.options.provider === "openai") {
+    const provider = this.getProvider();
+    if (provider === "openai") {
       const sessionUpdate = {
         type: "session.update",
         session: {
@@ -9225,6 +9463,33 @@ var RealtimeSession = class {
         }
       };
       this.ws.send(JSON.stringify(sessionUpdate));
+    } else if (provider === "gemini") {
+      const model = this.getModel();
+      const modelPath = model.startsWith("models/") ? model : `models/${model}`;
+      const modalities = this.options.modalities ? this.options.modalities.map((m) => m.toUpperCase()) : ["AUDIO"];
+      const generationConfig = {
+        responseModalities: modalities
+      };
+      if (this.options.voice) {
+        generationConfig.speechConfig = {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: this.options.voice
+            }
+          }
+        };
+      }
+      const setup = {
+        model: modelPath,
+        generationConfig,
+        outputAudioTranscription: {}
+      };
+      if (this.options.instructions) {
+        setup.systemInstruction = {
+          parts: [{ text: this.options.instructions }]
+        };
+      }
+      this.ws.send(JSON.stringify({ setup }));
     }
   }
   /**
@@ -9235,12 +9500,47 @@ var RealtimeSession = class {
       const text = typeof rawData === "string" ? rawData : String(rawData);
       const parsed = JSON.parse(text);
       this.options.onRawMessage?.(parsed);
-      if (parsed.type === "response.audio_transcript.delta" && typeof parsed.delta === "string") {
+      if ((parsed.type === "response.audio_transcript.delta" || parsed.type === "response.output_audio_transcript.delta") && typeof parsed.delta === "string") {
         this.options.onTextDelta?.(parsed.delta);
-      } else if (parsed.type === "response.audio.delta" && typeof parsed.delta === "string") {
+      } else if ((parsed.type === "response.audio.delta" || parsed.type === "response.output_audio.delta") && typeof parsed.delta === "string") {
         this.options.onAudioDelta?.(parsed.delta);
-      } else if (parsed.type === "response.text.delta" && typeof parsed.delta === "string") {
+      } else if ((parsed.type === "response.text.delta" || parsed.type === "response.output_text.delta") && typeof parsed.delta === "string") {
         this.options.onTextDelta?.(parsed.delta);
+      } else if (parsed.type === "response.done") {
+        this.options.onTurnComplete?.();
+      } else if (parsed.type === "input_audio_buffer.speech_started") {
+        this.options.onInterrupted?.();
+      }
+      if (parsed.setupComplete !== void 0) {
+        this.options.onSetupComplete?.();
+      }
+      if (parsed.serverContent && typeof parsed.serverContent === "object") {
+        const sc = parsed.serverContent;
+        if (sc.interrupted === true) {
+          this.options.onInterrupted?.();
+        }
+        const outTrans = sc.outputTranscription;
+        if (typeof outTrans?.text === "string" && outTrans.text) {
+          this.options.onTextDelta?.(outTrans.text);
+        }
+        const modelTurn = sc.modelTurn;
+        if (Array.isArray(modelTurn?.parts)) {
+          for (const part of modelTurn.parts) {
+            if (typeof part.thought === "string") {
+              this.options.onThinkingDelta?.(part.thought);
+            } else if (part.thought && typeof part.text === "string") {
+              this.options.onThinkingDelta?.(part.text);
+            } else if (typeof part.text === "string" && part.text) {
+              this.options.onTextDelta?.(part.text);
+            }
+            if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/")) {
+              this.options.onAudioDelta?.(part.inlineData.data);
+            }
+          }
+        }
+        if (sc.turnComplete === true) {
+          this.options.onTurnComplete?.();
+        }
       }
     } catch {
     }
@@ -9251,6 +9551,17 @@ var RealtimeSession = class {
   sendText(text) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("Realtime session is not open.");
+    }
+    if (this.getProvider() === "gemini") {
+      this.ws.send(
+        JSON.stringify({
+          clientContent: {
+            turns: [{ role: "user", parts: [{ text }] }],
+            turnComplete: true
+          }
+        })
+      );
+      return;
     }
     const event = {
       type: "conversation.item.create",
@@ -9266,9 +9577,22 @@ var RealtimeSession = class {
   /**
    * Appends PCM16 audio chunks in base64 format.
    */
-  sendAudio(base64Audio) {
+  sendAudio(base64Audio, mimeType = "audio/pcm;rate=16000") {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("Realtime session is not open.");
+    }
+    if (this.getProvider() === "gemini") {
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            audio: {
+              mimeType,
+              data: base64Audio
+            }
+          }
+        })
+      );
+      return;
     }
     const event = {
       type: "input_audio_buffer.append",
@@ -9277,10 +9601,56 @@ var RealtimeSession = class {
     this.ws.send(JSON.stringify(event));
   }
   /**
+   * Streams an image/video frame into the live multimodal session (Gemini Live / OpenAI Realtime).
+   */
+  sendVideoFrame(base64Data, mimeType = "image/jpeg") {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Realtime session is not open.");
+    }
+    if (this.getProvider() === "gemini") {
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            video: {
+              mimeType,
+              data: base64Data
+            }
+          }
+        })
+      );
+      return;
+    }
+    this.ws.send(
+      JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${base64Data}`
+            }
+          ]
+        }
+      })
+    );
+  }
+  /**
    * Commits the current audio buffer to trigger model response.
    */
   commitAudio() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.getProvider() === "gemini") {
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            audioStreamEnd: true
+          }
+        })
+      );
+      return;
+    }
     this.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     this.ws.send(JSON.stringify({ type: "response.create" }));
   }
@@ -9311,7 +9681,7 @@ var RealtimeClient = class {
    * browser voice streaming with OpenAI Realtime and Gemini Live endpoints.
    */
   async negotiateWebRtc(params) {
-    const model = params.model || "gpt-4o-realtime-preview";
+    const model = params.model || "gpt-realtime";
     const baseUrl = params.baseUrl || "https://api.openai.com/v1/realtime";
     const url = `${baseUrl}?model=${encodeURIComponent(model)}`;
     const response = await fetch(url, {
@@ -9330,6 +9700,1181 @@ var RealtimeClient = class {
     }
     const answerSdp = await response.text();
     return { answerSdp };
+  }
+};
+
+// src/core/FrontierModelRegistry.ts
+var FRONTIER_AVAILABILITY_FALLBACKS = {
+  // Google Gemini 4 -> Gemini 3.8 Flash
+  "gemini-4-carbon": ["gemini-3.8-flash"],
+  "gemini-4-neon": ["gemini-3.8-flash"],
+  "gemini-4-hydrogen": ["gemini-3.8-flash"],
+  "gemini-4-argon": ["gemini-3.8-flash"],
+  "gemini-4-pro": ["gemini-3.8-flash"],
+  "gemini-4-flash": ["gemini-3.8-flash"],
+  "gemini-3.1-pro": ["gemini-3.8-flash"],
+  // Anthropic Claude 5.5 / 5.1 / 4.7 -> Claude 4.6 family
+  "claude-opus-5-5": ["claude-opus-4-6"],
+  "claude-opus-5.5": ["claude-opus-4-6"],
+  "claude-opus-4-7": ["claude-opus-4-6"],
+  "claude-sonnet-5-5": ["claude-sonnet-4-6", "claude-opus-4-6"],
+  "claude-sonnet-5.5": ["claude-sonnet-4-6", "claude-opus-4-6"],
+  "claude-fable-5-1": ["claude-sonnet-4-6", "claude-opus-4-6"],
+  "claude-fable-5.1": ["claude-sonnet-4-6", "claude-opus-4-6"],
+  // xAI Grok 4.7 -> Grok 4.6 High Fast / Grok 4.3
+  "grok-4-7-high-fast": ["grok-4-6-high-fast", "grok-4.3"],
+  "grok-4.7": ["grok-4-6-high-fast", "grok-4.3"],
+  // OpenAI GPT-5.6 / 5.5 / 5.4 -> GPT-5 Mini
+  "gpt-5.6-sol-medium": ["gpt-5-mini"],
+  "gpt-5.5": ["gpt-5-mini"],
+  "gpt-5.4": ["gpt-5-mini"],
+  // DeepSeek V4 Pro -> DeepSeek Reasoner / V3.2
+  "deepseek-v4-pro": ["deepseek-reasoner", "deepseek-v3.2"],
+  // Mistral Large 4 -> Mistral Small 4 / Large Latest
+  "mistral-large-4": ["mistral-small-4", "mistral-large-latest"]
+};
+var FRONTIER_MODELS = {
+  // ── Google DeepMind ──────────────────────────────────────────────────────
+  "gemini-4-carbon": {
+    id: "gemini-4-carbon",
+    name: "Gemini 4 Carbon",
+    provider: "gemini",
+    tier: "high-fast",
+    contextWindow: 1048576,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 1e-4,
+    completionCostPer1k: 4e-4,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "gemini-4-neon": {
+    id: "gemini-4-neon",
+    name: "Gemini 4 Neon Medium",
+    provider: "gemini",
+    tier: "medium",
+    contextWindow: 2097152,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 4e-4,
+    completionCostPer1k: 16e-4,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "gemini-4-hydrogen": {
+    id: "gemini-4-hydrogen",
+    name: "Gemini 4 Hydrogen Medium",
+    provider: "gemini",
+    tier: "medium",
+    contextWindow: 2097152,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 3e-4,
+    completionCostPer1k: 12e-4,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "gemini-4-argon": {
+    id: "gemini-4-argon",
+    name: "Gemini 4 Argon Medium",
+    provider: "gemini",
+    tier: "medium",
+    contextWindow: 2097152,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 2e-3,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      liveApi: true,
+      webSearch: true
+    }
+  },
+  "gemini-4-pro": {
+    id: "gemini-4-pro",
+    name: "Gemini 4 Pro",
+    provider: "gemini",
+    tier: "high",
+    contextWindow: 2097152,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "gemini-4-flash": {
+    id: "gemini-4-flash",
+    name: "Gemini 4 Flash",
+    provider: "gemini",
+    tier: "high-fast",
+    contextWindow: 1048576,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      liveApi: true,
+      webSearch: true
+    }
+  },
+  "gemini-3.8-flash": {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    provider: "gemini",
+    tier: "high-fast",
+    contextWindow: 1048576,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      liveApi: true,
+      webSearch: true
+    }
+  },
+  "gemini-3.1-pro": {
+    id: "gemini-3.1-pro",
+    name: "Gemini 3.1 Pro",
+    provider: "gemini",
+    tier: "high",
+    contextWindow: 2097152,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gemini-3.8-flash"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "gemini-3.1-flash-live-preview": {
+    id: "gemini-3.1-flash-live-preview",
+    name: "Gemini 3.1 Flash Live Preview",
+    provider: "gemini",
+    tier: "high-fast",
+    contextWindow: 1048576,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 1e-4,
+    completionCostPer1k: 4e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: false,
+      liveApi: true
+    }
+  },
+  "gemini-3.8-live": {
+    id: "gemini-3.8-live",
+    name: "Gemini 3.8 Live",
+    provider: "gemini",
+    tier: "medium",
+    contextWindow: 1048576,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 15e-5,
+    completionCostPer1k: 6e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      thinkingLevel: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: false,
+      liveApi: true
+    }
+  },
+  "gemini-2.5-flash": {
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash",
+    provider: "gemini",
+    tier: "fast",
+    contextWindow: 1048576,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 75e-6,
+    completionCostPer1k: 3e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "gemini-2.5-pro": {
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    provider: "gemini",
+    tier: "high",
+    contextWindow: 2097152,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 125e-5,
+    completionCostPer1k: 5e-3,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: true,
+      video: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  // ── Anthropic Claude ─────────────────────────────────────────────────────
+  "claude-sonnet-5-5": {
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
+    provider: "anthropic",
+    tier: "high",
+    contextWindow: 5e5,
+    maxOutputTokens: 64e3,
+    promptCostPer1k: 3e-3,
+    completionCostPer1k: 0.015,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["claude-sonnet-4-6", "claude-opus-4-6"],
+    aliases: ["claude-sonnet-5.5", "claude-sonnet-5.5-20261022"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      adaptiveThinking: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "claude-opus-5-5": {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    provider: "anthropic",
+    tier: "medium",
+    contextWindow: 5e5,
+    maxOutputTokens: 64e3,
+    promptCostPer1k: 5e-3,
+    completionCostPer1k: 0.025,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["claude-opus-4-6"],
+    aliases: ["claude-opus-5.5"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      adaptiveThinking: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "claude-fable-5-1": {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    provider: "anthropic",
+    tier: "high",
+    contextWindow: 5e5,
+    maxOutputTokens: 64e3,
+    promptCostPer1k: 25e-4,
+    completionCostPer1k: 0.0125,
+    cachedPromptDiscount: 0.055,
+    fallbacks: ["claude-sonnet-4-6", "claude-opus-4-6"],
+    aliases: ["claude-fable-5.1"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      adaptiveThinking: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "claude-opus-4-7": {
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    provider: "anthropic",
+    tier: "high",
+    contextWindow: 1e6,
+    maxOutputTokens: 64e3,
+    promptCostPer1k: 5e-3,
+    completionCostPer1k: 0.025,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["claude-opus-4-6"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      adaptiveThinking: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "claude-sonnet-4-6": {
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
+    provider: "anthropic",
+    tier: "high",
+    contextWindow: 1e6,
+    maxOutputTokens: 64e3,
+    promptCostPer1k: 3e-3,
+    completionCostPer1k: 0.015,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      adaptiveThinking: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "claude-opus-4-6": {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    provider: "anthropic",
+    tier: "medium",
+    contextWindow: 2e5,
+    maxOutputTokens: 32e3,
+    promptCostPer1k: 5e-3,
+    completionCostPer1k: 0.025,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      adaptiveThinking: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "claude-haiku-4-5": {
+    id: "claude-haiku-4-5",
+    name: "Claude Haiku 4.5",
+    provider: "anthropic",
+    tier: "high-fast",
+    contextWindow: 2e5,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 1e-3,
+    completionCostPer1k: 5e-3,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  // ── OpenAI ───────────────────────────────────────────────────────────────
+  "gpt-5.6-sol-medium": {
+    id: "gpt-5.6-sol-medium",
+    name: "GPT-5.6 Sol Medium",
+    provider: "openai",
+    tier: "medium",
+    contextWindow: 5e5,
+    maxOutputTokens: 128e3,
+    promptCostPer1k: 2e-3,
+    completionCostPer1k: 8e-3,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gpt-5-mini"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: true,
+      promptCaching: true,
+      responsesApi: true,
+      webSearch: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  "gpt-5.5": {
+    id: "gpt-5.5",
+    name: "GPT-5.5",
+    provider: "openai",
+    tier: "high",
+    contextWindow: 4e5,
+    maxOutputTokens: 128e3,
+    promptCostPer1k: 25e-4,
+    completionCostPer1k: 0.015,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gpt-5-mini"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: true,
+      promptCaching: true,
+      responsesApi: true,
+      webSearch: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  "gpt-5.4": {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    provider: "openai",
+    tier: "high",
+    contextWindow: 105e4,
+    maxOutputTokens: 128e3,
+    promptCostPer1k: 25e-4,
+    completionCostPer1k: 0.015,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["gpt-5-mini"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: true,
+      promptCaching: true,
+      responsesApi: true,
+      webSearch: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  "gpt-5-mini": {
+    id: "gpt-5-mini",
+    name: "GPT-5 Mini",
+    provider: "openai",
+    tier: "high-fast",
+    contextWindow: 4e5,
+    maxOutputTokens: 128e3,
+    promptCostPer1k: 25e-5,
+    completionCostPer1k: 2e-3,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true,
+      responsesApi: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  "gpt-5-nano": {
+    id: "gpt-5-nano",
+    name: "GPT-5 Nano",
+    provider: "openai",
+    tier: "high-fast",
+    contextWindow: 4e5,
+    maxOutputTokens: 128e3,
+    promptCostPer1k: 5e-5,
+    completionCostPer1k: 4e-4,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true,
+      responsesApi: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  "o4-mini": {
+    id: "o4-mini",
+    name: "OpenAI o4-mini",
+    provider: "openai",
+    tier: "medium",
+    contextWindow: 2e5,
+    maxOutputTokens: 1e5,
+    promptCostPer1k: 11e-4,
+    completionCostPer1k: 44e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true,
+      responsesApi: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  o3: {
+    id: "o3",
+    name: "OpenAI o3",
+    provider: "openai",
+    tier: "high",
+    contextWindow: 2e5,
+    maxOutputTokens: 1e5,
+    promptCostPer1k: 2e-3,
+    completionCostPer1k: 8e-3,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true,
+      responsesApi: true,
+      usesMaxCompletionTokens: true
+    }
+  },
+  "gpt-realtime": {
+    id: "gpt-realtime",
+    name: "GPT Realtime",
+    provider: "openai",
+    tier: "high-fast",
+    contextWindow: 128e3,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 4e-3,
+    completionCostPer1k: 0.016,
+    cachedPromptDiscount: 0.5,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: true,
+      audio: true,
+      promptCaching: true,
+      liveApi: true
+    }
+  },
+  // ── xAI Grok ─────────────────────────────────────────────────────────────
+  "grok-4-7-high-fast": {
+    id: "grok-4-7-high-fast",
+    name: "Grok 4.7 High Fast",
+    provider: "xai",
+    tier: "high-fast",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 1e-3,
+    completionCostPer1k: 3e-3,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["grok-4-6-high-fast", "grok-4.3"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "grok-4-6-high-fast": {
+    id: "grok-4-6-high-fast",
+    name: "Grok 4.6 High Fast",
+    provider: "xai",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 15e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "grok-4.7": {
+    id: "grok-4.7",
+    name: "Grok 4.7",
+    provider: "xai",
+    tier: "high",
+    contextWindow: 5e5,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 2e-3,
+    completionCostPer1k: 6e-3,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["grok-4-6-high-fast", "grok-4.3"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: true,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "grok-4.3": {
+    id: "grok-4.3",
+    name: "Grok 4.3",
+    provider: "xai",
+    tier: "medium",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 15e-4,
+    completionCostPer1k: 5e-3,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "grok-4-mini": {
+    id: "grok-4-mini",
+    name: "Grok 4 Mini",
+    provider: "xai",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 3e-4,
+    completionCostPer1k: 5e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  // ── DeepSeek ─────────────────────────────────────────────────────────────
+  "deepseek-v4-pro": {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    provider: "deepseek",
+    tier: "high",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 55e-5,
+    completionCostPer1k: 219e-5,
+    cachedPromptDiscount: 0.1,
+    fallbacks: ["deepseek-reasoner", "deepseek-v3.2"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "deepseek-v4.1-flash": {
+    id: "deepseek-v4.1-flash",
+    name: "DeepSeek V4.1 Flash",
+    provider: "deepseek",
+    tier: "high-fast",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 14e-5,
+    completionCostPer1k: 55e-5,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "deepseek-v3.2": {
+    id: "deepseek-v3.2",
+    name: "DeepSeek V3.2",
+    provider: "deepseek",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 27e-5,
+    completionCostPer1k: 11e-4,
+    cachedPromptDiscount: 0.1,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "deepseek-reasoner": {
+    id: "deepseek-reasoner",
+    name: "DeepSeek Reasoner (R1)",
+    provider: "deepseek",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 55e-5,
+    completionCostPer1k: 219e-5,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "deepseek-chat": {
+    id: "deepseek-chat",
+    name: "DeepSeek Chat",
+    provider: "deepseek",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 27e-5,
+    completionCostPer1k: 11e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  // ── Mistral AI ───────────────────────────────────────────────────────────
+  "mistral-large-4": {
+    id: "mistral-large-4",
+    name: "Mistral Large 4",
+    provider: "mistral",
+    tier: "high",
+    contextWindow: 1048576,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 2e-3,
+    completionCostPer1k: 6e-3,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["mistral-small-4", "mistral-large-latest"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "mistral-small-4": {
+    id: "mistral-small-4",
+    name: "Mistral Small 4",
+    provider: "mistral",
+    tier: "high-fast",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 1e-4,
+    completionCostPer1k: 3e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "magistral-medium-latest": {
+    id: "magistral-medium-latest",
+    name: "Magistral Medium",
+    provider: "mistral",
+    tier: "medium",
+    contextWindow: 128e3,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 2e-3,
+    completionCostPer1k: 5e-3,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "codestral-latest": {
+    id: "codestral-latest",
+    name: "Codestral",
+    provider: "mistral",
+    tier: "fast",
+    contextWindow: 256e3,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 3e-4,
+    completionCostPer1k: 9e-4,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  // ── Cohere ───────────────────────────────────────────────────────────────
+  "command-a-03-2025": {
+    id: "command-a-03-2025",
+    name: "Cohere Command A",
+    provider: "cohere",
+    tier: "medium",
+    contextWindow: 256e3,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 25e-4,
+    completionCostPer1k: 0.01,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  "command-a-reasoning-08-2025": {
+    id: "command-a-reasoning-08-2025",
+    name: "Cohere Command A Reasoning",
+    provider: "cohere",
+    tier: "high",
+    contextWindow: 256e3,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 3e-3,
+    completionCostPer1k: 0.015,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  "command-a-vision-07-2025": {
+    id: "command-a-vision-07-2025",
+    name: "Cohere Command A Vision",
+    provider: "cohere",
+    tier: "medium",
+    contextWindow: 128e3,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 25e-4,
+    completionCostPer1k: 0.01,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: true,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  // ── Groq LPU ─────────────────────────────────────────────────────────────
+  "openai/gpt-oss-120b": {
+    id: "openai/gpt-oss-120b",
+    name: "OpenAI GPT-OSS 120B (Groq)",
+    provider: "groq",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 15e-5,
+    completionCostPer1k: 6e-4,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  "qwen/qwen3.8-27b": {
+    id: "qwen/qwen3.8-27b",
+    name: "Qwen 3.8 27B (Groq)",
+    provider: "groq",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 131072,
+    promptCostPer1k: 1e-4,
+    completionCostPer1k: 3e-4,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  "meta-llama/llama-4-maverick-17b-128e-instruct": {
+    id: "meta-llama/llama-4-maverick-17b-128e-instruct",
+    name: "Llama 4 Maverick 17B 128E (Groq)",
+    provider: "groq",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 2e-4,
+    completionCostPer1k: 6e-4,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: true,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  "meta-llama/llama-4-scout-17b-16e-instruct": {
+    id: "meta-llama/llama-4-scout-17b-16e-instruct",
+    name: "Llama 4 Scout 17B 16E (Groq)",
+    provider: "groq",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 11e-5,
+    completionCostPer1k: 34e-5,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: true,
+      audio: false,
+      promptCaching: false
+    }
+  },
+  // ── Specialized Frontier Tiers ───────────────────────────────────────────
+  "composer-2.5-fast": {
+    id: "composer-2.5-fast",
+    name: "Composer 2.5 Fast",
+    provider: "cursor",
+    tier: "fast",
+    contextWindow: 2e5,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 4e-4,
+    completionCostPer1k: 12e-4,
+    fallbacks: ["grok-4-6-high-fast"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "muse-wonder-high": {
+    id: "muse-wonder-high",
+    name: "Muse Wonder High",
+    provider: "muse",
+    tier: "high",
+    contextWindow: 3e5,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 2e-3,
+    completionCostPer1k: 8e-3,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  }
+};
+var customModels = /* @__PURE__ */ new Map();
+var FrontierModelRegistry = {
+  /**
+   * Registers or overrides a custom frontier model profile at runtime.
+   */
+  register(profile) {
+    customModels.set(profile.id, profile);
+  },
+  /**
+   * Clears runtime-registered custom model profiles (primarily for isolated tests).
+   */
+  clearCustomModels() {
+    customModels.clear();
+  },
+  /**
+   * Retrieves a model profile by exact ID or registered alias.
+   */
+  get(modelId) {
+    const custom = customModels.get(modelId);
+    if (custom) return custom;
+    const direct = FRONTIER_MODELS[modelId];
+    if (direct) return direct;
+    for (const profile of customModels.values()) {
+      if (profile.aliases?.includes(modelId)) {
+        return profile;
+      }
+    }
+    for (const profile of Object.values(FRONTIER_MODELS)) {
+      if (profile.aliases?.includes(modelId)) {
+        return profile;
+      }
+    }
+    return void 0;
+  },
+  /**
+   * Lists all built-in and custom registered frontier model profiles.
+   */
+  list() {
+    const merged = new Map(
+      Object.entries(FRONTIER_MODELS)
+    );
+    for (const [id, profile] of customModels.entries()) {
+      merged.set(id, profile);
+    }
+    return Array.from(merged.values());
+  },
+  /**
+   * Filters frontier models by execution tier ('high-fast' | 'fast' | 'medium' | 'high').
+   */
+  getByTier(tier) {
+    return FrontierModelRegistry.list().filter((m) => m.tier === tier);
+  },
+  /**
+   * Filters frontier models by provider identifier (e.g. 'gemini', 'anthropic', 'openai', 'xai').
+   */
+  getByProvider(provider) {
+    const norm = provider.toLowerCase();
+    return FrontierModelRegistry.list().filter(
+      (m) => m.provider.toLowerCase() === norm
+    );
+  },
+  /**
+   * Returns canonical availability fallback models for a given model ID.
+   */
+  getFallbacks(modelId) {
+    const profile = FrontierModelRegistry.get(modelId);
+    if (profile?.fallbacks && profile.fallbacks.length > 0) {
+      return [...profile.fallbacks];
+    }
+    const direct = FRONTIER_AVAILABILITY_FALLBACKS[modelId];
+    return direct ? [...direct] : [];
+  },
+  /**
+   * Estimates request USD cost using registered frontier pricing and cache read discounts.
+   */
+  estimateCost(modelId, usage) {
+    const profile = FrontierModelRegistry.get(modelId);
+    if (!profile) return 0;
+    const cached = Math.min(usage.promptTokens, usage.cachedPromptTokens ?? 0);
+    const uncached = Math.max(0, usage.promptTokens - cached);
+    const cacheMultiplier = profile.cachedPromptDiscount ?? 0.25;
+    const promptCost = (uncached + cached * cacheMultiplier) / 1e3 * profile.promptCostPer1k;
+    const completionCost = usage.completionTokens / 1e3 * profile.completionCostPer1k;
+    return Number((promptCost + completionCost).toFixed(6));
+  },
+  /**
+   * Checks whether a model supports Anthropic-style adaptive thinking (`thinking: { type: 'adaptive' }`).
+   */
+  isAdaptiveThinkingModel(modelId) {
+    const profile = FrontierModelRegistry.get(modelId);
+    if (profile?.capabilities.adaptiveThinking) return true;
+    const lower = modelId.toLowerCase();
+    return lower.includes("claude-opus-4-7") || lower.includes("claude-opus-4.7") || lower.includes("claude-sonnet-4-6") || lower.includes("claude-sonnet-4.6") || lower.includes("claude-opus-5") || lower.includes("claude-sonnet-5") || lower.includes("claude-fable-5");
+  },
+  /**
+   * Checks whether an OpenAI model requires `max_completion_tokens` instead of `max_tokens`.
+   */
+  usesMaxCompletionTokens(modelId) {
+    const profile = FrontierModelRegistry.get(modelId);
+    if (profile?.capabilities.usesMaxCompletionTokens) return true;
+    const lower = modelId.toLowerCase();
+    return lower.startsWith("o1") || lower.startsWith("o3") || lower.startsWith("o4") || lower.startsWith("gpt-5") || lower.startsWith("gpt-6") || lower.includes("reasoner");
   }
 };
 
@@ -9475,7 +11020,7 @@ var SpeculativeStreamVerifier = class {
     if (!this.auditorProvider) return null;
     try {
       const auditReq = {
-        model: this.auditorModel ?? "claude-3-7-sonnet",
+        model: this.auditorModel ?? "claude-sonnet-5-5",
         messages: [
           { role: "system", content: this.auditorInstructions },
           {
@@ -9539,10 +11084,12 @@ ${snippet}
 // src/core/VisionOptimizer.ts
 var VisionOptimizer = class {
   defaultDetail;
+  mediaResolution;
   maxAllowedTokensPerImage;
   autoDownsampleDetail;
   constructor(options = {}) {
     this.defaultDetail = options.defaultDetail ?? "auto";
+    this.mediaResolution = options.mediaResolution ?? "medium";
     this.maxAllowedTokensPerImage = options.maxAllowedTokensPerImage ?? 2e3;
     this.autoDownsampleDetail = options.autoDownsampleDetail ?? true;
   }
@@ -9617,7 +11164,7 @@ var VisionOptimizer = class {
    * Estimates provider-specific vision token consumption and dollar cost.
    * Accurately replicates OpenAI 512px tile grid, Anthropic megapixel ratios, and Gemini tile formulas.
    */
-  estimateVisionTokens(input, provider = "openai", detailOverride) {
+  estimateVisionTokens(input, provider = "openai", detailOverride, mediaResolutionOverride) {
     const dims = typeof input === "object" && "format" in input ? input : this.analyzeImage(input);
     const detail = detailOverride ?? this.defaultDetail;
     const normProvider = provider.toLowerCase();
@@ -9631,10 +11178,25 @@ var VisionOptimizer = class {
         Math.ceil(dims.width * dims.height / (512 * 512))
       );
     } else if (normProvider.includes("gemini") || normProvider.includes("google")) {
-      const tilesW = Math.ceil(dims.width / 768);
-      const tilesH = Math.ceil(dims.height / 768);
-      tilesCount = Math.max(1, tilesW * tilesH);
-      tokens = tilesCount * 258;
+      if (mediaResolutionOverride === "low") {
+        tilesCount = 1;
+        tokens = 258;
+      } else if (mediaResolutionOverride === "high") {
+        const tilesW = Math.ceil(dims.width / 768);
+        const tilesH = Math.ceil(dims.height / 768);
+        tilesCount = Math.max(1, tilesW * tilesH);
+        tokens = Math.max(560, tilesCount * 258);
+      } else {
+        const tilesW = Math.ceil(dims.width / 768);
+        const tilesH = Math.ceil(dims.height / 768);
+        tilesCount = Math.max(1, tilesW * tilesH);
+        tokens = tilesCount * 258;
+      }
+    } else if (normProvider.includes("xai") || normProvider.includes("grok")) {
+      const tilesW = Math.max(1, Math.ceil(dims.width / 448));
+      const tilesH = Math.max(1, Math.ceil(dims.height / 448));
+      tilesCount = tilesW * tilesH;
+      tokens = tilesCount * 256;
     } else {
       if (detail === "low") {
         tokens = 85;
@@ -9689,6 +11251,30 @@ var VisionOptimizer = class {
     return {
       provider,
       estimatedDurationSeconds: safeDuration,
+      tokens,
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6))
+    };
+  }
+  /**
+   * Estimates video token consumption for frontier multimodal models (Gemini 3/4, GPT-5).
+   * Accounts for video frame sampling rate (`fps`) and `mediaResolution` ('low' | 'medium' | 'high').
+   */
+  estimateVideoTokens(input, provider = "gemini") {
+    const safeDuration = Math.max(1, input.durationSeconds);
+    const fps = Math.max(0.1, input.fps ?? 1);
+    const resolution = input.mediaResolution ?? this.mediaResolution;
+    const tokensPerFrame = resolution === "low" ? 70 : resolution === "high" ? 560 : 258;
+    const audioTokensPerSec = provider.toLowerCase().includes("gemini") ? 32 : 30;
+    const frameTokens = Math.ceil(safeDuration * fps * tokensPerFrame);
+    const audioTokens = Math.ceil(safeDuration * audioTokensPerSec);
+    const tokens = frameTokens + audioTokens;
+    const costPer1k = 25e-4;
+    const estimatedCostUsd = tokens / 1e3 * costPer1k;
+    return {
+      provider,
+      durationSeconds: safeDuration,
+      fps,
+      mediaResolution: resolution,
       tokens,
       estimatedCostUsd: Number(estimatedCostUsd.toFixed(6))
     };
@@ -9906,6 +11492,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "prompt" })} ${metrics.totalPromptTokens}${timestampSuffix}`,
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "completion" })} ${metrics.totalCompletionTokens}${timestampSuffix}`,
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "cached_prompt" })} ${metrics.totalCachedPromptTokens ?? 0}${timestampSuffix}`,
+    `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "reasoning" })} ${metrics.totalReasoningTokens ?? 0}${timestampSuffix}`,
     `${prefix}tokens_total${formatPrometheusLabels(baseLabels, { type: "total" })} ${metrics.totalTokens}${timestampSuffix}`
   );
   lines.push(
@@ -9968,7 +11555,7 @@ function formatPrometheusMetrics(metrics, options = {}) {
 }
 function formatOtelMetrics(metrics, options = {}) {
   const serviceName = options.serviceName || "sinapsai-gateway";
-  const serviceVersion = options.serviceVersion || "2.11.0";
+  const serviceVersion = options.serviceVersion || SINAPSAI_VERSION;
   const nowNano = `${Date.now()}000000`;
   const resourceAttrs = [
     { key: "service.name", value: { stringValue: serviceName } },
@@ -10056,6 +11643,10 @@ function formatOtelMetrics(metrics, options = {}) {
         {
           asInt: metrics.totalCachedPromptTokens ?? 0,
           attributes: { type: "cached_prompt" }
+        },
+        {
+          asInt: metrics.totalReasoningTokens ?? 0,
+          attributes: { type: "reasoning" }
         },
         { asInt: metrics.totalTokens, attributes: { type: "total" } }
       ]
@@ -10272,6 +11863,7 @@ var Router = class {
     cachedRequests: 0,
     totalPromptTokens: 0,
     totalCompletionTokens: 0,
+    totalReasoningTokens: 0,
     totalTokens: 0,
     estimatedCostUsd: 0,
     providerMetrics: {}
@@ -10441,7 +12033,7 @@ var Router = class {
       providers: providerHealthList
     };
   }
-  recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0, cachedPromptTokens = 0) {
+  recordMetrics(providerId, success, latencyMs, promptTokens = 0, completionTokens = 0, costUsd = 0, cachedPromptTokens = 0, reasoningTokens = 0) {
     if (!this.metrics.providerMetrics[providerId]) {
       this.metrics.providerMetrics[providerId] = {
         requests: 0,
@@ -10472,6 +12064,10 @@ var Router = class {
     if (cachedPromptTokens > 0) {
       this.metrics.totalCachedPromptTokens = (this.metrics.totalCachedPromptTokens || 0) + cachedPromptTokens;
       pm.cachedPromptTokens = (pm.cachedPromptTokens || 0) + cachedPromptTokens;
+    }
+    if (reasoningTokens > 0) {
+      this.metrics.totalReasoningTokens = (this.metrics.totalReasoningTokens || 0) + reasoningTokens;
+      pm.reasoningTokens = (pm.reasoningTokens || 0) + reasoningTokens;
     }
     this.metrics.estimatedCostUsd = Number(
       (this.metrics.estimatedCostUsd + costUsd).toFixed(6)
@@ -10582,9 +12178,16 @@ var Router = class {
       rf: request.responseFormat,
       tb: request.thinkingBudget,
       re: request.reasoningEffort,
+      tl: request.thinkingLevel,
+      it: request.includeThoughts,
       cc: request.cachedContent,
       gs: request.googleSearch,
-      ce: request.codeExecution
+      ws: request.webSearch,
+      ce: request.codeExecution,
+      v: request.verbosity,
+      st: request.serviceTier,
+      pr: request.previousResponseId,
+      pct: request.promptCacheTtl
     });
     return `cache:${request.model}:${this.hashString64(raw)}`;
   }
@@ -10620,8 +12223,18 @@ var Router = class {
         list.push(m);
       }
     }
-    if ((request.model === "gemini-4-pro" || request.model === "gemini-4-argon" || request.model === "gemini-4-flash") && provider.name === "Gemini" && !list.includes("gemini-3.8-flash")) {
-      list.push("gemini-3.8-flash");
+    if (request.model) {
+      const profile = FrontierModelRegistry.get(request.model);
+      const providerName = provider.name.toLowerCase();
+      const modelProvider = profile?.provider.toLowerCase();
+      const isCompatibleProvider = !modelProvider || providerName.includes(modelProvider) || modelProvider === providerName;
+      if (isCompatibleProvider) {
+        for (const fb of FrontierModelRegistry.getFallbacks(request.model)) {
+          if (fb && !list.includes(fb)) {
+            list.push(fb);
+          }
+        }
+      }
     }
     return list.length > 0 ? list : ["default"];
   }
@@ -10850,6 +12463,7 @@ var Router = class {
                 let collectedPromptTokens = 0;
                 let collectedCompletionTokens = 0;
                 let collectedCachedPromptTokens = 0;
+                let collectedReasoningTokens = 0;
                 return (async function* () {
                   try {
                     for await (const chunk of iterable) {
@@ -10860,6 +12474,7 @@ var Router = class {
                         collectedPromptTokens = chunk.usage.promptTokens || collectedPromptTokens;
                         collectedCompletionTokens = chunk.usage.completionTokens || collectedCompletionTokens;
                         collectedCachedPromptTokens = chunk.usage.cachedPromptTokens || collectedCachedPromptTokens;
+                        collectedReasoningTokens = chunk.usage.reasoningTokens || collectedReasoningTokens;
                       }
                       yield {
                         ...chunk,
@@ -10891,7 +12506,8 @@ var Router = class {
                       collectedPromptTokens,
                       collectedCompletionTokens,
                       costUsd,
-                      collectedCachedPromptTokens
+                      collectedCachedPromptTokens,
+                      collectedReasoningTokens
                     );
                     self.hooks?.onStreamSuccess?.(
                       provider,
@@ -11004,6 +12620,7 @@ var Router = class {
             const promptTokens = apiRes.usage?.promptTokens ?? 0;
             const completionTokens = apiRes.usage?.completionTokens ?? 0;
             const cachedPromptTokens = apiRes.usage?.cachedPromptTokens ?? 0;
+            const reasoningTokens = apiRes.usage?.reasoningTokens ?? 0;
             let costUsd = 0;
             if (provider.promptCostPer1k !== void 0 && provider.completionCostPer1k !== void 0) {
               const uncached = Math.max(0, promptTokens - cachedPromptTokens);
@@ -11021,7 +12638,8 @@ var Router = class {
               promptTokens,
               completionTokens,
               costUsd,
-              cachedPromptTokens
+              cachedPromptTokens,
+              reasoningTokens
             );
             if (apiRes.rateLimit) {
               if (apiRes.rateLimit.remainingRequests !== void 0 && apiRes.rateLimit.remainingRequests <= 1) {
@@ -11663,6 +13281,37 @@ var SinapsClient = class {
     this.storage = options.storage || new InMemoryStorage();
     this.hooks = options.hooks;
     this.mcp = options.mcpBridge || new McpToolBridge();
+    if (!this.mcp.hasSamplingHandler()) {
+      this.mcp.setSamplingHandler(async (samplingReq) => {
+        const hintModel = samplingReq.modelPreferences?.hints?.find((h) => h.name)?.name || "gemini-3.8-flash";
+        const messages = [];
+        if (samplingReq.systemPrompt) {
+          messages.push({ role: "system", content: samplingReq.systemPrompt });
+        }
+        for (const msg of samplingReq.messages) {
+          messages.push({
+            role: msg.role,
+            content: msg.content.type === "text" && msg.content.text ? msg.content.text : JSON.stringify(msg.content)
+          });
+        }
+        const completion = await this.chat.completions.create({
+          model: hintModel,
+          messages,
+          maxTokens: samplingReq.maxTokens,
+          temperature: samplingReq.temperature
+        });
+        const choice = completion.choices?.[0];
+        return {
+          role: "assistant",
+          content: {
+            type: "text",
+            text: choice?.message?.content || ""
+          },
+          model: completion.model || hintModel,
+          stopReason: choice?.finishReason === "length" ? "maxTokens" : "endTurn"
+        };
+      });
+    }
     if (options.modelAliases) {
       for (const [alias, target] of Object.entries(options.modelAliases)) {
         this.modelAliases.set(alias, target);
@@ -11936,10 +13585,17 @@ var SinapsClient = class {
           responseFormat: request.responseFormat,
           fallbackModels: request.fallbackModels,
           thinkingBudget,
+          thinkingLevel: request.thinkingLevel,
+          includeThoughts: request.includeThoughts,
           reasoningEffort: request.reasoningEffort,
           cachedContent: request.cachedContent,
           googleSearch: request.googleSearch,
+          webSearch: request.webSearch,
           codeExecution: request.codeExecution,
+          verbosity: request.verbosity,
+          serviceTier: request.serviceTier,
+          previousResponseId: request.previousResponseId,
+          promptCacheTtl: request.promptCacheTtl,
           user: request.user,
           llmo: request.llmo
         };
@@ -12066,7 +13722,18 @@ var SinapsClient = class {
               "gen_ai.response.model": finalResponse.model || fullReq.model,
               "gen_ai.usage.prompt_tokens": finalResponse.usage?.promptTokens ?? 0,
               "gen_ai.usage.completion_tokens": finalResponse.usage?.completionTokens ?? 0,
+              "gen_ai.usage.input_tokens": finalResponse.usage?.promptTokens ?? 0,
+              "gen_ai.usage.output_tokens": finalResponse.usage?.completionTokens ?? 0,
               "gen_ai.usage.total_tokens": finalResponse.usage?.totalTokens ?? 0,
+              ...finalResponse.usage?.reasoningTokens !== void 0 ? {
+                "gen_ai.usage.reasoning_tokens": finalResponse.usage.reasoningTokens
+              } : {},
+              ...finalResponse.usage?.cachedPromptTokens !== void 0 ? {
+                "gen_ai.usage.cache_read.input_tokens": finalResponse.usage.cachedPromptTokens
+              } : {},
+              ...finalResponse.usage?.cacheWriteTokens !== void 0 ? {
+                "gen_ai.usage.cache_creation.input_tokens": finalResponse.usage.cacheWriteTokens
+              } : {},
               ...fromClusteredCache && clusterHitMeta ? {
                 "sinapsai.cache.hit": true,
                 "sinapsai.cache.cluster_id": clusterHitMeta.clusterId,
@@ -13167,18 +14834,493 @@ var SinapsLanguageModel = class {
   }
 };
 
+// src/ai-sdk/SinapsLanguageModelV2.ts
+function encodeBinaryDataUrl(data, mediaType) {
+  if (typeof data === "string") {
+    if (data.startsWith("http://") || data.startsWith("https://") || data.startsWith("data:")) {
+      return data;
+    }
+    return `data:${mediaType || "application/octet-stream"};base64,${data}`;
+  }
+  if (data instanceof URL) {
+    return data.toString();
+  }
+  const base64 = typeof Buffer !== "undefined" ? Buffer.from(data).toString("base64") : btoa(String.fromCharCode(...data));
+  return `data:${mediaType || "application/octet-stream"};base64,${base64}`;
+}
+function convertV2PromptToSinapsMessages(prompt) {
+  const messages = [];
+  for (const message of prompt) {
+    if (message.role === "system") {
+      messages.push({
+        role: "system",
+        content: message.content
+      });
+    } else if (message.role === "user") {
+      const parts = [];
+      for (const part of message.content) {
+        if (part.type === "text") {
+          parts.push({ type: "text", text: part.text });
+        } else if (part.type === "file") {
+          parts.push({
+            type: "image_url",
+            image_url: {
+              url: encodeBinaryDataUrl(part.data, part.mediaType)
+            }
+          });
+        }
+      }
+      if (parts.length === 1 && parts[0].type === "text") {
+        messages.push({ role: "user", content: parts[0].text });
+      } else {
+        messages.push({ role: "user", content: parts });
+      }
+    } else if (message.role === "assistant") {
+      let textContent = "";
+      let reasoningContent = "";
+      const toolCalls = [];
+      for (const part of message.content) {
+        if (part.type === "text") {
+          textContent += part.text;
+        } else if (part.type === "reasoning") {
+          reasoningContent += part.text;
+        } else if (part.type === "tool-call") {
+          toolCalls.push({
+            id: part.toolCallId,
+            type: "function",
+            function: {
+              name: part.toolName,
+              arguments: typeof part.input === "string" ? part.input : JSON.stringify(part.input ?? {})
+            }
+          });
+        }
+      }
+      messages.push({
+        role: "assistant",
+        content: textContent.length > 0 ? textContent : null,
+        ...reasoningContent ? { reasoning_content: reasoningContent } : {},
+        ...toolCalls.length > 0 ? { tool_calls: toolCalls } : {}
+      });
+    } else if (message.role === "tool") {
+      for (const part of message.content) {
+        let serialized;
+        if (part.output && typeof part.output === "object" && "value" in part.output) {
+          const val = part.output.value;
+          serialized = typeof val === "string" ? val : JSON.stringify(val);
+        } else {
+          serialized = JSON.stringify(part.output ?? "");
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: part.toolCallId,
+          name: part.toolName,
+          content: serialized
+        });
+      }
+    }
+  }
+  return messages;
+}
+function convertV2CallOptions(options) {
+  const messages = convertV2PromptToSinapsMessages(options.prompt);
+  let tools;
+  if (options.tools && options.tools.length > 0) {
+    tools = options.tools.filter((t) => t.type === "function").map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.inputSchema
+      }
+    }));
+  }
+  let toolChoice;
+  if (options.toolChoice) {
+    if (options.toolChoice.type === "auto") {
+      toolChoice = "auto";
+    } else if (options.toolChoice.type === "none") {
+      toolChoice = "none";
+    } else if (options.toolChoice.type === "required") {
+      toolChoice = "required";
+    } else if (options.toolChoice.type === "tool") {
+      toolChoice = {
+        type: "function",
+        function: { name: options.toolChoice.toolName }
+      };
+    }
+  }
+  let responseFormat;
+  if (options.responseFormat?.type === "json") {
+    responseFormat = options.responseFormat.schema ? {
+      type: "json_schema",
+      json_schema: {
+        name: options.responseFormat.name || "response",
+        description: options.responseFormat.description,
+        schema: options.responseFormat.schema
+      }
+    } : { type: "json_object" };
+  }
+  return { messages, tools, toolChoice, responseFormat };
+}
+function buildBaseRequest(modelId, options, settings) {
+  const { messages, tools, toolChoice, responseFormat } = convertV2CallOptions(options);
+  const sinapsOpts = options.providerOptions?.sinapsai ?? {};
+  return {
+    model: modelId,
+    messages,
+    temperature: options.temperature,
+    maxTokens: options.maxOutputTokens,
+    tools,
+    toolChoice,
+    responseFormat,
+    fallbackModels: settings?.fallbackModels,
+    thinkingBudget: sinapsOpts.thinkingBudget ?? settings?.thinkingBudget,
+    thinkingLevel: sinapsOpts.thinkingLevel ?? settings?.thinkingLevel,
+    includeThoughts: sinapsOpts.includeThoughts ?? settings?.includeThoughts,
+    reasoningEffort: sinapsOpts.reasoningEffort ?? settings?.reasoningEffort,
+    cachedContent: settings?.cachedContent,
+    googleSearch: settings?.googleSearch,
+    webSearch: sinapsOpts.webSearch ?? settings?.webSearch,
+    codeExecution: settings?.codeExecution,
+    verbosity: settings?.verbosity,
+    serviceTier: settings?.serviceTier,
+    promptCacheTtl: settings?.promptCacheTtl,
+    user: settings?.user,
+    signal: options.abortSignal
+  };
+}
+function mapResponseToContent(response) {
+  const choice = response.choices?.[0];
+  const message = choice?.message;
+  const content = [];
+  if (message?.reasoning_content) {
+    content.push({
+      type: "reasoning",
+      text: message.reasoning_content
+    });
+  }
+  if (message?.content) {
+    content.push({
+      type: "text",
+      text: message.content
+    });
+  }
+  if (message?.tool_calls && message.tool_calls.length > 0) {
+    for (const tc of message.tool_calls) {
+      content.push({
+        type: "tool-call",
+        toolCallId: tc.id,
+        toolName: tc.function.name,
+        input: tc.function.arguments || "{}"
+      });
+    }
+  }
+  return {
+    content,
+    finishReason: mapFinishReason(choice?.finishReason),
+    usage: {
+      inputTokens: response.usage?.promptTokens,
+      outputTokens: response.usage?.completionTokens,
+      totalTokens: response.usage?.totalTokens,
+      reasoningTokens: response.usage?.reasoningTokens,
+      cachedInputTokens: response.usage?.cachedPromptTokens
+    }
+  };
+}
+function toV3FinishReason(finishReason) {
+  return {
+    unified: finishReason === "unknown" ? "other" : finishReason,
+    raw: finishReason
+  };
+}
+function toV3Usage(usage) {
+  const cached = usage.cachedInputTokens ?? 0;
+  const totalIn = usage.inputTokens;
+  const reasoning = usage.reasoningTokens ?? 0;
+  const totalOut = usage.outputTokens;
+  return {
+    inputTokens: {
+      total: totalIn,
+      noCache: totalIn !== void 0 ? Math.max(0, totalIn - cached) : void 0,
+      cacheRead: usage.cachedInputTokens
+    },
+    outputTokens: {
+      total: totalOut,
+      text: totalOut !== void 0 ? Math.max(0, totalOut - reasoning) : void 0,
+      reasoning: usage.reasoningTokens
+    }
+  };
+}
+function createV2OrV3Stream(client, modelId, options, settings, version) {
+  const baseReq = buildBaseRequest(modelId, options, settings);
+  const requestPayload = {
+    ...baseReq,
+    stream: true
+  };
+  const warnings = [];
+  const stream = new ReadableStream({
+    async start(controller) {
+      const enqueue = (part) => {
+        controller.enqueue(
+          part
+        );
+      };
+      try {
+        const responseStream = await client.chat.completions.create(
+          requestPayload
+        );
+        enqueue({ type: "stream-start", warnings });
+        let metadataSent = false;
+        let reasoningStarted = false;
+        let textStarted = false;
+        let usage = {
+          inputTokens: void 0,
+          outputTokens: void 0,
+          totalTokens: void 0
+        };
+        let finishReason = "stop";
+        const activeTools = /* @__PURE__ */ new Map();
+        for await (const chunk of responseStream) {
+          if (!metadataSent && (chunk.id || chunk.model)) {
+            metadataSent = true;
+            enqueue({
+              type: "response-metadata",
+              id: chunk.id,
+              modelId: chunk.model
+            });
+          }
+          if (chunk.usage) {
+            usage = {
+              inputTokens: chunk.usage.promptTokens,
+              outputTokens: chunk.usage.completionTokens,
+              totalTokens: chunk.usage.totalTokens,
+              reasoningTokens: chunk.usage.reasoningTokens,
+              cachedInputTokens: chunk.usage.cachedPromptTokens
+            };
+          }
+          const choice = chunk.choices?.[0];
+          if (!choice) continue;
+          if (choice.delta?.reasoning_content) {
+            if (!reasoningStarted) {
+              reasoningStarted = true;
+              enqueue({ type: "reasoning-start", id: "reasoning-0" });
+            }
+            enqueue({
+              type: "reasoning-delta",
+              id: "reasoning-0",
+              delta: choice.delta.reasoning_content
+            });
+          }
+          if (choice.delta?.content) {
+            if (reasoningStarted) {
+              enqueue({ type: "reasoning-end", id: "reasoning-0" });
+              reasoningStarted = false;
+            }
+            if (!textStarted) {
+              textStarted = true;
+              enqueue({ type: "text-start", id: "text-0" });
+            }
+            enqueue({
+              type: "text-delta",
+              id: "text-0",
+              delta: choice.delta.content
+            });
+          }
+          if (choice.delta?.tool_calls) {
+            for (const tc of choice.delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              let active = activeTools.get(idx);
+              if (!active) {
+                active = {
+                  id: tc.id || `call_${Date.now()}_${idx}`,
+                  name: tc.function?.name || "",
+                  args: "",
+                  started: false
+                };
+                activeTools.set(idx, active);
+              } else {
+                if (tc.id) active.id = tc.id;
+                if (tc.function?.name) active.name = tc.function.name;
+              }
+              if (!active.started && active.name) {
+                active.started = true;
+                enqueue({
+                  type: "tool-input-start",
+                  id: active.id,
+                  toolName: active.name
+                });
+              }
+              if (tc.function?.arguments) {
+                active.args += tc.function.arguments;
+                enqueue({
+                  type: "tool-input-delta",
+                  id: active.id,
+                  delta: tc.function.arguments
+                });
+              }
+            }
+          }
+          if (choice.finishReason) {
+            finishReason = mapFinishReason(choice.finishReason);
+          }
+        }
+        if (reasoningStarted) {
+          enqueue({ type: "reasoning-end", id: "reasoning-0" });
+        }
+        if (textStarted) {
+          enqueue({ type: "text-end", id: "text-0" });
+        }
+        for (const active of activeTools.values()) {
+          if (active.started) {
+            enqueue({ type: "tool-input-end", id: active.id });
+          }
+          if (active.name) {
+            enqueue({
+              type: "tool-call",
+              toolCallId: active.id,
+              toolName: active.name,
+              input: active.args || "{}"
+            });
+          }
+        }
+        if (version === "v3") {
+          enqueue({
+            type: "finish",
+            finishReason: toV3FinishReason(finishReason),
+            usage: toV3Usage(usage)
+          });
+        } else {
+          enqueue({
+            type: "finish",
+            finishReason,
+            usage
+          });
+        }
+        controller.close();
+      } catch (error) {
+        enqueue({ type: "error", error });
+        controller.close();
+      }
+    }
+  });
+  return Promise.resolve({
+    stream,
+    request: { body: requestPayload },
+    warnings
+  });
+}
+var SinapsLanguageModelV2 = class {
+  specificationVersion = "v2";
+  provider = "sinapsai";
+  modelId;
+  supportedUrls = {
+    "image/*": [/^https?:\/\/.+$/i],
+    "application/pdf": [/^https?:\/\/.+$/i]
+  };
+  client;
+  settings;
+  constructor(client, modelId, settings) {
+    this.client = client;
+    this.modelId = modelId;
+    this.settings = settings;
+  }
+  async doGenerate(options) {
+    const req = {
+      ...buildBaseRequest(this.modelId, options, this.settings),
+      stream: false
+    };
+    const response = await this.client.chat.completions.create(
+      req
+    );
+    const mapped = mapResponseToContent(response);
+    return {
+      content: mapped.content,
+      finishReason: mapped.finishReason,
+      usage: mapped.usage,
+      warnings: [],
+      request: { body: req },
+      response: {
+        id: response.id,
+        modelId: response.model
+      }
+    };
+  }
+  async doStream(options) {
+    return createV2OrV3Stream(
+      this.client,
+      this.modelId,
+      options,
+      this.settings,
+      "v2"
+    );
+  }
+};
+var SinapsLanguageModelV3 = class {
+  specificationVersion = "v3";
+  provider = "sinapsai";
+  modelId;
+  supportedUrls = {
+    "image/*": [/^https?:\/\/.+$/i],
+    "application/pdf": [/^https?:\/\/.+$/i]
+  };
+  client;
+  settings;
+  constructor(client, modelId, settings) {
+    this.client = client;
+    this.modelId = modelId;
+    this.settings = settings;
+  }
+  async doGenerate(options) {
+    const req = {
+      ...buildBaseRequest(this.modelId, options, this.settings),
+      stream: false
+    };
+    const response = await this.client.chat.completions.create(
+      req
+    );
+    const mapped = mapResponseToContent(response);
+    return {
+      content: mapped.content,
+      finishReason: toV3FinishReason(mapped.finishReason),
+      usage: toV3Usage(mapped.usage),
+      warnings: [],
+      request: { body: req },
+      response: {
+        id: response.id,
+        modelId: response.model
+      }
+    };
+  }
+  async doStream(options) {
+    return createV2OrV3Stream(
+      this.client,
+      this.modelId,
+      options,
+      this.settings,
+      "v3"
+    );
+  }
+};
+
 // src/ai-sdk/index.ts
-function createSinapsAI(clientOrOptions) {
+function resolveClient(clientOrOptions) {
   if (!clientOrOptions) {
     throw new Error(
       "createSinapsAI requires a SinapsClient instance or SinapsClientOptions with at least one configured provider."
     );
   }
-  const client = clientOrOptions instanceof SinapsClient ? clientOrOptions : new SinapsClient(clientOrOptions);
+  return clientOrOptions instanceof SinapsClient ? clientOrOptions : new SinapsClient(clientOrOptions);
+}
+function createSinapsAI(clientOrOptions) {
+  const client = resolveClient(clientOrOptions);
   const createLanguageModel = (modelId, settings) => new SinapsLanguageModel(client, modelId, settings);
+  const createLanguageModelV2 = (modelId, settings) => new SinapsLanguageModelV2(client, modelId, settings);
+  const createLanguageModelV3 = (modelId, settings) => new SinapsLanguageModelV3(client, modelId, settings);
   const createEmbeddingModel = (modelId, settings) => new SinapsEmbeddingModel(client, modelId, settings);
   const provider = ((modelId, settings) => createLanguageModel(modelId, settings));
   provider.languageModel = createLanguageModel;
+  provider.languageModelV2 = createLanguageModelV2;
+  provider.languageModelV3 = createLanguageModelV3;
   provider.chat = createLanguageModel;
   provider.textEmbeddingModel = createEmbeddingModel;
   provider.embedding = createEmbeddingModel;
@@ -13186,6 +15328,36 @@ function createSinapsAI(clientOrOptions) {
     get() {
       return client;
     },
+    enumerable: true
+  });
+  return provider;
+}
+function createSinapsAIV2(clientOrOptions) {
+  const client = resolveClient(clientOrOptions);
+  const createModel = (modelId, settings) => new SinapsLanguageModelV2(client, modelId, settings);
+  const createEmb = (modelId, settings) => new SinapsEmbeddingModel(client, modelId, settings);
+  const provider = ((modelId, settings) => createModel(modelId, settings));
+  provider.languageModel = createModel;
+  provider.chat = createModel;
+  provider.textEmbeddingModel = createEmb;
+  provider.embedding = createEmb;
+  Object.defineProperty(provider, "client", {
+    get: () => client,
+    enumerable: true
+  });
+  return provider;
+}
+function createSinapsAIV3(clientOrOptions) {
+  const client = resolveClient(clientOrOptions);
+  const createModel = (modelId, settings) => new SinapsLanguageModelV3(client, modelId, settings);
+  const createEmb = (modelId, settings) => new SinapsEmbeddingModel(client, modelId, settings);
+  const provider = ((modelId, settings) => createModel(modelId, settings));
+  provider.languageModel = createModel;
+  provider.chat = createModel;
+  provider.textEmbeddingModel = createEmb;
+  provider.embedding = createEmb;
+  Object.defineProperty(provider, "client", {
+    get: () => client,
     enumerable: true
   });
   return provider;
@@ -13224,6 +15396,14 @@ var sinapsai = createSinapsAI;
  * Provides a lightweight, Zod-like fluent schema declaration engine
  * that compiles directly to standard JSON Schema (OpenAI / MCP compatible)
  * with built-in runtime validation and inference without external dependencies.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Central package version constant synchronized across CLI, MCP, OTel, and A2A manifests.
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
  * @copyright 2026 Roedy Rustam
@@ -13564,6 +15744,20 @@ var sinapsai = createSinapsAI;
  * @license MIT
  */
 /**
+ * SinapsAI - In-Process AI Gateway & Control Plane
+ * Unified Late-2026 Frontier Model Taxonomy, Pricing, Capabilities & Availability Fallbacks
+ *
+ * Implements the 4-Tier Frontier Execution Matrix:
+ * - `high-fast`: Sub-100ms / sub-second TTFT, AST scans, triage, fast test loops
+ * - `fast`: Diff-specialized / lightweight rapid mutation models
+ * - `medium`: 2M+ monolithic context, balanced reasoning, strict JSON contracts
+ * - `high`: Deep System-2 adaptive/extended thinking, flagship synthesis, spatial/multimodal
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
  * Zero-dependency In-Process Speculative Stream Verification & Dual-Engine Decoupled Copilot.
  *
  * Couples an ultra-fast streaming draft generator (e.g., Groq LPU, Gemini Flash-Lite) with
@@ -13610,6 +15804,14 @@ var sinapsai = createSinapsAI;
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Vercel AI SDK LanguageModelV2 (AI SDK v5) & LanguageModelV3 (AI SDK v6) Implementations
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Vercel AI SDK Integration & Provider Adapter
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
@@ -13619,9 +15821,15 @@ var sinapsai = createSinapsAI;
 
 exports.SinapsEmbeddingModel = SinapsEmbeddingModel;
 exports.SinapsLanguageModel = SinapsLanguageModel;
+exports.SinapsLanguageModelV2 = SinapsLanguageModelV2;
+exports.SinapsLanguageModelV3 = SinapsLanguageModelV3;
 exports.convertPromptToSinapsMessages = convertPromptToSinapsMessages;
 exports.convertToolsAndMode = convertToolsAndMode;
+exports.convertV2CallOptions = convertV2CallOptions;
+exports.convertV2PromptToSinapsMessages = convertV2PromptToSinapsMessages;
 exports.createSinapsAI = createSinapsAI;
+exports.createSinapsAIV2 = createSinapsAIV2;
+exports.createSinapsAIV3 = createSinapsAIV3;
 exports.mapFinishReason = mapFinishReason;
 exports.sinapsai = sinapsai;
 //# sourceMappingURL=index.cjs.map
