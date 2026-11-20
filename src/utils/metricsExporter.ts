@@ -168,9 +168,9 @@ export function formatOtelMetrics(
       doubleValue?: number;
     };
   }> = [
-    { key: 'service.name', value: { stringValue: serviceName } },
-    { key: 'service.version', value: { stringValue: serviceVersion } },
-  ];
+      { key: 'service.name', value: { stringValue: serviceName } },
+      { key: 'service.version', value: { stringValue: serviceVersion } },
+    ];
 
   if (options.resourceAttributes) {
     for (const [k, v] of Object.entries(options.resourceAttributes)) {
