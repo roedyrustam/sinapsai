@@ -96,6 +96,12 @@ npx tsx examples/29-gemini-context-caching-and-parallel-agents.ts
 
 # 30. In-Process Multi-Agent Swarm & Agent-to-Agent (A2A) Handoff Protocol
 npx tsx examples/30-multi-agent-swarm-and-a2a-handoff.ts
+
+# 49. Late-2026 Frontier LLM Control Plane & Multi-Tier Matrix
+npx tsx examples/49-frontier-llm-2026-control-plane.ts
+
+# 50. Alibaba Qwen Provider with QwQ Reasoning & Multimodal VL
+npx tsx examples/50-qwen-provider-and-reasoning.ts
 ```
 
 

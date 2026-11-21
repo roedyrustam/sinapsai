@@ -9725,7 +9725,13 @@ var FRONTIER_AVAILABILITY_FALLBACKS = {
   // DeepSeek V4 Pro -> DeepSeek Reasoner / V3.2
   "deepseek-v4-pro": ["deepseek-reasoner", "deepseek-v3.2"],
   // Mistral Large 4 -> Mistral Small 4 / Large Latest
-  "mistral-large-4": ["mistral-small-4", "mistral-large-latest"]
+  "mistral-large-4": ["mistral-small-4", "mistral-large-latest"],
+  // Alibaba Qwen
+  "qwen3-max": ["qwen3-plus", "qwen-2.5-max"],
+  "qwen3-plus": ["qwen3-turbo", "qwen-2.5-plus"],
+  "qwq-plus": ["qwq-32b", "qwen3-max"],
+  "qwen-2.5-max": ["qwen-2.5-plus", "qwen-plus"],
+  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"]
 };
 var FRONTIER_MODELS = {
   // ── Google DeepMind ──────────────────────────────────────────────────────
@@ -10761,6 +10767,204 @@ var FRONTIER_MODELS = {
       tools: true,
       jsonSchema: true,
       reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  // ── Alibaba Qwen ──────────────────────────────────────────────────────────
+  "qwen3-max": {
+    id: "qwen3-max",
+    name: "Qwen 3 Max",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 16e-4,
+    completionCostPer1k: 64e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen3-plus", "qwen-2.5-max"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen3-plus": {
+    id: "qwen3-plus",
+    name: "Qwen 3 Plus",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 4e-4,
+    completionCostPer1k: 12e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen3-turbo", "qwen-2.5-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen3-turbo": {
+    id: "qwen3-turbo",
+    name: "Qwen 3 Turbo",
+    provider: "qwen",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 5e-5,
+    completionCostPer1k: 2e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-turbo"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwq-plus": {
+    id: "qwq-plus",
+    name: "QwQ Plus (Reasoning)",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 8e-4,
+    completionCostPer1k: 32e-4,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["qwq-32b", "qwen3-max"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwq-32b": {
+    id: "qwq-32b",
+    name: "QwQ 32B (Reasoning)",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 2e-3,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-max": {
+    id: "qwen-2.5-max",
+    name: "Qwen 2.5 Max",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 16e-4,
+    completionCostPer1k: 64e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-plus", "qwen-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-plus": {
+    id: "qwen-2.5-plus",
+    name: "Qwen 2.5 Plus",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 4e-4,
+    completionCostPer1k: 12e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-turbo"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-turbo": {
+    id: "qwen-2.5-turbo",
+    name: "Qwen 2.5 Turbo",
+    provider: "qwen",
+    tier: "fast",
+    contextWindow: 131072,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 5e-5,
+    completionCostPer1k: 2e-4,
+    cachedPromptDiscount: 0.2,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-coder-32b-instruct": {
+    id: "qwen-2.5-coder-32b-instruct",
+    name: "Qwen 2.5 Coder 32B Instruct",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 2e-3,
+    cachedPromptDiscount: 0.2,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-vl-max": {
+    id: "qwen-vl-max",
+    name: "Qwen VL Max",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 16e-4,
+    completionCostPer1k: 64e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen2.5-vl-72b-instruct"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
       vision: true,
       audio: false,
       promptCaching: true

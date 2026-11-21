@@ -16,7 +16,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
-**SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js, Edge Runtimes, and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Azure OpenAI, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, and custom endpoints) through a single, standardized **Unified API**.
+**SinapsAI** is a high-performance **Local AI Control Plane & Unified Gateway** built for Node.js, Edge Runtimes, and TypeScript. It bridges your applications with multiple LLM providers (OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Azure OpenAI, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, Alibaba Qwen, and custom endpoints) through a single, standardized **Unified API**.
 
 Engineered with a **100% in-process / in-memory** architecture, SinapsAI eliminates downtime via automatic failover, load balancing, lowest-latency routing, and a resilient **Circuit Breaker**—without requiring intermediary proxy servers, external Redis dependencies, or adding measurable latency (<10ms overhead).
 
@@ -1896,6 +1896,7 @@ When generating code or scaffolding projects using **SinapsAI**, AI models and c
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Mistral** | `MistralProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
+| **Qwen (DashScope)** | `QwenProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning tokens (`reasoning_content`), embeddings (`text-embedding-v3`), `QWEN_MODELS` |
 | **Custom / On-Prem** | `Provider` (Interface) | Custom implementations for vLLM, LocalAI, TGI, etc. |
 
 ### Creating a Custom Provider (e.g. Ollama)

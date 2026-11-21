@@ -17,4 +17,5 @@ export * from './OllamaProvider.js';
 export * from './OpenAiProvider.js';
 export * from './OpenRouterProvider.js';
 export * from './Provider.js';
+export * from './QwenProvider.js';
 export * from './XAiProvider.js';

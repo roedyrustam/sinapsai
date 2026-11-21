@@ -657,7 +657,7 @@ export class AnthropicProvider implements Provider {
                       parsed.message.usage.cache_creation_input_tokens ||
                       undefined;
                   }
-                } catch (_e) { }
+                } catch (_e) {}
               } else if (msg.event === 'content_block_start') {
                 try {
                   const parsed = JSON.parse(msg.data);
@@ -686,7 +686,7 @@ export class AnthropicProvider implements Provider {
                       ],
                     };
                   }
-                } catch (_e) { }
+                } catch (_e) {}
               } else if (msg.event === 'content_block_delta') {
                 try {
                   const parsed = JSON.parse(msg.data);
@@ -740,7 +740,7 @@ export class AnthropicProvider implements Provider {
                       ],
                     };
                   }
-                } catch (_e) { }
+                } catch (_e) {}
               } else if (msg.event === 'message_delta') {
                 try {
                   const parsed = JSON.parse(msg.data);
@@ -786,7 +786,7 @@ export class AnthropicProvider implements Provider {
                       usage: chunkUsage,
                     };
                   }
-                } catch (_e) { }
+                } catch (_e) {}
               }
             }
           } finally {

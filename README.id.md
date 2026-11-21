@@ -16,7 +16,7 @@
   <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
-**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js, Edge Runtimes, dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Azure OpenAI, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
+**SinapsAI** adalah *Local AI Control Plane* & *Unified Gateway* berbasis Node.js, Edge Runtimes, dan TypeScript. SinapsAI dirancang untuk menjembatani aplikasi Anda dengan berbagai penyedia LLM (OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Azure OpenAI, DeepSeek, Mistral AI, Ollama, Groq, OpenRouter, xAI Grok, Cohere v2, Alibaba Qwen, dan penyedia mandiri) melalui satu antarmuka terpadu (*Unified API*).
 
 Dibangun dengan pendekatan **100% in-process / in-memory**, SinapsAI meminimalisir *downtime* dengan failover otomatis, load balancing, perutean latensi terendah (*lowest-latency*), dan *Circuit Breaker* tanpa memerlukan server gateway perantara, tanpa database/Redis tambahan, serta dengan overhead latensi minimal (<10ms).
 
@@ -1871,7 +1871,7 @@ Saat menghasilkan kode atau membuat scaffold proyek menggunakan **SinapsAI**, mo
    - Jangan membuat subpackage yang tidak ada seperti `@sinapsai/core`, `sinapsai/router`, atau `sinapsai-proxy`.
 2. **Instansiasi Client Standar**:
    - Gunakan `new SinapsClient({ providers: [ ... ], strategy?: 'adaptive' })`.
-   - Gunakan kelas provider native: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `AwsBedrockProvider`, `AzureOpenAiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
+   - Gunakan kelas provider native: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `AwsBedrockProvider`, `AzureOpenAiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`, `QwenProvider`.
 3. **Metode Eksekusi**:
    - Non-Streaming: `const res = await client.chat.completions.create({ model, messages })`.
    - Streaming: `const stream = await client.chat.completions.create({ model, messages, stream: true })` dan konsumsi dengan `for await (const chunk of stream)`.
@@ -1900,6 +1900,7 @@ Saat menghasilkan kode atau membuat scaffold proyek menggunakan **SinapsAI**, mo
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, ekstraksi reasoning (`reasoning_format: 'parsed'`, `reasoning_content`), durasi rate limit (`7.66s`, `2m59.56s`), penyesuaian suhu, sanitasi nama pesan |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Mistral** | `MistralProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
+| **Qwen (DashScope)** | `QwenProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, token penalaran (`reasoning_content`), embeddings (`text-embedding-v3`), `QWEN_MODELS` |
 | **Custom / On-Prem** | `Provider` (Interface) | Implementasi mandiri untuk vLLM, LocalAI, TGI, dll. |
 
 ### Membuat Provider Kustom (Contoh: Ollama)

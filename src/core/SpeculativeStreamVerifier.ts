@@ -21,16 +21,16 @@ import type {
 export type SpeculativeProviderLike =
   | Provider
   | {
-    id: string;
-    name?: string;
-    generateContent?: Provider['generateContent'];
-    execute?: (req: UnifiedApiRequest) => Promise<UnifiedApiResponse>;
-    executeStream?: (
-      req: UnifiedApiRequest,
-    ) =>
-      | Promise<AsyncIterable<UnifiedApiStreamChunk>>
-      | AsyncIterable<UnifiedApiStreamChunk>;
-  };
+      id: string;
+      name?: string;
+      generateContent?: Provider['generateContent'];
+      execute?: (req: UnifiedApiRequest) => Promise<UnifiedApiResponse>;
+      executeStream?: (
+        req: UnifiedApiRequest,
+      ) =>
+        | Promise<AsyncIterable<UnifiedApiStreamChunk>>
+        | AsyncIterable<UnifiedApiStreamChunk>;
+    };
 
 export interface StreamCorrectionEvent {
   chunkIndex: number;
@@ -312,7 +312,7 @@ export class SpeculativeStreamVerifier {
           reason,
           severity:
             reason.toLowerCase().includes('critical') ||
-              reason.toLowerCase().includes('security')
+            reason.toLowerCase().includes('security')
               ? 'critical'
               : 'warning',
           confidence: 0.92,

@@ -160,16 +160,16 @@ export class DeepSeekProvider implements Provider {
       ],
       usage: data.usage
         ? (() => {
-          const reasoningTokens =
-            data.usage.completion_tokens_details?.reasoning_tokens;
-          return {
-            promptTokens: data.usage.prompt_tokens || 0,
-            completionTokens: data.usage.completion_tokens || 0,
-            totalTokens: data.usage.total_tokens || 0,
-            cachedPromptTokens,
-            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-          };
-        })()
+            const reasoningTokens =
+              data.usage.completion_tokens_details?.reasoning_tokens;
+            return {
+              promptTokens: data.usage.prompt_tokens || 0,
+              completionTokens: data.usage.completion_tokens || 0,
+              totalTokens: data.usage.total_tokens || 0,
+              cachedPromptTokens,
+              ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+            };
+          })()
         : undefined,
     };
   }
@@ -226,32 +226,32 @@ export class DeepSeekProvider implements Provider {
                   model: parsed.model,
                   choices: chunk
                     ? [
-                      {
-                        delta: {
-                          role: chunk.delta?.role,
-                          content: chunk.delta?.content,
-                          reasoning_content: chunk.delta?.reasoning_content,
-                          tool_calls: chunk.delta?.tool_calls,
+                        {
+                          delta: {
+                            role: chunk.delta?.role,
+                            content: chunk.delta?.content,
+                            reasoning_content: chunk.delta?.reasoning_content,
+                            tool_calls: chunk.delta?.tool_calls,
+                          },
+                          finishReason: chunk.finish_reason || null,
                         },
-                        finishReason: chunk.finish_reason || null,
-                      },
-                    ]
+                      ]
                     : [],
                   usage: parsed.usage
                     ? (() => {
-                      const streamReasoningTokens =
-                        parsed.usage.completion_tokens_details
-                          ?.reasoning_tokens;
-                      return {
-                        promptTokens: parsed.usage.prompt_tokens || 0,
-                        completionTokens: parsed.usage.completion_tokens || 0,
-                        totalTokens: parsed.usage.total_tokens || 0,
-                        cachedPromptTokens,
-                        ...(streamReasoningTokens !== undefined
-                          ? { reasoningTokens: streamReasoningTokens }
-                          : {}),
-                      };
-                    })()
+                        const streamReasoningTokens =
+                          parsed.usage.completion_tokens_details
+                            ?.reasoning_tokens;
+                        return {
+                          promptTokens: parsed.usage.prompt_tokens || 0,
+                          completionTokens: parsed.usage.completion_tokens || 0,
+                          totalTokens: parsed.usage.total_tokens || 0,
+                          cachedPromptTokens,
+                          ...(streamReasoningTokens !== undefined
+                            ? { reasoningTokens: streamReasoningTokens }
+                            : {}),
+                        };
+                      })()
                     : undefined,
                 };
               } catch (_e) {

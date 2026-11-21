@@ -26,6 +26,7 @@ import { OllamaProvider } from '../providers/OllamaProvider.js';
 import { OpenAiProvider } from '../providers/OpenAiProvider.js';
 import { OpenRouterProvider } from '../providers/OpenRouterProvider.js';
 import type { Provider } from '../providers/Provider.js';
+import { QwenProvider } from '../providers/QwenProvider.js';
 import { XAiProvider } from '../providers/XAiProvider.js';
 import { SINAPSAI_VERSION } from '../version.js';
 import { startMcpStdioServer } from './mcpServer.js';
@@ -67,6 +68,14 @@ export function buildClientFromEnv(): SinapsClient {
   if (process.env.OPENROUTER_API_KEY) {
     providers.push(
       new OpenRouterProvider({ apiKey: process.env.OPENROUTER_API_KEY }),
+    );
+  }
+  if (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY) {
+    providers.push(
+      new QwenProvider({
+        apiKey: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY,
+        baseUrl: process.env.QWEN_BASE_URL || process.env.DASHSCOPE_BASE_URL,
+      }),
     );
   }
   if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {

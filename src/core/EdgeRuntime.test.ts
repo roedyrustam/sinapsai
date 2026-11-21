@@ -16,6 +16,7 @@ import {
   OllamaProvider,
   OpenAiProvider,
   OpenRouterProvider,
+  QwenProvider,
   SinapsClient,
 } from '../index.js';
 import { parseSSE } from '../utils/stream.js';
@@ -43,6 +44,7 @@ describe('Edge Runtime Certification', () => {
     const groq = new GroqProvider({ apiKey: 'mock-key' });
     const openrouter = new OpenRouterProvider({ apiKey: 'mock-key' });
     const deepseek = new DeepSeekProvider({ apiKey: 'mock-key' });
+    const qwen = new QwenProvider({ apiKey: 'mock-key' });
     const ollama = new OllamaProvider();
 
     expect(openai.name).toBe('OpenAI');
@@ -51,6 +53,7 @@ describe('Edge Runtime Certification', () => {
     expect(groq.name).toBe('Groq');
     expect(openrouter.name).toBe('OpenRouter');
     expect(deepseek.name).toBe('DeepSeek');
+    expect(qwen.name).toBe('Qwen');
     expect(ollama.name).toBe('Ollama');
   });
 

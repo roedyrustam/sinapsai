@@ -33,6 +33,9 @@ describe('FrontierModelRegistry (Late-2026 Frontier Catalog)', () => {
     );
     expect(FRONTIER_MODELS['deepseek-v4-pro']?.tier).toBe('high');
     expect(FRONTIER_MODELS['mistral-large-4']?.tier).toBe('high');
+    expect(FRONTIER_MODELS['qwen3-max']?.tier).toBe('high');
+    expect(FRONTIER_MODELS['qwq-plus']?.capabilities.reasoning).toBe(true);
+    expect(FRONTIER_MODELS['qwen-vl-max']?.capabilities.vision).toBe(true);
   });
 
   it('resolves models by canonical ID and alias', () => {
@@ -80,6 +83,14 @@ describe('FrontierModelRegistry (Late-2026 Frontier Catalog)', () => {
     ]);
     expect(FrontierModelRegistry.getFallbacks('gpt-5.6-sol-medium')).toEqual([
       'gpt-5-mini',
+    ]);
+    expect(FrontierModelRegistry.getFallbacks('qwen3-max')).toEqual([
+      'qwen3-plus',
+      'qwen-2.5-max',
+    ]);
+    expect(FrontierModelRegistry.getFallbacks('qwq-plus')).toEqual([
+      'qwq-32b',
+      'qwen3-max',
     ]);
   });
 

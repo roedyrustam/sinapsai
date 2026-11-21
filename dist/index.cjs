@@ -10229,7 +10229,13 @@ var FRONTIER_AVAILABILITY_FALLBACKS = {
   // DeepSeek V4 Pro -> DeepSeek Reasoner / V3.2
   "deepseek-v4-pro": ["deepseek-reasoner", "deepseek-v3.2"],
   // Mistral Large 4 -> Mistral Small 4 / Large Latest
-  "mistral-large-4": ["mistral-small-4", "mistral-large-latest"]
+  "mistral-large-4": ["mistral-small-4", "mistral-large-latest"],
+  // Alibaba Qwen
+  "qwen3-max": ["qwen3-plus", "qwen-2.5-max"],
+  "qwen3-plus": ["qwen3-turbo", "qwen-2.5-plus"],
+  "qwq-plus": ["qwq-32b", "qwen3-max"],
+  "qwen-2.5-max": ["qwen-2.5-plus", "qwen-plus"],
+  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"]
 };
 var FRONTIER_MODELS = {
   // ── Google DeepMind ──────────────────────────────────────────────────────
@@ -11265,6 +11271,204 @@ var FRONTIER_MODELS = {
       tools: true,
       jsonSchema: true,
       reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  // ── Alibaba Qwen ──────────────────────────────────────────────────────────
+  "qwen3-max": {
+    id: "qwen3-max",
+    name: "Qwen 3 Max",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 16e-4,
+    completionCostPer1k: 64e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen3-plus", "qwen-2.5-max"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen3-plus": {
+    id: "qwen3-plus",
+    name: "Qwen 3 Plus",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 4e-4,
+    completionCostPer1k: 12e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen3-turbo", "qwen-2.5-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen3-turbo": {
+    id: "qwen3-turbo",
+    name: "Qwen 3 Turbo",
+    provider: "qwen",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 5e-5,
+    completionCostPer1k: 2e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-turbo"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwq-plus": {
+    id: "qwq-plus",
+    name: "QwQ Plus (Reasoning)",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 8e-4,
+    completionCostPer1k: 32e-4,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["qwq-32b", "qwen3-max"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwq-32b": {
+    id: "qwq-32b",
+    name: "QwQ 32B (Reasoning)",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 2e-3,
+    cachedPromptDiscount: 0.25,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-max": {
+    id: "qwen-2.5-max",
+    name: "Qwen 2.5 Max",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 16e-4,
+    completionCostPer1k: 64e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-plus", "qwen-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-plus": {
+    id: "qwen-2.5-plus",
+    name: "Qwen 2.5 Plus",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 4e-4,
+    completionCostPer1k: 12e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-turbo"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-turbo": {
+    id: "qwen-2.5-turbo",
+    name: "Qwen 2.5 Turbo",
+    provider: "qwen",
+    tier: "fast",
+    contextWindow: 131072,
+    maxOutputTokens: 8192,
+    promptCostPer1k: 5e-5,
+    completionCostPer1k: 2e-4,
+    cachedPromptDiscount: 0.2,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-2.5-coder-32b-instruct": {
+    id: "qwen-2.5-coder-32b-instruct",
+    name: "Qwen 2.5 Coder 32B Instruct",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 2e-3,
+    cachedPromptDiscount: 0.2,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen-vl-max": {
+    id: "qwen-vl-max",
+    name: "Qwen VL Max",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 16e-4,
+    completionCostPer1k: 64e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen2.5-vl-72b-instruct"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
       vision: true,
       audio: false,
       promptCaching: true
@@ -20514,6 +20718,350 @@ function createOpenRouterFreeProvider(config) {
   });
 }
 
+// src/providers/QwenProvider.ts
+var QWEN_MODELS = {
+  // Flagship & Frontier
+  QWEN_3_MAX: "qwen3-max",
+  QWEN_3_PLUS: "qwen3-plus",
+  QWEN_3_TURBO: "qwen3-turbo",
+  QWEN_3_FLASH: "qwen3-flash",
+  // Deep Reasoning & Thinking
+  QWQ_PLUS: "qwq-plus",
+  QWQ_32B: "qwq-32b",
+  QWQ_32B_PREVIEW: "qwq-32b-preview",
+  // Qwen 2.5 Generation
+  QWEN_2_5_MAX: "qwen-2.5-max",
+  QWEN_2_5_PLUS: "qwen-2.5-plus",
+  QWEN_2_5_TURBO: "qwen-2.5-turbo",
+  QWEN_MAX: "qwen-max",
+  QWEN_PLUS: "qwen-plus",
+  QWEN_TURBO: "qwen-turbo",
+  // Specialized Coder & Vision
+  QWEN_2_5_CODER_32B: "qwen-2.5-coder-32b-instruct",
+  QWEN_2_5_CODER_7B: "qwen-2.5-coder-7b-instruct",
+  QWEN_VL_MAX: "qwen-vl-max",
+  QWEN_2_5_VL_72B: "qwen2.5-vl-72b-instruct",
+  QWEN_2_5_VL_7B: "qwen2.5-vl-7b-instruct",
+  // Embeddings
+  TEXT_EMBEDDING_V3: "text-embedding-v3",
+  TEXT_EMBEDDING_V2: "text-embedding-v2"
+};
+var QWEN_AVAILABILITY_FALLBACKS = {
+  "qwen3-max": ["qwen3-plus", "qwen-2.5-max"],
+  "qwen3-plus": ["qwen3-turbo", "qwen-2.5-plus"],
+  "qwq-plus": ["qwq-32b", "qwen3-max"],
+  "qwen-2.5-max": ["qwen-2.5-plus", "qwen-plus"],
+  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"]
+};
+var QWEN_DEFAULT_PRICING = {
+  "qwen3-max": { promptCostPer1k: 16e-4, completionCostPer1k: 64e-4 },
+  "qwen3-plus": { promptCostPer1k: 4e-4, completionCostPer1k: 12e-4 },
+  "qwen3-turbo": { promptCostPer1k: 5e-5, completionCostPer1k: 2e-4 },
+  "qwen3-flash": { promptCostPer1k: 5e-5, completionCostPer1k: 2e-4 },
+  "qwq-plus": { promptCostPer1k: 8e-4, completionCostPer1k: 32e-4 },
+  "qwq-32b": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
+  "qwq-32b-preview": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
+  "qwen-2.5-max": { promptCostPer1k: 16e-4, completionCostPer1k: 64e-4 },
+  "qwen-2.5-plus": { promptCostPer1k: 4e-4, completionCostPer1k: 12e-4 },
+  "qwen-2.5-turbo": { promptCostPer1k: 5e-5, completionCostPer1k: 2e-4 },
+  "qwen-max": { promptCostPer1k: 16e-4, completionCostPer1k: 64e-4 },
+  "qwen-plus": { promptCostPer1k: 4e-4, completionCostPer1k: 12e-4 },
+  "qwen-turbo": { promptCostPer1k: 5e-5, completionCostPer1k: 2e-4 },
+  "qwen-2.5-coder-32b-instruct": {
+    promptCostPer1k: 5e-4,
+    completionCostPer1k: 2e-3
+  },
+  "qwen-2.5-coder-7b-instruct": {
+    promptCostPer1k: 1e-4,
+    completionCostPer1k: 4e-4
+  },
+  "qwen-vl-max": { promptCostPer1k: 16e-4, completionCostPer1k: 64e-4 },
+  "qwen2.5-vl-72b-instruct": {
+    promptCostPer1k: 12e-4,
+    completionCostPer1k: 48e-4
+  },
+  "qwen2.5-vl-7b-instruct": {
+    promptCostPer1k: 2e-4,
+    completionCostPer1k: 8e-4
+  },
+  "text-embedding-v3": { promptCostPer1k: 5e-5, completionCostPer1k: 0 },
+  "text-embedding-v2": { promptCostPer1k: 5e-5, completionCostPer1k: 0 }
+};
+var QwenProvider = class {
+  id;
+  name = "Qwen";
+  config;
+  constructor(config = {}) {
+    this.config = config;
+    this.id = config.id || `qwen-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      let formattedContent = m.content;
+      if (Array.isArray(m.content)) {
+        formattedContent = m.content.map((part) => {
+          if (part.type === "image_url") {
+            const img = part.image_url ?? part.imageUrl;
+            return {
+              type: "image_url",
+              image_url: {
+                url: img?.url,
+                ...img?.detail ? { detail: img.detail } : {}
+              }
+            };
+          }
+          return part;
+        });
+      }
+      const msg = {
+        role: m.role,
+        content: formattedContent
+      };
+      if (m.reasoning_content) {
+        msg.reasoning_content = m.reasoning_content;
+      }
+      if (m.name) {
+        msg.name = m.name;
+      }
+      if (m.tool_call_id) {
+        msg.tool_call_id = m.tool_call_id;
+      }
+      if (m.tool_calls) {
+        msg.tool_calls = m.tool_calls;
+      }
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.stream) {
+      payload.stream = true;
+      payload.stream_options = { include_usage: true };
+    }
+    if (request.tools) {
+      payload.tools = request.tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: response format from DashScope OpenAI-compatible API
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    const cachedPromptTokens = data.usage?.prompt_cache_hit_tokens ?? data.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+    return {
+      id: data.id || `qwen-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            reasoning_content: choice?.message?.reasoning_content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: data.usage ? (() => {
+        const reasoningTokens = data.usage.completion_tokens_details?.reasoning_tokens;
+        return {
+          promptTokens: data.usage.prompt_tokens || 0,
+          completionTokens: data.usage.completion_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0,
+          cachedPromptTokens,
+          ...reasoningTokens !== void 0 ? { reasoningTokens } : {}
+        };
+      })() : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+    const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Qwen API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+          try {
+            for await (const msg of parseSSE2(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                const cachedPromptTokens = parsed.usage?.prompt_cache_hit_tokens ?? parsed.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+                yield {
+                  id: parsed.id || `qwen-${Date.now()}`,
+                  model: parsed.model,
+                  choices: chunk ? [
+                    {
+                      delta: {
+                        role: chunk.delta?.role,
+                        content: chunk.delta?.content,
+                        reasoning_content: chunk.delta?.reasoning_content,
+                        tool_calls: chunk.delta?.tool_calls
+                      },
+                      finishReason: chunk.finish_reason || null
+                    }
+                  ] : [],
+                  usage: parsed.usage ? (() => {
+                    const streamReasoningTokens = parsed.usage.completion_tokens_details?.reasoning_tokens;
+                    return {
+                      promptTokens: parsed.usage.prompt_tokens || 0,
+                      completionTokens: parsed.usage.completion_tokens || 0,
+                      totalTokens: parsed.usage.total_tokens || 0,
+                      cachedPromptTokens,
+                      ...streamReasoningTokens !== void 0 ? { reasoningTokens: streamReasoningTokens } : {}
+                    };
+                  })() : void 0
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            cleanupSignal?.();
+            if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream) {
+        cleanupSignal?.();
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    }
+  }
+  async generateEmbedding(request) {
+    const targetModel = this.resolveModel(
+      request.model || QWEN_MODELS.TEXT_EMBEDDING_V3
+    );
+    const baseUrl = this.config.baseUrl || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+    const url = `${baseUrl.replace(/\/+$/, "")}/embeddings`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const payload = {
+        model: targetModel,
+        input: request.input
+      };
+      if (request.dimensions !== void 0) {
+        payload.dimensions = request.dimensions;
+      }
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Qwen Embedding API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      return {
+        object: "list",
+        model: data.model || targetModel,
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        data: (data.data || []).map((item, idx) => ({
+          object: "embedding",
+          index: item.index ?? idx,
+          embedding: item.embedding
+        })),
+        usage: {
+          promptTokens: data.usage?.prompt_tokens || 0,
+          totalTokens: data.usage?.total_tokens || 0
+        }
+      };
+    } finally {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+};
+
 // src/providers/XAiProvider.ts
 init_stream();
 var XAI_MODELS = {
@@ -21415,6 +21963,10 @@ exports.OllamaProvider = OllamaProvider;
 exports.OpenAiProvider = OpenAiProvider;
 exports.OpenRouterProvider = OpenRouterProvider;
 exports.PIIGuardrails = PIIGuardrails;
+exports.QWEN_AVAILABILITY_FALLBACKS = QWEN_AVAILABILITY_FALLBACKS;
+exports.QWEN_DEFAULT_PRICING = QWEN_DEFAULT_PRICING;
+exports.QWEN_MODELS = QWEN_MODELS;
+exports.QwenProvider = QwenProvider;
 exports.RealtimeClient = RealtimeClient;
 exports.RealtimeSession = RealtimeSession;
 exports.RedisStorage = RedisStorage;
