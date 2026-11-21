@@ -669,9 +669,9 @@ export class SinapsClient {
               ? lastUserMsg.content
               : Array.isArray(lastUserMsg?.content)
                 ? lastUserMsg.content
-                    .filter((p) => p.type === 'text')
-                    .map((p) => p.text)
-                    .join(' ')
+                  .filter((p) => p.type === 'text')
+                  .map((p) => p.text)
+                  .join(' ')
                 : '';
 
           if (lastUserText.trim().length > 0) {
@@ -868,7 +868,7 @@ export class SinapsClient {
                     const calculated =
                       chunk.usage.totalTokens ??
                       (chunk.usage.promptTokens || 0) +
-                        (chunk.usage.completionTokens || 0);
+                      (chunk.usage.completionTokens || 0);
                     actualStreamTokens =
                       calculated > 0 ? calculated : undefined;
                   }
@@ -939,28 +939,28 @@ export class SinapsClient {
                 finalResponse.usage?.totalTokens ?? 0,
               ...(finalResponse.usage?.reasoningTokens !== undefined
                 ? {
-                    'gen_ai.usage.reasoning_tokens':
-                      finalResponse.usage.reasoningTokens,
-                  }
+                  'gen_ai.usage.reasoning_tokens':
+                    finalResponse.usage.reasoningTokens,
+                }
                 : {}),
               ...(finalResponse.usage?.cachedPromptTokens !== undefined
                 ? {
-                    'gen_ai.usage.cache_read.input_tokens':
-                      finalResponse.usage.cachedPromptTokens,
-                  }
+                  'gen_ai.usage.cache_read.input_tokens':
+                    finalResponse.usage.cachedPromptTokens,
+                }
                 : {}),
               ...(finalResponse.usage?.cacheWriteTokens !== undefined
                 ? {
-                    'gen_ai.usage.cache_creation.input_tokens':
-                      finalResponse.usage.cacheWriteTokens,
-                  }
+                  'gen_ai.usage.cache_creation.input_tokens':
+                    finalResponse.usage.cacheWriteTokens,
+                }
                 : {}),
               ...(fromClusteredCache && clusterHitMeta
                 ? {
-                    'sinapsai.cache.hit': true,
-                    'sinapsai.cache.cluster_id': clusterHitMeta.clusterId,
-                    'sinapsai.cache.similarity': clusterHitMeta.similarity,
-                  }
+                  'sinapsai.cache.hit': true,
+                  'sinapsai.cache.cluster_id': clusterHitMeta.clusterId,
+                  'sinapsai.cache.similarity': clusterHitMeta.similarity,
+                }
                 : {}),
             },
           });
@@ -1179,9 +1179,9 @@ export class SinapsClient {
           this.router.getPrimaryCandidateProviderId(dummyReq);
         const inputTokens = Array.isArray(request.input)
           ? request.input.reduce(
-              (acc, str) => acc + Math.ceil(str.length / 4),
-              0,
-            )
+            (acc, str) => acc + Math.ceil(str.length / 4),
+            0,
+          )
           : Math.ceil(request.input.length / 4);
         const check = await this.rateLimiter.check(dummyReq, {
           estimatedTokens: inputTokens,
@@ -1706,17 +1706,17 @@ export class SinapsClient {
         }));
 
       const assistantMessage: UnifiedApiResponse['choices'][number]['message'] =
-        {
-          role: 'assistant',
-          content: contentAcc.length > 0 ? contentAcc : null,
-          ...(reasoningAcc.length > 0
-            ? { reasoning_content: reasoningAcc }
-            : {}),
-          ...(assembledToolCalls.length > 0
-            ? { tool_calls: assembledToolCalls }
-            : {}),
-          ...(stepGrounding ? { grounding: stepGrounding } : {}),
-        };
+      {
+        role: 'assistant',
+        content: contentAcc.length > 0 ? contentAcc : null,
+        ...(reasoningAcc.length > 0
+          ? { reasoning_content: reasoningAcc }
+          : {}),
+        ...(assembledToolCalls.length > 0
+          ? { tool_calls: assembledToolCalls }
+          : {}),
+        ...(stepGrounding ? { grounding: stepGrounding } : {}),
+      };
 
       latestResponse = {
         id: responseId,
