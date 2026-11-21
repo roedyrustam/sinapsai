@@ -1675,7 +1675,7 @@ function tryExtractJson(text) {
 }
 
 // src/version.ts
-var SINAPSAI_VERSION = "3.8.0";
+var SINAPSAI_VERSION = "3.9.0";
 
 // src/utils/tracingExporter.ts
 function generateTraceId() {

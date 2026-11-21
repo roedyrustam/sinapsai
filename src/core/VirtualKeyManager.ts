@@ -73,6 +73,25 @@ export interface VirtualKeyAuthorizationResult {
   record?: Omit<VirtualKeyRecord, 'keyHash'>;
 }
 
+export class VirtualKeyError extends Error {
+  public readonly statusCode: 401 | 402 | 403 | 429;
+  public readonly keyId?: string;
+  public readonly tenantId?: string;
+
+  constructor(
+    message: string,
+    statusCode: 401 | 402 | 403 | 429,
+    keyId?: string,
+    tenantId?: string,
+  ) {
+    super(message);
+    this.name = 'VirtualKeyError';
+    this.statusCode = statusCode;
+    this.keyId = keyId;
+    this.tenantId = tenantId;
+  }
+}
+
 interface UsageWindowEntry {
   timestamp: number;
   tokens: number;

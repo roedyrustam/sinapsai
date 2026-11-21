@@ -7,4 +7,4 @@
  * @license MIT
  */
 
-export const SINAPSAI_VERSION = '3.8.0';
+export const SINAPSAI_VERSION = '3.9.0';

@@ -2148,7 +2148,7 @@ function tryExtractJson(text) {
 }
 
 // src/version.ts
-var SINAPSAI_VERSION = "3.8.0";
+var SINAPSAI_VERSION = "3.9.0";
 
 // src/utils/tracingExporter.ts
 function generateTraceId() {
@@ -14182,6 +14182,18 @@ var SecurityGuardrails = class {
 };
 
 // src/core/VirtualKeyManager.ts
+var VirtualKeyError = class extends Error {
+  statusCode;
+  keyId;
+  tenantId;
+  constructor(message, statusCode, keyId, tenantId) {
+    super(message);
+    this.name = "VirtualKeyError";
+    this.statusCode = statusCode;
+    this.keyId = keyId;
+    this.tenantId = tenantId;
+  }
+};
 function bytesToHex(bytes) {
   let out = "";
   for (let i = 0; i < bytes.length; i++) {
@@ -23150,6 +23162,7 @@ exports.SpeculativeStreamVerifier = SpeculativeStreamVerifier;
 exports.StringSchemaNode = StringSchemaNode;
 exports.SwarmContext = SwarmContext;
 exports.TournamentConsensusEngine = TournamentConsensusEngine;
+exports.VirtualKeyError = VirtualKeyError;
 exports.VirtualKeyManager = VirtualKeyManager;
 exports.VisionOptimizer = VisionOptimizer;
 exports.XAI_AVAILABILITY_FALLBACKS = XAI_AVAILABILITY_FALLBACKS;

@@ -216,6 +216,10 @@ export interface UnifiedApiRequest {
    * A unique identifier representing your end-user, useful for tracking abuse and rate limiting.
    */
   user?: string;
+  /**
+   * Optional multi-tenant virtual API key (`sk-sinaps-...`) validated against `client.virtualKeys`.
+   */
+  virtualKey?: string;
 }
 
 export interface CreateChatCompletionRequestNonStreaming

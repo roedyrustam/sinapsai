@@ -316,6 +316,11 @@
 - [x] **Integrasi HTTP Gateway Server (`src/cli/server.ts`)**: Opsi `enforceVirtualKeys` dengan respons standar HTTP `401`/`402`/`403`/`429`.
 - [x] **Contoh & Rilis v3.8.0**: Example 52 (`examples/52-multi-tenant-virtual-keys.ts`) dan bump versi ke **v3.8.0**.
 
+## Phase 34: Virtual Key Admin REST API, Live Model ACL & Spend Attribution (v3.9.0) - *Completed*
+- [x] **Admin REST API pada Gateway Server (`src/cli/server.ts`)**: `GET /v1/keys`, `POST /v1/keys`, `POST /v1/keys/:id/revoke`, dan `POST /v1/keys/:id/rotate`.
+- [x] **Live Model ACL & Automatic Spend Attribution**: Validasi Model ACL per-request pada `/v1/chat/completions`, `/v1/responses`, dan `/v1/embeddings` serta pencatatan biaya USD otomatis pasca-respons via `FrontierModelRegistry.estimateCost` ke `client.virtualKeys.recordSpend()`.
+- [x] **Rilis v3.9.0**: Penambahan `VirtualKeyError`, `UnifiedApiRequest.virtualKey`, integration tests di `src/cli/server.test.ts`, dan bump versi ke **v3.9.0**.
+
 
 
 

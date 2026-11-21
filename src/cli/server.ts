@@ -69,14 +69,99 @@ export function createGatewayServer(
       authHeader.replace(/^Bearer\s+/i, '').trim() ||
       (typeof headerApiKey === 'string' ? headerApiKey.trim() : '');
 
-    // Multi-tenant Virtual Key authorization (or static API key fallback)
+    // Multi-tenant Virtual Key Admin API (/v1/keys)
+    const isKeyAdminRoute =
+      pathname === '/v1/keys' || pathname.startsWith('/v1/keys/');
+
+    if (isKeyAdminRoute) {
+      if (apiKey && providedKey !== apiKey) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: { message: 'Unauthorized: Master API Key required' },
+          }),
+        );
+        return;
+      }
+
+      if (pathname === '/v1/keys' && req.method === 'GET') {
+        const tenantId = url.searchParams.get('tenantId') || undefined;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            object: 'list',
+            data: client.virtualKeys.listKeys(tenantId),
+          }),
+        );
+        return;
+      }
+
+      if (pathname === '/v1/keys' && req.method === 'POST') {
+        try {
+          const body = JSON.parse(await readBody(req));
+          const issued = await client.virtualKeys.issueKey(body);
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(issued));
+          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message } }));
+          return;
+        }
+      }
+
+      const revokeMatch = pathname.match(/^\/v1\/keys\/([^/]+)\/revoke$/);
+      if (revokeMatch && req.method === 'POST') {
+        const revoked = client.virtualKeys.revokeKey(revokeMatch[1]);
+        res.writeHead(revoked ? 200 : 404, {
+          'Content-Type': 'application/json',
+        });
+        res.end(
+          JSON.stringify(
+            revoked
+              ? { revoked: true, id: revokeMatch[1] }
+              : { error: { message: 'Virtual key not found' } },
+          ),
+        );
+        return;
+      }
+
+      const rotateMatch = pathname.match(/^\/v1\/keys\/([^/]+)\/rotate$/);
+      if (rotateMatch && req.method === 'POST') {
+        const rotated = await client.virtualKeys.rotateKey(rotateMatch[1]);
+        res.writeHead(rotated ? 200 : 404, {
+          'Content-Type': 'application/json',
+        });
+        res.end(
+          JSON.stringify(
+            rotated ?? { error: { message: 'Virtual key not found' } },
+          ),
+        );
+        return;
+      }
+    }
+
+    // Helper for model-aware Virtual Key authorization on inference endpoints
+    const isModelInferenceRoute =
+      req.method === 'POST' &&
+      (pathname === '/v1/chat/completions' ||
+        pathname === '/v1/responses' ||
+        pathname === '/v1/embeddings');
+
     const shouldCheckVirtualKey =
       (enforceVirtualKeys || client.virtualKeys.hasKeys()) &&
       pathname !== '/health' &&
       pathname !== '/metrics';
 
-    if (shouldCheckVirtualKey && (!apiKey || providedKey !== apiKey)) {
-      const auth = await client.virtualKeys.authorizeRequest(providedKey);
+    let authorizedVirtualKeyId: string | undefined;
+
+    const authorizeVirtualKey = async (model?: string): Promise<boolean> => {
+      if (!shouldCheckVirtualKey) return true;
+      if (apiKey && providedKey === apiKey) return true;
+      const auth = await client.virtualKeys.authorizeRequest(providedKey, {
+        model,
+      });
       if (!auth.allowed) {
         res.writeHead(auth.statusCode, { 'Content-Type': 'application/json' });
         res.end(
@@ -87,10 +172,17 @@ export function createGatewayServer(
             },
           }),
         );
-        return;
+        return false;
       }
-    } else if (apiKey) {
-      if (providedKey !== apiKey) {
+      authorizedVirtualKeyId = auth.keyId;
+      return true;
+    };
+
+    if (!isModelInferenceRoute) {
+      if (shouldCheckVirtualKey && (!apiKey || providedKey !== apiKey)) {
+        const ok = await authorizeVirtualKey();
+        if (!ok) return;
+      } else if (apiKey && providedKey !== apiKey) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -99,6 +191,14 @@ export function createGatewayServer(
         );
         return;
       }
+    } else if (!shouldCheckVirtualKey && apiKey && providedKey !== apiKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: { message: 'Unauthorized: Invalid API Key' },
+        }),
+      );
+      return;
     }
 
     // Health Probe
@@ -140,6 +240,8 @@ export function createGatewayServer(
       try {
         const bodyText = await readBody(req);
         const body = JSON.parse(bodyText) as Record<string, unknown>;
+        const targetModel = String(body.model || 'gpt-5.6-sol-medium');
+        if (!(await authorizeVirtualKey(targetModel))) return;
         const messages: ChatMessage[] = [];
         if (typeof body.instructions === 'string' && body.instructions) {
           messages.push({ role: 'system', content: body.instructions });
@@ -348,6 +450,7 @@ export function createGatewayServer(
       try {
         const bodyText = await readBody(req);
         const body = JSON.parse(bodyText);
+        if (!(await authorizeVirtualKey(body.model))) return;
 
         if (body.stream) {
           // SSE Streaming Response
@@ -360,8 +463,27 @@ export function createGatewayServer(
           const stream = await client.chat.completions.create(
             body as CreateChatCompletionRequestStreaming,
           );
+          let streamTokens = 0;
+          let streamCostUsd = 0;
           for await (const chunk of stream) {
+            if (chunk.usage) {
+              streamTokens = chunk.usage.totalTokens || 0;
+              streamCostUsd = FrontierModelRegistry.estimateCost(
+                chunk.model || body.model || '',
+                chunk.usage,
+              );
+            }
             res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
+          if (
+            authorizedVirtualKeyId &&
+            (streamCostUsd > 0 || streamTokens > 0)
+          ) {
+            client.virtualKeys.recordSpend(
+              authorizedVirtualKeyId,
+              streamCostUsd,
+              streamTokens,
+            );
           }
           res.write('data: [DONE]\n\n');
           res.end();
@@ -372,6 +494,17 @@ export function createGatewayServer(
         const response = await client.chat.completions.create(
           body as CreateChatCompletionRequestNonStreaming,
         );
+        if (authorizedVirtualKeyId && response.usage) {
+          const costUsd = FrontierModelRegistry.estimateCost(
+            response.model || body.model || '',
+            response.usage,
+          );
+          client.virtualKeys.recordSpend(
+            authorizedVirtualKeyId,
+            costUsd,
+            response.usage.totalTokens || 0,
+          );
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response));
         return;
@@ -392,7 +525,22 @@ export function createGatewayServer(
       try {
         const bodyText = await readBody(req);
         const body = JSON.parse(bodyText);
+        if (!(await authorizeVirtualKey(body.model))) return;
         const response = await client.embeddings.create(body);
+        if (authorizedVirtualKeyId && response.usage) {
+          const costUsd = FrontierModelRegistry.estimateCost(
+            response.model || body.model || '',
+            {
+              promptTokens: response.usage.promptTokens || 0,
+              completionTokens: 0,
+            },
+          );
+          client.virtualKeys.recordSpend(
+            authorizedVirtualKeyId,
+            costUsd,
+            response.usage.totalTokens || 0,
+          );
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response));
         return;

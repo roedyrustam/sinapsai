@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.9.0] - 2026-11-22
+### Added
+- **End-to-End Multi-Tenant Virtual Key Gateway Loop (`src/cli/server.ts`, `VirtualKeyError`)**:
+  - **Virtual Key Admin REST API**: Added `GET /v1/keys`, `POST /v1/keys`, `POST /v1/keys/:id/revoke`, and `POST /v1/keys/:id/rotate` on `createGatewayServer` (master `apiKey` protected).
+  - **Live Model ACL Enforcement & Post-Response Spend Attribution**: `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` now validate per-key Model ACLs (`403`) before dispatch and automatically attribute post-response USD cost (via `FrontierModelRegistry.estimateCost`) and token consumption back to `client.virtualKeys.recordSpend()`.
+  - Added typed `VirtualKeyError` and optional `virtualKey` field on `UnifiedApiRequest`.
+  - Bumped `SINAPSAI_VERSION` to `3.9.0`.
+
 ## [3.8.0] - 2026-11-22
 ### Added
 - **In-Process Multi-Tenant Virtual API Key Manager (`VirtualKeyManager`, `client.virtualKeys`, `src/core/VirtualKeyManager.ts`)**:

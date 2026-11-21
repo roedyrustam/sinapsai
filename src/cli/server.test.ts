@@ -147,4 +147,80 @@ describe('Standalone Gateway HTTP Server', () => {
     };
     expect(mcpJson.result.protocolVersion).toBe('2025-06-18');
   });
+
+  it('supports Virtual Key Admin API (/v1/keys), live Model ACL 403, spend attribution, and revocation', async () => {
+    const issueRes = await fetch(`${baseUrl}/v1/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Gateway Tenant',
+        tenantId: 'tenant-http-1',
+        allowedModels: ['qwen3-turbo'],
+        maxBudgetUsd: 1.0,
+      }),
+    });
+    expect(issueRes.status).toBe(201);
+    const issued = (await issueRes.json()) as {
+      apiKey: string;
+      record: { id: string };
+    };
+    expect(issued.apiKey.startsWith('sk-sinaps-')).toBe(true);
+
+    // Allowed model passes (200) and records spend/tokens
+    const okRes = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${issued.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'qwen3-turbo',
+        messages: [{ role: 'user', content: 'Hello virtual key' }],
+      }),
+    });
+    expect(okRes.status).toBe(200);
+
+    // Disallowed model blocked with 403
+    const deniedRes = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${issued.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Blocked model' }],
+      }),
+    });
+    expect(deniedRes.status).toBe(403);
+
+    // Verify spend & tokens recorded on GET /v1/keys
+    const listRes = await fetch(`${baseUrl}/v1/keys?tenantId=tenant-http-1`);
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as {
+      data: Array<{ id: string; totalTokens: number; totalRequests: number }>;
+    };
+    expect(listed.data[0].totalTokens).toBe(13);
+    expect(listed.data[0].totalRequests).toBe(1);
+
+    // Revoke key -> subsequent call returns 401
+    const revokeRes = await fetch(
+      `${baseUrl}/v1/keys/${issued.record.id}/revoke`,
+      { method: 'POST' },
+    );
+    expect(revokeRes.status).toBe(200);
+
+    const revokedCall = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${issued.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'qwen3-turbo',
+        messages: [{ role: 'user', content: 'After revoke' }],
+      }),
+    });
+    expect(revokedCall.status).toBe(401);
+  });
 });
