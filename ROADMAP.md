@@ -291,6 +291,19 @@
   - **Optimasi, Telemetri & CLI Server**: `FRONTIER_CASCADE_PRESETS`, `AutonomousDriftHealer` diagnosa parameter frontier, `VisionOptimizer.estimateVideoTokens` & Grok tiles, atribut trace OTel GenAI 1.30+, ekspor metrik token `reasoning`, serta endpoint `/v1/models` (katalog frontier), `POST /v1/responses`, dan `POST /mcp` pada gateway server.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 49 (`examples/49-frontier-llm-2026-control-plane.ts`); total 661/661 unit tests lulus di 64 test suites, 100% Biome Clean (140 file, 0 error, 0 warning), Strict TypeScript Pass (`src/` & `examples/`), build ESM/CJS sukses, 100% Zero Runtime Dependencies, Siap Rilis NPM v3.6.0.
 
+## Phase 31: Alibaba Qwen Frontier Provider Integration (v3.6.0+) - *Completed*
+- [x] **Native `QwenProvider` (`src/providers/QwenProvider.ts`)**:
+  - Kompatibilitas penuh DashScope OpenAI-compatible mode (International `dashscope-intl.aliyuncs.com`, Domestic China `dashscope.aliyuncs.com`, dan self-hosted vLLM/Ollama).
+  - **Qwen 3 Hybrid Thinking Mode**: Pemetaan otomatis `thinkingBudget` & `reasoningEffort` ke `enable_thinking` dan `thinking_budget`, plus normalisasi `role: 'developer'` ➔ `'system'`.
+  - **DashScope Built-in Web Search**: Pemetaan `webSearch: true` ➔ `enable_search: true`.
+  - **Deep Reasoning & Multimodal**: Ekstraksi `reasoning_content` (`qwq-plus`, `qwq-32b`, `qwen3-max`), multimodal `image_url` (`qwen-vl-max`, `qwen3-vl-plus`), dan dense embeddings (`text-embedding-v3`, `text-embedding-v2`).
+- [x] **Integrasi Control Plane, Registry, Vision & CLI**:
+  - Registrasi katalog lengkap Qwen (`qwen3-max`, `qwen3-plus`, `qwen3-turbo`, `qwen3-coder-plus`, `qwen3-235b-a22b`, `qwen3-vl-plus`, `qwq-plus`, `qwq-32b`, `qwen-2.5-*`, `qwen-vl-max`) & Availability Fallbacks di `FrontierModelRegistry`.
+  - Preset cascade `'qwen'` di `LlmOptimizer` (`qwen3-turbo` ➔ `qwen3-plus` ➔ `qwen3-max`).
+  - Kalkulasi token visual patch dinamis `28×28` untuk Qwen2.5-VL / Qwen3-VL di `VisionOptimizer`.
+  - Auto-discovery CLI untuk `QWEN_API_KEY` dan `DASHSCOPE_API_KEY`.
+- [x] **Contoh & Validasi Lengkap**: Penambahan contoh 50 (`examples/50-qwen-provider-and-reasoning.ts`); total 673/673 unit tests lulus di 65 test suites, 100% Biome Clean (142 file, 0 error, 0 warning), Strict TypeScript Pass (`src/` & `examples/`).
+
 
 
 
