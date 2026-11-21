@@ -165,7 +165,7 @@ export interface UnifiedApiRequest {
   googleSearch?: boolean;
   /**
    * Cross-provider native web search grounding (maps to Gemini googleSearch,
-   * xAI Live Search search_parameters, or OpenAI Responses web_search_preview).
+   * xAI Live Search search_parameters, Qwen DashScope enable_search, or OpenAI Responses web_search_preview).
    */
   webSearch?: boolean;
   codeExecution?: boolean;

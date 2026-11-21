@@ -7404,6 +7404,11 @@ var FRONTIER_CASCADE_PRESETS = {
     tier1: "grok-4-6-high-fast",
     tier2: "grok-4-7-high-fast",
     tier3: "gemini-4-pro"
+  },
+  qwen: {
+    tier1: "qwen3-turbo",
+    tier2: "qwen3-plus",
+    tier3: "qwen3-max"
   }
 };
 function minifyProsePreservingCode(text, mode = "lossless") {
@@ -9729,6 +9734,9 @@ var FRONTIER_AVAILABILITY_FALLBACKS = {
   // Alibaba Qwen
   "qwen3-max": ["qwen3-plus", "qwen-2.5-max"],
   "qwen3-plus": ["qwen3-turbo", "qwen-2.5-plus"],
+  "qwen3-coder-plus": ["qwen-2.5-coder-32b-instruct", "qwen3-plus"],
+  "qwen3-235b-a22b": ["qwen3-32b", "qwen3-plus"],
+  "qwen3-vl-plus": ["qwen-vl-max", "qwen2.5-vl-72b-instruct"],
   "qwq-plus": ["qwq-32b", "qwen3-max"],
   "qwen-2.5-max": ["qwen-2.5-plus", "qwen-plus"],
   "qwen-vl-max": ["qwen2.5-vl-72b-instruct"]
@@ -10790,7 +10798,8 @@ var FRONTIER_MODELS = {
       reasoning: true,
       vision: true,
       audio: false,
-      promptCaching: true
+      promptCaching: true,
+      webSearch: true
     }
   },
   "qwen3-plus": {
@@ -10810,7 +10819,8 @@ var FRONTIER_MODELS = {
       reasoning: true,
       vision: true,
       audio: false,
-      promptCaching: true
+      promptCaching: true,
+      webSearch: true
     }
   },
   "qwen3-turbo": {
@@ -10827,9 +10837,72 @@ var FRONTIER_MODELS = {
     capabilities: {
       tools: true,
       jsonSchema: true,
-      reasoning: false,
+      reasoning: true,
       vision: false,
       audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "qwen3-coder-plus": {
+    id: "qwen3-coder-plus",
+    name: "Qwen 3 Coder Plus",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 24e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-2.5-coder-32b-instruct", "qwen3-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true
+    }
+  },
+  "qwen3-235b-a22b": {
+    id: "qwen3-235b-a22b",
+    name: "Qwen 3 235B-A22B (MoE)",
+    provider: "qwen",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 7e-4,
+    completionCostPer1k: 28e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen3-32b", "qwen3-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "qwen3-vl-plus": {
+    id: "qwen3-vl-plus",
+    name: "Qwen 3 VL Plus",
+    provider: "qwen",
+    tier: "medium",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 24e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["qwen-vl-max", "qwen2.5-vl-72b-instruct"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      video: true,
       promptCaching: true
     }
   },
@@ -11395,6 +11468,13 @@ var VisionOptimizer = class {
       const tilesH = Math.max(1, Math.ceil(dims.height / 448));
       tilesCount = tilesW * tilesH;
       tokens = tilesCount * 256;
+    } else if (normProvider.includes("qwen") || normProvider.includes("dashscope")) {
+      const patchW = Math.max(1, Math.ceil(dims.width / 28));
+      const patchH = Math.max(1, Math.ceil(dims.height / 28));
+      const rawPatches = patchW * patchH;
+      tilesCount = Math.max(1, Math.ceil(rawPatches / 256));
+      const maxTokens = detail === "high" ? 16384 : detail === "low" ? 256 : 1280;
+      tokens = Math.max(4, Math.min(rawPatches, maxTokens));
     } else {
       if (detail === "low") {
         tokens = 85;

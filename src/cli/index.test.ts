@@ -32,4 +32,22 @@ describe('SinapsAI CLI runner', () => {
     expect(client).toBeDefined();
     expect(client.strategy).toBe('adaptive');
   });
+
+  it('should auto-register QwenProvider when QWEN_API_KEY or DASHSCOPE_API_KEY is set', async () => {
+    const prevQwen = process.env.QWEN_API_KEY;
+    const prevDash = process.env.DASHSCOPE_API_KEY;
+    try {
+      process.env.QWEN_API_KEY = 'sk-qwen-env-test';
+      delete process.env.DASHSCOPE_API_KEY;
+      const client = buildClientFromEnv();
+      const health = await client.checkHealth();
+      const hasQwen = health.providers.some((p) => p.id.startsWith('qwen-'));
+      expect(hasQwen).toBe(true);
+    } finally {
+      if (prevQwen === undefined) delete process.env.QWEN_API_KEY;
+      else process.env.QWEN_API_KEY = prevQwen;
+      if (prevDash === undefined) delete process.env.DASHSCOPE_API_KEY;
+      else process.env.DASHSCOPE_API_KEY = prevDash;
+    }
+  });
 });

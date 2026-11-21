@@ -1867,7 +1867,7 @@ When generating code or scaffolding projects using **SinapsAI**, AI models and c
    - Never hallucinate subpackages like `@sinapsai/core`, `sinapsai/router`, or `sinapsai-proxy`.
 2. **Standard Client Instantiation**:
    - Instantiate `new SinapsClient({ providers: [ ... ], strategy?: 'adaptive' })`.
-   - Provide concrete native provider classes: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `AwsBedrockProvider`, `AzureOpenAiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`.
+   - Provide concrete native provider classes: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `AwsBedrockProvider`, `AzureOpenAiProvider`, `GroqProvider`, `DeepSeekProvider`, `MistralProvider`, `OllamaProvider`, `OpenRouterProvider`, `XAiProvider`, `CohereProvider`, `QwenProvider`.
 3. **Execution Methods**:
    - Non-Streaming: `const res = await client.chat.completions.create({ model, messages })`.
    - Streaming: `const stream = await client.chat.completions.create({ model, messages, stream: true })` and consume via `for await (const chunk of stream)`.

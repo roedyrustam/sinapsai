@@ -225,6 +225,18 @@ export class VisionOptimizer {
       const tilesH = Math.max(1, Math.ceil(dims.height / 448));
       tilesCount = tilesW * tilesH;
       tokens = tilesCount * 256;
+    } else if (
+      normProvider.includes('qwen') ||
+      normProvider.includes('dashscope')
+    ) {
+      // Alibaba Qwen2.5-VL / Qwen3-VL dynamic resolution: 28x28 patch = 1 visual token
+      const patchW = Math.max(1, Math.ceil(dims.width / 28));
+      const patchH = Math.max(1, Math.ceil(dims.height / 28));
+      const rawPatches = patchW * patchH;
+      tilesCount = Math.max(1, Math.ceil(rawPatches / 256));
+      const maxTokens =
+        detail === 'high' ? 16384 : detail === 'low' ? 256 : 1280;
+      tokens = Math.max(4, Math.min(rawPatches, maxTokens));
     } else {
       // OpenAI / GPT-5 / GPT-4o / Azure / default:
       // If detail: 'low', fixed 85 tokens.

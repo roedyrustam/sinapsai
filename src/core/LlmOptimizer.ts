@@ -33,7 +33,8 @@ export type LlmCascadePreset =
   | 'legacy'
   | 'frontier'
   | 'cost-optimized'
-  | 'speed-first';
+  | 'speed-first'
+  | 'qwen';
 
 export interface LlmCascadeTiers {
   /**
@@ -264,6 +265,11 @@ export const FRONTIER_CASCADE_PRESETS: Record<
     tier1: 'grok-4-6-high-fast',
     tier2: 'grok-4-7-high-fast',
     tier3: 'gemini-4-pro',
+  },
+  qwen: {
+    tier1: 'qwen3-turbo',
+    tier2: 'qwen3-plus',
+    tier3: 'qwen3-max',
   },
 };
 

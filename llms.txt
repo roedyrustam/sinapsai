@@ -6,8 +6,8 @@
 - **License**: MIT
 - **Runtime Dependencies**: 0 (Zero external dependencies, pure Web Standards)
 - **Overhead**: < 5ms in-process execution overhead, sub-millisecond cache hits (<0.08ms clustered cache)
-- **Test Suite**: 661 unit & integration tests passing across 64 test suites (100% pass rate)
-- **Quality**: 100% Biome Clean across 140 files, TypeScript strict mode
+- **Test Suite**: 673 unit & integration tests passing across 65 test suites (100% pass rate)
+- **Quality**: 100% Biome Clean across 142 files, TypeScript strict mode
 
 ## Core Capabilities
 

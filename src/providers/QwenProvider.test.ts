@@ -121,6 +121,39 @@ describe('QwenProvider', () => {
       expect(customProvider.resolveModel('gpt-4o')).toBe('qwen3-max');
       expect(customProvider.resolveModel('unknown-model')).toBe('qwen3-max');
     });
+
+    it('should map Qwen 3 hybrid thinking (thinkingBudget / reasoningEffort), webSearch, and developer role', () => {
+      const thinkingPayload = provider.formatRequest({
+        model: QWEN_MODELS.QWEN_3_MAX,
+        messages: [
+          { role: 'developer', content: 'Follow strict JSON rules.' },
+          { role: 'user', content: 'Solve this architecture problem.' },
+        ],
+        thinkingBudget: 8192,
+        webSearch: true,
+      });
+
+      expect(thinkingPayload.messages[0].role).toBe('system');
+      expect(thinkingPayload.enable_thinking).toBe(true);
+      expect(thinkingPayload.thinking_budget).toBe(8192);
+      expect(thinkingPayload.enable_search).toBe(true);
+
+      const disabledThinkingPayload = provider.formatRequest({
+        model: QWEN_MODELS.QWEN_3_TURBO,
+        messages: [{ role: 'user', content: 'Quick greeting' }],
+        reasoningEffort: 'none',
+      });
+      expect(disabledThinkingPayload.enable_thinking).toBe(false);
+      expect(disabledThinkingPayload.thinking_budget).toBeUndefined();
+
+      const effortPayload = provider.formatRequest({
+        model: QWEN_MODELS.QWEN_3_PLUS,
+        messages: [{ role: 'user', content: 'Complex proof' }],
+        reasoningEffort: 'high',
+      });
+      expect(effortPayload.enable_thinking).toBe(true);
+      expect(effortPayload.thinking_budget).toBe(16384);
+    });
   });
 
   describe('formatResponse', () => {

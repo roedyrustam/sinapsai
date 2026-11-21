@@ -183,4 +183,15 @@ describe('VisionOptimizer', () => {
     expect(vidLow.tokens).toBe(10 * 70 + 10 * 32);
     expect(vidHigh.tokens).toBe(10 * 560 + 10 * 32);
   });
+
+  it('estimates Qwen-VL dynamic 28x28 patch visual tokens', () => {
+    const png560 = createMockPng(560, 560);
+    const qwenStandard = optimizer.estimateVisionTokens(png560, 'qwen', 'auto');
+    // 560/28 = 20 -> 20 * 20 = 400 patches
+    expect(qwenStandard.tokens).toBe(400);
+
+    const png1400 = createMockPng(1400, 1400);
+    const qwenLow = optimizer.estimateVisionTokens(png1400, 'qwen', 'low');
+    expect(qwenLow.tokens).toBe(256);
+  });
 });
