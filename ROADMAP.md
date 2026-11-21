@@ -304,6 +304,11 @@
   - Auto-discovery CLI untuk `QWEN_API_KEY` dan `DASHSCOPE_API_KEY`.
 - [x] **Contoh & Validasi Lengkap**: Penambahan contoh 50 (`examples/50-qwen-provider-and-reasoning.ts`); total 673/673 unit tests lulus di 65 test suites, 100% Biome Clean (142 file, 0 error, 0 warning), Strict TypeScript Pass (`src/` & `examples/`).
 
+## Phase 32: Moonshot AI (Kimi K2) & Zhipu AI (GLM-4.5) + v3.7.0 Release - *Completed*
+- [x] **Native `MoonshotProvider` (`src/providers/MoonshotProvider.ts`)**: Dukungan penuh Kimi K2 (`kimi-k2-thinking`, `kimi-k2-0905-preview`, `kimi-k2-turbo-preview`, `moonshot-v1-128k`), `reasoning_content`, injeksi otomatis `$web_search`, `cached_tokens`, dan normalisasi peran `developer`.
+- [x] **Native `ZhipuProvider` (`src/providers/ZhipuProvider.ts`)**: Dukungan penuh GLM-4.5 & GLM-Z1 (`glm-4.5`, `glm-4.5-air`, `glm-4.5-flash`, `glm-4.5v`, `glm-z1-air`), Hybrid Thinking (`thinking: { type: 'enabled' | 'disabled' }`), `web_search` native, dan dense embeddings `embedding-3`/`embedding-2`.
+- [x] **15 Provider Terpadu, Cascade Presets & Rilis v3.7.0**: Penambahan preset `'kimi'` & `'glm'` di `LlmOptimizer`, katalog `FrontierModelRegistry`, auto-discovery CLI (`MOONSHOT_API_KEY`/`KIMI_API_KEY`, `ZHIPU_API_KEY`/`GLM_API_KEY`), Example 51 (`examples/51-moonshot-kimi-and-zhipu-glm.ts`), dan pembaruan versi ke **v3.7.0**.
+
 
 
 

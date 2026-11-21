@@ -102,6 +102,9 @@ npx tsx examples/49-frontier-llm-2026-control-plane.ts
 
 # 50. Alibaba Qwen Provider with QwQ Reasoning & Multimodal VL
 npx tsx examples/50-qwen-provider-and-reasoning.ts
+
+# 51. Moonshot AI (Kimi K2 Thinking) & Zhipu AI (GLM-4.5) Multi-Provider Gateway
+npx tsx examples/51-moonshot-kimi-and-zhipu-glm.ts
 ```
 
 

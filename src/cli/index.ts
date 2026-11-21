@@ -22,12 +22,14 @@ import { DeepSeekProvider } from '../providers/DeepSeekProvider.js';
 import { GeminiProvider } from '../providers/GeminiProvider.js';
 import { GroqProvider } from '../providers/GroqProvider.js';
 import { MistralProvider } from '../providers/MistralProvider.js';
+import { MoonshotProvider } from '../providers/MoonshotProvider.js';
 import { OllamaProvider } from '../providers/OllamaProvider.js';
 import { OpenAiProvider } from '../providers/OpenAiProvider.js';
 import { OpenRouterProvider } from '../providers/OpenRouterProvider.js';
 import type { Provider } from '../providers/Provider.js';
 import { QwenProvider } from '../providers/QwenProvider.js';
 import { XAiProvider } from '../providers/XAiProvider.js';
+import { ZhipuProvider } from '../providers/ZhipuProvider.js';
 import { SINAPSAI_VERSION } from '../version.js';
 import { startMcpStdioServer } from './mcpServer.js';
 import { createGatewayServer } from './server.js';
@@ -75,6 +77,22 @@ export function buildClientFromEnv(): SinapsClient {
       new QwenProvider({
         apiKey: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY,
         baseUrl: process.env.QWEN_BASE_URL || process.env.DASHSCOPE_BASE_URL,
+      }),
+    );
+  }
+  if (process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY) {
+    providers.push(
+      new MoonshotProvider({
+        apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
+        baseUrl: process.env.MOONSHOT_BASE_URL,
+      }),
+    );
+  }
+  if (process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY) {
+    providers.push(
+      new ZhipuProvider({
+        apiKey: process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY,
+        baseUrl: process.env.ZHIPU_BASE_URL,
       }),
     );
   }

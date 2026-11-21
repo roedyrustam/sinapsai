@@ -1681,7 +1681,7 @@ function tryExtractJson(text) {
 }
 
 // src/version.ts
-var SINAPSAI_VERSION = "3.6.0";
+var SINAPSAI_VERSION = "3.7.0";
 
 // src/utils/tracingExporter.ts
 function generateTraceId() {
@@ -7415,6 +7415,16 @@ var FRONTIER_CASCADE_PRESETS = {
     tier1: "qwen3-turbo",
     tier2: "qwen3-plus",
     tier3: "qwen3-max"
+  },
+  kimi: {
+    tier1: "kimi-k2-turbo-preview",
+    tier2: "kimi-k2-0905-preview",
+    tier3: "kimi-k2-thinking"
+  },
+  glm: {
+    tier1: "glm-4.5-flash",
+    tier2: "glm-4.5-air",
+    tier3: "glm-4.5"
   }
 };
 function minifyProsePreservingCode(text, mode = "lossless") {
@@ -9745,7 +9755,13 @@ var FRONTIER_AVAILABILITY_FALLBACKS = {
   "qwen3-vl-plus": ["qwen-vl-max", "qwen2.5-vl-72b-instruct"],
   "qwq-plus": ["qwq-32b", "qwen3-max"],
   "qwen-2.5-max": ["qwen-2.5-plus", "qwen-plus"],
-  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"]
+  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"],
+  // Moonshot AI (Kimi K2)
+  "kimi-k2-thinking": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview"],
+  "kimi-k2-0905-preview": ["kimi-k2-turbo-preview", "kimi-latest"],
+  // Zhipu AI (GLM-4.5)
+  "glm-4.5": ["glm-4.5-air", "glm-4-plus"],
+  "glm-z1-air": ["glm-z1-flash", "glm-4.5"]
 };
 var FRONTIER_MODELS = {
   // ── Google DeepMind ──────────────────────────────────────────────────────
@@ -11046,6 +11062,154 @@ var FRONTIER_MODELS = {
       reasoning: false,
       vision: true,
       audio: false,
+      promptCaching: true
+    }
+  },
+  // ── Moonshot AI (Kimi K2) ─────────────────────────────────────────────────
+  "kimi-k2-thinking": {
+    id: "kimi-k2-thinking",
+    name: "Kimi K2 Thinking",
+    provider: "moonshot",
+    tier: "high",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 25e-4,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["kimi-k2-0905-preview", "kimi-k2-turbo-preview"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "kimi-k2-0905-preview": {
+    id: "kimi-k2-0905-preview",
+    name: "Kimi K2 (256K)",
+    provider: "moonshot",
+    tier: "medium",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 25e-4,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["kimi-k2-turbo-preview", "kimi-latest"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "kimi-k2-turbo-preview": {
+    id: "kimi-k2-turbo-preview",
+    name: "Kimi K2 Turbo",
+    provider: "moonshot",
+    tier: "high-fast",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 115e-5,
+    completionCostPer1k: 8e-3,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["kimi-latest", "moonshot-v1-128k"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  // ── Zhipu AI (GLM-4.5) ────────────────────────────────────────────────────
+  "glm-4.5": {
+    id: "glm-4.5",
+    name: "GLM-4.5",
+    provider: "zhipu",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 98304,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 22e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["glm-4.5-air", "glm-4-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "glm-4.5-air": {
+    id: "glm-4.5-air",
+    name: "GLM-4.5 Air",
+    provider: "zhipu",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 98304,
+    promptCostPer1k: 2e-4,
+    completionCostPer1k: 11e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["glm-4.5-flash", "glm-4-air"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "glm-4.5-flash": {
+    id: "glm-4.5-flash",
+    name: "GLM-4.5 Flash",
+    provider: "zhipu",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 1e-5,
+    completionCostPer1k: 1e-5,
+    cachedPromptDiscount: 0.2,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "glm-4.5v": {
+    id: "glm-4.5v",
+    name: "GLM-4.5V (Vision)",
+    provider: "zhipu",
+    tier: "high",
+    contextWindow: 65536,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 18e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["glm-4.5"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      video: true,
       promptCaching: true
     }
   }

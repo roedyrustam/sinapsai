@@ -34,7 +34,9 @@ export type LlmCascadePreset =
   | 'frontier'
   | 'cost-optimized'
   | 'speed-first'
-  | 'qwen';
+  | 'qwen'
+  | 'kimi'
+  | 'glm';
 
 export interface LlmCascadeTiers {
   /**
@@ -270,6 +272,16 @@ export const FRONTIER_CASCADE_PRESETS: Record<
     tier1: 'qwen3-turbo',
     tier2: 'qwen3-plus',
     tier3: 'qwen3-max',
+  },
+  kimi: {
+    tier1: 'kimi-k2-turbo-preview',
+    tier2: 'kimi-k2-0905-preview',
+    tier3: 'kimi-k2-thinking',
+  },
+  glm: {
+    tier1: 'glm-4.5-flash',
+    tier2: 'glm-4.5-air',
+    tier3: 'glm-4.5',
   },
 };
 

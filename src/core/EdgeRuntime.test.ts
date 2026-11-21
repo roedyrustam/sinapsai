@@ -13,11 +13,13 @@ import {
   GeminiProvider,
   GroqProvider,
   InMemoryStorage,
+  MoonshotProvider,
   OllamaProvider,
   OpenAiProvider,
   OpenRouterProvider,
   QwenProvider,
   SinapsClient,
+  ZhipuProvider,
 } from '../index.js';
 import { parseSSE } from '../utils/stream.js';
 
@@ -45,6 +47,8 @@ describe('Edge Runtime Certification', () => {
     const openrouter = new OpenRouterProvider({ apiKey: 'mock-key' });
     const deepseek = new DeepSeekProvider({ apiKey: 'mock-key' });
     const qwen = new QwenProvider({ apiKey: 'mock-key' });
+    const moonshot = new MoonshotProvider({ apiKey: 'mock-key' });
+    const zhipu = new ZhipuProvider({ apiKey: 'mock-key' });
     const ollama = new OllamaProvider();
 
     expect(openai.name).toBe('OpenAI');
@@ -54,6 +58,8 @@ describe('Edge Runtime Certification', () => {
     expect(openrouter.name).toBe('OpenRouter');
     expect(deepseek.name).toBe('DeepSeek');
     expect(qwen.name).toBe('Qwen');
+    expect(moonshot.name).toBe('Moonshot');
+    expect(zhipu.name).toBe('Zhipu');
     expect(ollama.name).toBe('Ollama');
   });
 

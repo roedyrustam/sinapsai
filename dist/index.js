@@ -2142,7 +2142,7 @@ function tryExtractJson(text) {
 }
 
 // src/version.ts
-var SINAPSAI_VERSION = "3.6.0";
+var SINAPSAI_VERSION = "3.7.0";
 
 // src/utils/tracingExporter.ts
 function generateTraceId() {
@@ -7876,6 +7876,16 @@ var FRONTIER_CASCADE_PRESETS = {
     tier1: "qwen3-turbo",
     tier2: "qwen3-plus",
     tier3: "qwen3-max"
+  },
+  kimi: {
+    tier1: "kimi-k2-turbo-preview",
+    tier2: "kimi-k2-0905-preview",
+    tier3: "kimi-k2-thinking"
+  },
+  glm: {
+    tier1: "glm-4.5-flash",
+    tier2: "glm-4.5-air",
+    tier3: "glm-4.5"
   }
 };
 function estimateTextTokens(text) {
@@ -10237,7 +10247,13 @@ var FRONTIER_AVAILABILITY_FALLBACKS = {
   "qwen3-vl-plus": ["qwen-vl-max", "qwen2.5-vl-72b-instruct"],
   "qwq-plus": ["qwq-32b", "qwen3-max"],
   "qwen-2.5-max": ["qwen-2.5-plus", "qwen-plus"],
-  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"]
+  "qwen-vl-max": ["qwen2.5-vl-72b-instruct"],
+  // Moonshot AI (Kimi K2)
+  "kimi-k2-thinking": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview"],
+  "kimi-k2-0905-preview": ["kimi-k2-turbo-preview", "kimi-latest"],
+  // Zhipu AI (GLM-4.5)
+  "glm-4.5": ["glm-4.5-air", "glm-4-plus"],
+  "glm-z1-air": ["glm-z1-flash", "glm-4.5"]
 };
 var FRONTIER_MODELS = {
   // ── Google DeepMind ──────────────────────────────────────────────────────
@@ -11538,6 +11554,154 @@ var FRONTIER_MODELS = {
       reasoning: false,
       vision: true,
       audio: false,
+      promptCaching: true
+    }
+  },
+  // ── Moonshot AI (Kimi K2) ─────────────────────────────────────────────────
+  "kimi-k2-thinking": {
+    id: "kimi-k2-thinking",
+    name: "Kimi K2 Thinking",
+    provider: "moonshot",
+    tier: "high",
+    contextWindow: 262144,
+    maxOutputTokens: 65536,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 25e-4,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["kimi-k2-0905-preview", "kimi-k2-turbo-preview"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "kimi-k2-0905-preview": {
+    id: "kimi-k2-0905-preview",
+    name: "Kimi K2 (256K)",
+    provider: "moonshot",
+    tier: "medium",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 25e-4,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["kimi-k2-turbo-preview", "kimi-latest"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "kimi-k2-turbo-preview": {
+    id: "kimi-k2-turbo-preview",
+    name: "Kimi K2 Turbo",
+    provider: "moonshot",
+    tier: "high-fast",
+    contextWindow: 262144,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 115e-5,
+    completionCostPer1k: 8e-3,
+    cachedPromptDiscount: 0.25,
+    fallbacks: ["kimi-latest", "moonshot-v1-128k"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: false,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  // ── Zhipu AI (GLM-4.5) ────────────────────────────────────────────────────
+  "glm-4.5": {
+    id: "glm-4.5",
+    name: "GLM-4.5",
+    provider: "zhipu",
+    tier: "high",
+    contextWindow: 131072,
+    maxOutputTokens: 98304,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 22e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["glm-4.5-air", "glm-4-plus"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "glm-4.5-air": {
+    id: "glm-4.5-air",
+    name: "GLM-4.5 Air",
+    provider: "zhipu",
+    tier: "medium",
+    contextWindow: 131072,
+    maxOutputTokens: 98304,
+    promptCostPer1k: 2e-4,
+    completionCostPer1k: 11e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["glm-4.5-flash", "glm-4-air"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "glm-4.5-flash": {
+    id: "glm-4.5-flash",
+    name: "GLM-4.5 Flash",
+    provider: "zhipu",
+    tier: "high-fast",
+    contextWindow: 131072,
+    maxOutputTokens: 32768,
+    promptCostPer1k: 1e-5,
+    completionCostPer1k: 1e-5,
+    cachedPromptDiscount: 0.2,
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: false,
+      audio: false,
+      promptCaching: true,
+      webSearch: true
+    }
+  },
+  "glm-4.5v": {
+    id: "glm-4.5v",
+    name: "GLM-4.5V (Vision)",
+    provider: "zhipu",
+    tier: "high",
+    contextWindow: 65536,
+    maxOutputTokens: 16384,
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 18e-4,
+    cachedPromptDiscount: 0.2,
+    fallbacks: ["glm-4.5"],
+    capabilities: {
+      tools: true,
+      jsonSchema: true,
+      reasoning: true,
+      vision: true,
+      audio: false,
+      video: true,
       promptCaching: true
     }
   }
@@ -19246,6 +19410,271 @@ var MistralProvider = class {
   }
 };
 
+// src/providers/MoonshotProvider.ts
+var MOONSHOT_MODELS = {
+  // Kimi K2 Frontier Generation
+  KIMI_K2_THINKING: "kimi-k2-thinking",
+  KIMI_K2_0905_PREVIEW: "kimi-k2-0905-preview",
+  KIMI_K2_TURBO_PREVIEW: "kimi-k2-turbo-preview",
+  KIMI_LATEST: "kimi-latest",
+  // Moonshot v1 Long-Context Series
+  MOONSHOT_V1_128K: "moonshot-v1-128k",
+  MOONSHOT_V1_32K: "moonshot-v1-32k",
+  MOONSHOT_V1_8K: "moonshot-v1-8k",
+  MOONSHOT_V1_AUTO: "moonshot-v1-auto"
+};
+var MOONSHOT_AVAILABILITY_FALLBACKS = {
+  "kimi-k2-thinking": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview"],
+  "kimi-k2-0905-preview": ["kimi-k2-turbo-preview", "kimi-latest"],
+  "kimi-k2-turbo-preview": ["kimi-latest", "moonshot-v1-128k"]
+};
+var MOONSHOT_DEFAULT_PRICING = {
+  "kimi-k2-thinking": { promptCostPer1k: 6e-4, completionCostPer1k: 25e-4 },
+  "kimi-k2-0905-preview": {
+    promptCostPer1k: 6e-4,
+    completionCostPer1k: 25e-4
+  },
+  "kimi-k2-turbo-preview": {
+    promptCostPer1k: 115e-5,
+    completionCostPer1k: 8e-3
+  },
+  "kimi-latest": { promptCostPer1k: 6e-4, completionCostPer1k: 25e-4 },
+  "moonshot-v1-128k": { promptCostPer1k: 2e-3, completionCostPer1k: 5e-3 },
+  "moonshot-v1-32k": { promptCostPer1k: 1e-3, completionCostPer1k: 3e-3 },
+  "moonshot-v1-8k": { promptCostPer1k: 2e-4, completionCostPer1k: 2e-3 },
+  "moonshot-v1-auto": { promptCostPer1k: 6e-4, completionCostPer1k: 25e-4 }
+};
+var MoonshotProvider = class {
+  id;
+  name = "Moonshot";
+  config;
+  constructor(config = {}) {
+    this.config = config;
+    this.id = config.id || `moonshot-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      let formattedContent = m.content;
+      if (Array.isArray(m.content)) {
+        formattedContent = m.content.map((part) => {
+          if (part.type === "image_url") {
+            const img = part.image_url ?? part.imageUrl;
+            return {
+              type: "image_url",
+              image_url: {
+                url: img?.url,
+                ...img?.detail ? { detail: img.detail } : {}
+              }
+            };
+          }
+          return part;
+        });
+      }
+      const msg = {
+        role: m.role === "developer" ? "system" : m.role,
+        content: formattedContent
+      };
+      if (m.reasoning_content) {
+        msg.reasoning_content = m.reasoning_content;
+      }
+      if (m.name) {
+        msg.name = m.name;
+      }
+      if (m.tool_call_id) {
+        msg.tool_call_id = m.tool_call_id;
+      }
+      if (m.tool_calls) {
+        msg.tool_calls = m.tool_calls;
+      }
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.stream) {
+      payload.stream = true;
+      payload.stream_options = { include_usage: true };
+    }
+    const tools = request.tools ? [...request.tools] : [];
+    if (request.webSearch ?? this.config.enableWebSearch) {
+      const hasWebSearch = tools.some(
+        (t) => t.type === "builtin_function" && t.function?.name === "$web_search"
+      );
+      if (!hasWebSearch) {
+        tools.push({
+          type: "builtin_function",
+          function: { name: "$web_search" }
+        });
+      }
+    }
+    if (tools.length > 0) {
+      payload.tools = tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: Moonshot response format
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    const cachedPromptTokens = data.usage?.cached_tokens ?? data.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+    return {
+      id: data.id || `moonshot-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            reasoning_content: choice?.message?.reasoning_content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: data.usage ? (() => {
+        const reasoningTokens = data.usage.completion_tokens_details?.reasoning_tokens;
+        return {
+          promptTokens: data.usage.prompt_tokens || 0,
+          completionTokens: data.usage.completion_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0,
+          cachedPromptTokens,
+          ...reasoningTokens !== void 0 ? { reasoningTokens } : {}
+        };
+      })() : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://api.moonshot.ai/v1";
+    const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Moonshot API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+          try {
+            for await (const msg of parseSSE2(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                const usageObj = parsed.usage ?? chunk?.usage;
+                const cachedPromptTokens = usageObj?.cached_tokens ?? usageObj?.prompt_tokens_details?.cached_tokens ?? void 0;
+                yield {
+                  id: parsed.id || `moonshot-${Date.now()}`,
+                  model: parsed.model,
+                  choices: chunk ? [
+                    {
+                      delta: {
+                        role: chunk.delta?.role,
+                        content: chunk.delta?.content,
+                        reasoning_content: chunk.delta?.reasoning_content,
+                        tool_calls: chunk.delta?.tool_calls
+                      },
+                      finishReason: chunk.finish_reason || null
+                    }
+                  ] : [],
+                  usage: usageObj ? (() => {
+                    const streamReasoningTokens = usageObj.completion_tokens_details?.reasoning_tokens;
+                    return {
+                      promptTokens: usageObj.prompt_tokens || 0,
+                      completionTokens: usageObj.completion_tokens || 0,
+                      totalTokens: usageObj.total_tokens || 0,
+                      cachedPromptTokens,
+                      ...streamReasoningTokens !== void 0 ? { reasoningTokens: streamReasoningTokens } : {}
+                    };
+                  })() : void 0
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            cleanupSignal?.();
+            if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream) {
+        cleanupSignal?.();
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    }
+  }
+};
+
 // src/providers/OllamaProvider.ts
 var OllamaProvider = class {
   id;
@@ -21469,6 +21898,336 @@ var XAiProvider = class {
     };
   }
 };
+
+// src/providers/ZhipuProvider.ts
+var ZHIPU_MODELS = {
+  // GLM-4.5 Frontier Series
+  GLM_4_5: "glm-4.5",
+  GLM_4_5_AIR: "glm-4.5-air",
+  GLM_4_5_FLASH: "glm-4.5-flash",
+  GLM_4_5V: "glm-4.5v",
+  // Deep Reasoning Series
+  GLM_Z1_AIR: "glm-z1-air",
+  GLM_Z1_FLASH: "glm-z1-flash",
+  // GLM-4 Generation
+  GLM_4_PLUS: "glm-4-plus",
+  GLM_4_AIR: "glm-4-air",
+  GLM_4_FLASH: "glm-4-flash",
+  // Embeddings
+  EMBEDDING_3: "embedding-3",
+  EMBEDDING_2: "embedding-2"
+};
+var ZHIPU_AVAILABILITY_FALLBACKS = {
+  "glm-4.5": ["glm-4.5-air", "glm-4-plus"],
+  "glm-4.5-air": ["glm-4.5-flash", "glm-4-air"],
+  "glm-z1-air": ["glm-z1-flash", "glm-4.5"],
+  "glm-4.5v": ["glm-4.5"]
+};
+var ZHIPU_DEFAULT_PRICING = {
+  "glm-4.5": { promptCostPer1k: 6e-4, completionCostPer1k: 22e-4 },
+  "glm-4.5-air": { promptCostPer1k: 2e-4, completionCostPer1k: 11e-4 },
+  "glm-4.5-flash": { promptCostPer1k: 1e-5, completionCostPer1k: 1e-5 },
+  "glm-4.5v": { promptCostPer1k: 6e-4, completionCostPer1k: 18e-4 },
+  "glm-z1-air": { promptCostPer1k: 5e-4, completionCostPer1k: 2e-3 },
+  "glm-z1-flash": { promptCostPer1k: 1e-5, completionCostPer1k: 1e-5 },
+  "glm-4-plus": { promptCostPer1k: 7e-4, completionCostPer1k: 7e-4 },
+  "glm-4-air": { promptCostPer1k: 14e-5, completionCostPer1k: 14e-5 },
+  "glm-4-flash": { promptCostPer1k: 1e-5, completionCostPer1k: 1e-5 },
+  "embedding-3": { promptCostPer1k: 7e-5, completionCostPer1k: 0 },
+  "embedding-2": { promptCostPer1k: 7e-5, completionCostPer1k: 0 }
+};
+var ZhipuProvider = class {
+  id;
+  name = "Zhipu";
+  config;
+  constructor(config = {}) {
+    this.config = config;
+    this.id = config.id || `zhipu-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+  get costPer1kTokens() {
+    return this.config.costPer1kTokens;
+  }
+  get promptCostPer1k() {
+    return this.config.promptCostPer1k;
+  }
+  get completionCostPer1k() {
+    return this.config.completionCostPer1k;
+  }
+  get retries() {
+    return this.config.retries;
+  }
+  get retryDelayMs() {
+    return this.config.retryDelayMs;
+  }
+  get fallbackModels() {
+    return this.config.fallbackModels;
+  }
+  get defaultModel() {
+    return this.config.defaultModel;
+  }
+  resolveModel(model) {
+    if (this.config.modelMap?.[model]) {
+      return this.config.modelMap[model];
+    }
+    return this.config.defaultModel || model;
+  }
+  formatRequest(request) {
+    const messages = request.messages.map((m) => {
+      let formattedContent = m.content;
+      if (Array.isArray(m.content)) {
+        formattedContent = m.content.map((part) => {
+          if (part.type === "image_url") {
+            const img = part.image_url ?? part.imageUrl;
+            return {
+              type: "image_url",
+              image_url: {
+                url: img?.url,
+                ...img?.detail ? { detail: img.detail } : {}
+              }
+            };
+          }
+          return part;
+        });
+      }
+      const msg = {
+        role: m.role === "developer" ? "system" : m.role,
+        content: formattedContent
+      };
+      if (m.reasoning_content) {
+        msg.reasoning_content = m.reasoning_content;
+      }
+      if (m.name) {
+        msg.name = m.name;
+      }
+      if (m.tool_call_id) {
+        msg.tool_call_id = m.tool_call_id;
+      }
+      if (m.tool_calls) {
+        msg.tool_calls = m.tool_calls;
+      }
+      return msg;
+    });
+    const payload = {
+      model: this.resolveModel(request.model),
+      messages
+    };
+    if (request.temperature !== void 0) {
+      payload.temperature = request.temperature;
+    }
+    if (request.maxTokens !== void 0) {
+      payload.max_tokens = request.maxTokens;
+    }
+    if (request.stream) {
+      payload.stream = true;
+    }
+    const tools = request.tools ? [...request.tools] : [];
+    if (request.webSearch ?? this.config.enableWebSearch) {
+      const hasWebSearch = tools.some((t) => t.type === "web_search");
+      if (!hasWebSearch) {
+        tools.push({
+          type: "web_search",
+          web_search: { enable: true }
+        });
+      }
+    }
+    if (tools.length > 0) {
+      payload.tools = tools;
+    }
+    if (request.toolChoice) {
+      payload.tool_choice = request.toolChoice;
+    }
+    if (request.responseFormat) {
+      payload.response_format = request.responseFormat;
+    }
+    if (request.thinkingBudget === 0 || request.reasoningEffort === "none") {
+      payload.thinking = { type: "disabled" };
+    } else if (request.thinkingBudget === "auto" || typeof request.thinkingBudget === "number" && request.thinkingBudget > 0 || request.reasoningEffort !== void 0) {
+      payload.thinking = { type: "enabled" };
+    } else if (this.config.enableThinking !== void 0) {
+      payload.thinking = {
+        type: this.config.enableThinking ? "enabled" : "disabled"
+      };
+    }
+    return payload;
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: Zhipu response format
+  formatResponse(data) {
+    const choice = data.choices?.[0];
+    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+    return {
+      id: data.id || `zhipu-${Date.now()}`,
+      model: data.model,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: choice?.message?.content ?? null,
+            reasoning_content: choice?.message?.reasoning_content ?? null,
+            tool_calls: choice?.message?.tool_calls
+          },
+          finishReason: choice?.finish_reason || "stop"
+        }
+      ],
+      usage: data.usage ? (() => {
+        const reasoningTokens = data.usage.completion_tokens_details?.reasoning_tokens;
+        return {
+          promptTokens: data.usage.prompt_tokens || 0,
+          completionTokens: data.usage.completion_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0,
+          cachedPromptTokens,
+          ...reasoningTokens !== void 0 ? { reasoningTokens } : {}
+        };
+      })() : void 0
+    };
+  }
+  async generateContent(request) {
+    const payload = this.formatRequest(request);
+    const baseUrl = this.config.baseUrl || "https://api.z.ai/api/paas/v4";
+    const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Zhipu API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      if (request.stream) {
+        return (async function* () {
+          const { parseSSE: parseSSE2 } = await Promise.resolve().then(() => (init_stream(), stream_exports));
+          try {
+            for await (const msg of parseSSE2(response)) {
+              try {
+                const parsed = JSON.parse(msg.data);
+                const chunk = parsed.choices?.[0];
+                const cachedPromptTokens = parsed.usage?.prompt_tokens_details?.cached_tokens ?? void 0;
+                yield {
+                  id: parsed.id || `zhipu-${Date.now()}`,
+                  model: parsed.model,
+                  choices: chunk ? [
+                    {
+                      delta: {
+                        role: chunk.delta?.role,
+                        content: chunk.delta?.content,
+                        reasoning_content: chunk.delta?.reasoning_content,
+                        tool_calls: chunk.delta?.tool_calls
+                      },
+                      finishReason: chunk.finish_reason || null
+                    }
+                  ] : [],
+                  usage: parsed.usage ? (() => {
+                    const streamReasoningTokens = parsed.usage.completion_tokens_details?.reasoning_tokens;
+                    return {
+                      promptTokens: parsed.usage.prompt_tokens || 0,
+                      completionTokens: parsed.usage.completion_tokens || 0,
+                      totalTokens: parsed.usage.total_tokens || 0,
+                      cachedPromptTokens,
+                      ...streamReasoningTokens !== void 0 ? { reasoningTokens: streamReasoningTokens } : {}
+                    };
+                  })() : void 0
+                };
+              } catch (_e) {
+              }
+            }
+          } finally {
+            cleanupSignal?.();
+            if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
+          }
+        })();
+      }
+      const data = await response.json();
+      const res = this.formatResponse(data);
+      const rl = parseRateLimitHeaders(response.headers);
+      if (rl) {
+        res.rateLimit = rl;
+      }
+      return res;
+    } catch (error) {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+      throw error;
+    } finally {
+      if (!request.stream) {
+        cleanupSignal?.();
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    }
+  }
+  async generateEmbedding(request) {
+    const targetModel = this.resolveModel(
+      request.model || ZHIPU_MODELS.EMBEDDING_3
+    );
+    const baseUrl = this.config.baseUrl || "https://api.z.ai/api/paas/v4";
+    const url = `${baseUrl.replace(/\/+$/, "")}/embeddings`;
+    const controller = new AbortController();
+    let timeoutId;
+    if (this.config.timeoutMs) {
+      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    }
+    const cleanupSignal = linkAbortSignal(controller, request.signal);
+    try {
+      const payload = {
+        model: targetModel,
+        input: request.input
+      };
+      if (request.dimensions !== void 0) {
+        payload.dimensions = request.dimensions;
+      }
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        const err = new Error(
+          `Zhipu Embedding API Error (${response.status}): ${errorText}`
+        );
+        err.status = response.status;
+        throw err;
+      }
+      const data = await response.json();
+      return {
+        object: "list",
+        model: data.model || targetModel,
+        // biome-ignore lint/suspicious/noExplicitAny: item mapping
+        data: (data.data || []).map((item, idx) => ({
+          object: "embedding",
+          index: item.index ?? idx,
+          embedding: item.embedding
+        })),
+        usage: {
+          promptTokens: data.usage?.prompt_tokens || 0,
+          totalTokens: data.usage?.total_tokens || 0
+        }
+      };
+    } finally {
+      cleanupSignal?.();
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+};
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
  *
@@ -21995,6 +22754,6 @@ var XAiProvider = class {
  * @license MIT
  */
 
-export { ANTHROPIC_AVAILABILITY_FALLBACKS, ANTHROPIC_DEFAULT_PRICING, ANTHROPIC_MODELS, AgentPersonaRegistry, AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, AutonomousDriftHealer, AwsBedrockProvider, AzureOpenAiProvider, BEDROCK_MODELS, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CanaryProber, CircuitBreaker, CloudflareKVStorage, ClusteredSemanticCache, CognitiveBrain, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEEPSEEK_AVAILABILITY_FALLBACKS, DEEPSEEK_DEFAULT_PRICING, DEEPSEEK_MODELS, DEFAULT_CASCADE_TIERS, DashboardServer, DatasetDistiller, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, FRONTIER_AVAILABILITY_FALLBACKS, FRONTIER_CASCADE_PRESETS, FRONTIER_CASCADE_TIERS, FRONTIER_MODELS, FaithfulnessSentinel, FrontierModelRegistry, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, KvCacheOptimizer, LlmEvals, LlmOptimizer, MCP_PROTOCOL_VERSION, MCP_SUPPORTED_PROTOCOL_VERSIONS, MISTRAL_AVAILABILITY_FALLBACKS, MISTRAL_DEFAULT_PRICING, MISTRAL_MODELS, McpClientConnector, McpToolBridge, MistralProvider, NumberSchemaNode, OPENAI_DEFAULT_PRICING, OPENAI_MODELS, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, QWEN_AVAILABILITY_FALLBACKS, QWEN_DEFAULT_PRICING, QWEN_MODELS, QwenProvider, RealtimeClient, RealtimeSession, RedisStorage, Router, SINAPSAI_VERSION, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SemanticRouter, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, SinapsLanguageModelV2, SinapsLanguageModelV3, SpeculativeStreamVerifier, StringSchemaNode, SwarmContext, TournamentConsensusEngine, VisionOptimizer, XAI_AVAILABILITY_FALLBACKS, XAI_DEFAULT_PRICING, XAI_MODELS, XAiProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, convertV2CallOptions, convertV2PromptToSinapsMessages, cosineSimilarity, createFastSemanticEmbedding, createOpenRouterFreeProvider, createSinapsAI, createSinapsAIV2, createSinapsAIV3, deduplicateSystemInstructions, deepMergeContext, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, evaluateResponseConfidence, executeBatch, exportOtelTraces, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, generateSpanId, generateTraceId, getSignatureKey, hmacSha256, isOpenRouterFreeModel, isSinapsSchema, isStandardSchema, isZodSchema, jsonSchema, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sha256Hex, signAwsRequest, sinapsai, toOtelTracePayload, toStandardJsonSchema, tool, tryExtractJson, validateSchema };
+export { ANTHROPIC_AVAILABILITY_FALLBACKS, ANTHROPIC_DEFAULT_PRICING, ANTHROPIC_MODELS, AgentPersonaRegistry, AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, AutonomousDriftHealer, AwsBedrockProvider, AzureOpenAiProvider, BEDROCK_MODELS, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CanaryProber, CircuitBreaker, CloudflareKVStorage, ClusteredSemanticCache, CognitiveBrain, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEEPSEEK_AVAILABILITY_FALLBACKS, DEEPSEEK_DEFAULT_PRICING, DEEPSEEK_MODELS, DEFAULT_CASCADE_TIERS, DashboardServer, DatasetDistiller, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, FRONTIER_AVAILABILITY_FALLBACKS, FRONTIER_CASCADE_PRESETS, FRONTIER_CASCADE_TIERS, FRONTIER_MODELS, FaithfulnessSentinel, FrontierModelRegistry, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, KvCacheOptimizer, LlmEvals, LlmOptimizer, MCP_PROTOCOL_VERSION, MCP_SUPPORTED_PROTOCOL_VERSIONS, MISTRAL_AVAILABILITY_FALLBACKS, MISTRAL_DEFAULT_PRICING, MISTRAL_MODELS, MOONSHOT_AVAILABILITY_FALLBACKS, MOONSHOT_DEFAULT_PRICING, MOONSHOT_MODELS, McpClientConnector, McpToolBridge, MistralProvider, MoonshotProvider, NumberSchemaNode, OPENAI_DEFAULT_PRICING, OPENAI_MODELS, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, QWEN_AVAILABILITY_FALLBACKS, QWEN_DEFAULT_PRICING, QWEN_MODELS, QwenProvider, RealtimeClient, RealtimeSession, RedisStorage, Router, SINAPSAI_VERSION, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SemanticRouter, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, SinapsLanguageModelV2, SinapsLanguageModelV3, SpeculativeStreamVerifier, StringSchemaNode, SwarmContext, TournamentConsensusEngine, VisionOptimizer, XAI_AVAILABILITY_FALLBACKS, XAI_DEFAULT_PRICING, XAI_MODELS, XAiProvider, ZHIPU_AVAILABILITY_FALLBACKS, ZHIPU_DEFAULT_PRICING, ZHIPU_MODELS, ZhipuProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, convertV2CallOptions, convertV2PromptToSinapsMessages, cosineSimilarity, createFastSemanticEmbedding, createOpenRouterFreeProvider, createSinapsAI, createSinapsAIV2, createSinapsAIV3, deduplicateSystemInstructions, deepMergeContext, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, evaluateResponseConfidence, executeBatch, exportOtelTraces, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, generateSpanId, generateTraceId, getSignatureKey, hmacSha256, isOpenRouterFreeModel, isSinapsSchema, isStandardSchema, isZodSchema, jsonSchema, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sha256Hex, signAwsRequest, sinapsai, toOtelTracePayload, toStandardJsonSchema, tool, tryExtractJson, validateSchema };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

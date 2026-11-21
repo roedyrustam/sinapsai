@@ -36,6 +36,10 @@ describe('FrontierModelRegistry (Late-2026 Frontier Catalog)', () => {
     expect(FRONTIER_MODELS['qwen3-max']?.tier).toBe('high');
     expect(FRONTIER_MODELS['qwq-plus']?.capabilities.reasoning).toBe(true);
     expect(FRONTIER_MODELS['qwen-vl-max']?.capabilities.vision).toBe(true);
+    expect(FRONTIER_MODELS['kimi-k2-thinking']?.capabilities.reasoning).toBe(
+      true,
+    );
+    expect(FRONTIER_MODELS['glm-4.5']?.tier).toBe('high');
   });
 
   it('resolves models by canonical ID and alias', () => {

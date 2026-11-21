@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.7.0] - 2026-11-22
+### Added
+- **15 Unified Native Providers — Alibaba Qwen, Moonshot AI (Kimi K2) & Zhipu AI (GLM-4.5)**:
+  - **Alibaba Qwen (`QwenProvider`, `src/providers/QwenProvider.ts`)**: Native DashScope OpenAI-compatible provider with Qwen 3 Hybrid Thinking (`enable_thinking`, `thinking_budget`), DashScope built-in Web Search (`enable_search`), QwQ deep reasoning (`reasoning_content`), `text-embedding-v3`/`v2` embeddings with custom dimensions, multimodal Qwen-VL (`qwen-vl-max`, `qwen3-vl-plus`), `developer` role normalization, and `VisionOptimizer` dynamic `28×28` patch token estimation.
+  - **Moonshot AI (`MoonshotProvider`, `src/providers/MoonshotProvider.ts`)**: Native Kimi K2 & Kimi K2 Thinking (`kimi-k2-thinking`, `kimi-k2-0905-preview`, `kimi-k2-turbo-preview`, `moonshot-v1-128k`) provider with `reasoning_content` streaming/non-streaming extraction, built-in `$web_search` tool injection (`webSearch: true`), `cached_tokens` tracking, and `developer` role normalization.
+  - **Zhipu AI (`ZhipuProvider`, `src/providers/ZhipuProvider.ts`)**: Native GLM-4.5 / GLM-Z1 (`glm-4.5`, `glm-4.5-air`, `glm-4.5-flash`, `glm-4.5v`, `glm-z1-air`) provider with Hybrid Thinking (`thinking: { type: 'enabled' | 'disabled' }`), native `web_search` tool injection, multimodal vision, and `embedding-3` / `embedding-2` dense embeddings with custom dimensions.
+- **Control Plane, Cascade Presets & CLI Auto-Discovery**:
+  - Expanded `FrontierModelRegistry` (`FRONTIER_MODELS` & `FRONTIER_AVAILABILITY_FALLBACKS`) with Qwen 3, QwQ, Kimi K2, and GLM-4.5 catalogs.
+  - Added `'qwen'`, `'kimi'`, and `'glm'` presets to `FRONTIER_CASCADE_PRESETS` in `LlmOptimizer`.
+  - Added CLI auto-registration for `QWEN_API_KEY` / `DASHSCOPE_API_KEY`, `MOONSHOT_API_KEY` / `KIMI_API_KEY`, and `ZHIPU_API_KEY` / `GLM_API_KEY`.
+  - Added Examples 50 (`examples/50-qwen-provider-and-reasoning.ts`) and 51 (`examples/51-moonshot-kimi-and-zhipu-glm.ts`), and bumped `SINAPSAI_VERSION` to `3.7.0`.
+
 ## [3.6.0] - 2026-11-21
 ### Added
 - **Unified Late-2026 Frontier Model Registry (`FrontierModelRegistry`, `FRONTIER_MODELS`, `FRONTIER_AVAILABILITY_FALLBACKS`, `src/core/FrontierModelRegistry.ts`)**:

@@ -18,7 +18,7 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
 2. **Sub-5ms Execution Overhead**: In-memory routing, circuit breaker evaluation, guardrail scanning, and token estimation execute with <5ms overhead (<0.5ms for cache hits).
 3. **100% In-Process Privacy**: No payloads, system prompts, API keys, or telemetry data are ever routed through external third-party telemetry servers.
 4. **Resilience by Default**: Built-in automated failover, hierarchical model-level fallback chains, exponential retries with jitter, and speculative hedged requests to crush P99 tail latencies.
-5. **Universal Standardization**: Connects to 13 major LLM providers using standard OpenAI-compatible Chat Completions, Embeddings, and Function Calling format.
+5. **Universal Standardization**: Connects to 15 major LLM providers using standard OpenAI-compatible Chat Completions, Embeddings, and Function Calling format.
 
 ---
 
@@ -72,6 +72,8 @@ SinapsAI is a universal, zero-runtime-dependency, in-process AI Gateway and Cont
    - xAI Grok                        - OpenTelemetry / Prometheus
    - Cohere v2
    - Alibaba Qwen (DashScope)
+   - Moonshot AI (Kimi K2)
+   - Zhipu AI (GLM-4.5)
 ```
 
 ---
@@ -89,6 +91,8 @@ import {
   GroqProvider,
   DeepSeekProvider,
   QwenProvider,
+  MoonshotProvider,
+  ZhipuProvider,
   XAiProvider,
   CohereProvider,
   MistralProvider,
@@ -458,13 +462,14 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 | `examples/48-vision-optimizer-speculative-stream-and-personas.ts` | Multimodal Vision Token Optimizer, Speculative Stream Verification, Dynamic Agent Personas & Unified Hot-Path Pipeline |
 | `examples/49-frontier-llm-2026-control-plane.ts` | Late-2026 Frontier Model Registry, OpenAI Responses API, Anthropic Adaptive Thinking, Gemini 4 thinkingLevel & thoughtSignature, AI SDK v5/v6 & MCP 2025-06-18 |
 | `examples/50-qwen-provider-and-reasoning.ts` | Alibaba Qwen (DashScope) native provider with Qwen 3 Hybrid Thinking (`enable_thinking`/`thinking_budget`), Web Search (`enable_search`), QwQ `reasoning_content`, and `text-embedding-v3` |
+| `examples/51-moonshot-kimi-and-zhipu-glm.ts` | Moonshot AI (Kimi K2 Thinking, `$web_search`) & Zhipu AI (GLM-4.5 Hybrid Thinking, `embedding-3`) multi-provider gateway |
 
 ---
 
 ## 9. Verification & Quality Metrics
 
-- **Total Test Suites**: 65
-- **Total Unit & Integration Tests**: 673 passing (100% pass rate)
-- **Linter Status**: 100% compliant with Biome v2 across 142 source files (0 errors, 0 warnings)
+- **Total Test Suites**: 67
+- **Total Unit & Integration Tests**: 681 passing (100% pass rate)
+- **Linter Status**: 100% compliant with Biome v2 across 146 source files (0 errors, 0 warnings)
 - **TypeScript**: Strict mode across `src/` & `examples/` with declarations emitted
 - **Runtime Dependencies**: `0` (Zero external dependencies)

@@ -1896,7 +1896,9 @@ When generating code or scaffolding projects using **SinapsAI**, AI models and c
 | **Groq** | `GroqProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning extraction (`reasoning_format: 'parsed'`, `reasoning_content`), duration rate limits (`7.66s`, `2m59.56s`), temperature clamping, message name sanitization |
 | **OpenRouter** | `OpenRouterProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `siteUrl`, `siteName`, `fallbackModels`, `isFreeTier`, `createOpenRouterFreeProvider()` |
 | **Mistral** | `MistralProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels` |
-| **Qwen (DashScope)** | `QwenProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, reasoning tokens (`reasoning_content`), embeddings (`text-embedding-v3`), `QWEN_MODELS` |
+| **Qwen (DashScope)** | `QwenProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, Qwen 3 Hybrid Thinking (`enable_thinking`/`thinking_budget`), `enable_search`, reasoning tokens (`reasoning_content`), embeddings (`text-embedding-v3`), `QWEN_MODELS` |
+| **Moonshot (Kimi K2)** | `MoonshotProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, Kimi K2 Thinking (`reasoning_content`), `$web_search`, `MOONSHOT_MODELS` |
+| **Zhipu (GLM-4.5)** | `ZhipuProvider` | `baseUrl`, `timeoutMs`, `costPer1kTokens`, `fallbackModels`, GLM-4.5 Hybrid Thinking, `web_search`, embeddings (`embedding-3`), `ZHIPU_MODELS` |
 | **Custom / On-Prem** | `Provider` (Interface) | Custom implementations for vLLM, LocalAI, TGI, etc. |
 
 ### Creating a Custom Provider (e.g. Ollama)
