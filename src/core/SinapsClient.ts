@@ -149,6 +149,7 @@ import {
   SpeculativeStreamVerifier,
 } from './SpeculativeStreamVerifier.js';
 import type { StateStorage } from './StateStorage.js';
+import { VirtualKeyManager } from './VirtualKeyManager.js';
 import {
   VisionOptimizer,
   type VisionOptimizerOptions,
@@ -320,6 +321,7 @@ export class SinapsClient {
   public readonly kvCache: KvCacheOptimizer;
   public readonly vision: VisionOptimizer;
   public readonly personas: AgentPersonaRegistry;
+  public readonly virtualKeys = new VirtualKeyManager();
   private kvCacheEnabled = false;
   private clusteredCacheEnabled = false;
   private semanticRouterEnabled: boolean;

@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.8.0] - 2026-11-22
+### Added
+- **In-Process Multi-Tenant Virtual API Key Manager (`VirtualKeyManager`, `client.virtualKeys`, `src/core/VirtualKeyManager.ts`)**:
+  - Cryptographically secure virtual key generation (`sk-sinaps-...`) via native Web Crypto (`crypto.getRandomValues`) with SHA-256 hashing (`crypto.subtle.digest`) so plaintext secrets are never stored in memory.
+  - Per-tenant / per-key **Model ACLs** (`allowedModels` with wildcard prefix support), **Provider ACLs** (`allowedProviders`), **FinOps USD Budget Caps** (`maxBudgetUsd` / `recordSpend`), **Sliding-Window 60s RPM & TPM Rate Limits** (`maxRpm`, `maxTpm`), **TTL Expiration** (`expiresAt`), **Zero-Downtime Key Rotation** (`rotateKey`), and **Instant Revocation** (`revokeKey`).
+  - Native HTTP Gateway integration in `createGatewayServer` (`src/cli/server.ts`, `enforceVirtualKeys`) returning standard `401` / `402` / `403` / `429` JSON error payloads.
+  - Added Example 52 (`examples/52-multi-tenant-virtual-keys.ts`) and bumped `SINAPSAI_VERSION` to `3.8.0`.
+
 ## [3.7.0] - 2026-11-22
 ### Added
 - **15 Unified Native Providers — Alibaba Qwen, Moonshot AI (Kimi K2) & Zhipu AI (GLM-4.5)**:

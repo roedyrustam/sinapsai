@@ -309,6 +309,13 @@
 - [x] **Native `ZhipuProvider` (`src/providers/ZhipuProvider.ts`)**: Dukungan penuh GLM-4.5 & GLM-Z1 (`glm-4.5`, `glm-4.5-air`, `glm-4.5-flash`, `glm-4.5v`, `glm-z1-air`), Hybrid Thinking (`thinking: { type: 'enabled' | 'disabled' }`), `web_search` native, dan dense embeddings `embedding-3`/`embedding-2`.
 - [x] **15 Provider Terpadu, Cascade Presets & Rilis v3.7.0**: Penambahan preset `'kimi'` & `'glm'` di `LlmOptimizer`, katalog `FrontierModelRegistry`, auto-discovery CLI (`MOONSHOT_API_KEY`/`KIMI_API_KEY`, `ZHIPU_API_KEY`/`GLM_API_KEY`), Example 51 (`examples/51-moonshot-kimi-and-zhipu-glm.ts`), dan pembaruan versi ke **v3.7.0**.
 
+## Phase 33: Multi-Tenant Virtual API Key Manager & Enterprise Gateway Auth (v3.8.0) - *Completed*
+- [x] **In-Process `VirtualKeyManager` (`src/core/VirtualKeyManager.ts` & `client.virtualKeys`)**:
+  - Penerbitan virtual key kriptografis (`sk-sinaps-...`) berbasis Web Crypto + hashing SHA-256 (tanpa menyimpan plaintext secret di memori).
+  - Penegakan per-tenant: **Model ACLs** (`allowedModels` wildcard), **Provider ACLs** (`allowedProviders`), **FinOps USD Budget Caps** (`maxBudgetUsd`), **Sliding-Window RPM/TPM**, **TTL Expiration**, **Zero-Downtime Key Rotation** (`rotateKey`), dan **Instant Revocation** (`revokeKey`).
+- [x] **Integrasi HTTP Gateway Server (`src/cli/server.ts`)**: Opsi `enforceVirtualKeys` dengan respons standar HTTP `401`/`402`/`403`/`429`.
+- [x] **Contoh & Rilis v3.8.0**: Example 52 (`examples/52-multi-tenant-virtual-keys.ts`) dan bump versi ke **v3.8.0**.
+
 
 
 

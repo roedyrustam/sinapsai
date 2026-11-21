@@ -47,6 +47,7 @@ export * from './core/SinapsClient.js';
 export * from './core/SpeculativeStreamVerifier.js';
 export * from './core/StateStorage.js';
 export * from './core/TournamentConsensus.js';
+export * from './core/VirtualKeyManager.js';
 export * from './core/VisionOptimizer.js';
 export * from './providers/index.js';
 export * from './types/index.js';

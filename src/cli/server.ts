@@ -30,12 +30,17 @@ export interface GatewayServerOptions {
   host?: string;
   client: SinapsClient;
   apiKey?: string;
+  /**
+   * Enforces multi-tenant virtual API keys managed by `client.virtualKeys`.
+   * Automatically enforces Model ACLs, FinOps USD budgets, and RPM/TPM limits.
+   */
+  enforceVirtualKeys?: boolean;
 }
 
 export function createGatewayServer(
   options: GatewayServerOptions,
 ): http.Server {
-  const { client, apiKey } = options;
+  const { client, apiKey, enforceVirtualKeys } = options;
 
   return http.createServer(async (req, res) => {
     // CORS headers
@@ -58,11 +63,33 @@ export function createGatewayServer(
     );
     const pathname = url.pathname;
 
-    // Optional API key authorization
-    if (apiKey) {
-      const authHeader = req.headers.authorization || '';
-      const providedKey =
-        authHeader.replace(/^Bearer\s+/i, '') || req.headers['x-api-key'];
+    const authHeader = req.headers.authorization || '';
+    const headerApiKey = req.headers['x-api-key'];
+    const providedKey =
+      authHeader.replace(/^Bearer\s+/i, '').trim() ||
+      (typeof headerApiKey === 'string' ? headerApiKey.trim() : '');
+
+    // Multi-tenant Virtual Key authorization (or static API key fallback)
+    const shouldCheckVirtualKey =
+      (enforceVirtualKeys || client.virtualKeys.hasKeys()) &&
+      pathname !== '/health' &&
+      pathname !== '/metrics';
+
+    if (shouldCheckVirtualKey && (!apiKey || providedKey !== apiKey)) {
+      const auth = await client.virtualKeys.authorizeRequest(providedKey);
+      if (!auth.allowed) {
+        res.writeHead(auth.statusCode, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: auth.reason || 'Unauthorized: Invalid Virtual API Key',
+              code: auth.statusCode,
+            },
+          }),
+        );
+        return;
+      }
+    } else if (apiKey) {
       if (providedKey !== apiKey) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(

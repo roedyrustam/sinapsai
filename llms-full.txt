@@ -463,13 +463,14 @@ const embedding = await sinaps.textEmbeddingModel('text-embedding-3-small').doEm
 | `examples/49-frontier-llm-2026-control-plane.ts` | Late-2026 Frontier Model Registry, OpenAI Responses API, Anthropic Adaptive Thinking, Gemini 4 thinkingLevel & thoughtSignature, AI SDK v5/v6 & MCP 2025-06-18 |
 | `examples/50-qwen-provider-and-reasoning.ts` | Alibaba Qwen (DashScope) native provider with Qwen 3 Hybrid Thinking (`enable_thinking`/`thinking_budget`), Web Search (`enable_search`), QwQ `reasoning_content`, and `text-embedding-v3` |
 | `examples/51-moonshot-kimi-and-zhipu-glm.ts` | Moonshot AI (Kimi K2 Thinking, `$web_search`) & Zhipu AI (GLM-4.5 Hybrid Thinking, `embedding-3`) multi-provider gateway |
+| `examples/52-multi-tenant-virtual-keys.ts` | Multi-Tenant Virtual API Key Manager (`client.virtualKeys`) with SHA-256 hashing, Model/Provider ACLs, USD budgets, RPM/TPM & rotation |
 
 ---
 
 ## 9. Verification & Quality Metrics
 
-- **Total Test Suites**: 67
-- **Total Unit & Integration Tests**: 681 passing (100% pass rate)
-- **Linter Status**: 100% compliant with Biome v2 across 146 source files (0 errors, 0 warnings)
+- **Total Test Suites**: 68
+- **Total Unit & Integration Tests**: 685 passing (100% pass rate)
+- **Linter Status**: 100% compliant with Biome v2 across 148 source files (0 errors, 0 warnings)
 - **TypeScript**: Strict mode across `src/` & `examples/` with declarations emitted
 - **Runtime Dependencies**: `0` (Zero external dependencies)

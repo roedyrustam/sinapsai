@@ -2142,7 +2142,7 @@ function tryExtractJson(text) {
 }
 
 // src/version.ts
-var SINAPSAI_VERSION = "3.7.0";
+var SINAPSAI_VERSION = "3.8.0";
 
 // src/utils/tracingExporter.ts
 function generateTraceId() {
@@ -14175,6 +14175,274 @@ var SecurityGuardrails = class {
   }
 };
 
+// src/core/VirtualKeyManager.ts
+function bytesToHex(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
+async function sha256Hex(input) {
+  const data = new TextEncoder().encode(input);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", data);
+  return bytesToHex(new Uint8Array(digest));
+}
+function generateSecureToken(prefix) {
+  const randomBytes = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(randomBytes);
+  return `${prefix}${bytesToHex(randomBytes)}`;
+}
+function matchesPattern(value, pattern) {
+  const v = value.toLowerCase();
+  const p = pattern.toLowerCase();
+  if (p === "*" || v === p) return true;
+  if (p.endsWith("*")) {
+    return v.startsWith(p.slice(0, -1));
+  }
+  return false;
+}
+function sanitizeRecord(record) {
+  const { keyHash: _keyHash, ...safe } = record;
+  return { ...safe };
+}
+var VirtualKeyManager = class {
+  recordsById = /* @__PURE__ */ new Map();
+  idByHash = /* @__PURE__ */ new Map();
+  usageWindows = /* @__PURE__ */ new Map();
+  /**
+   * Issues a new cryptographically secure virtual API key.
+   * The plaintext `apiKey` is returned once; only its SHA-256 hash is retained.
+   */
+  async issueKey(options) {
+    const prefix = options.prefix || "sk-sinaps-";
+    const apiKey = generateSecureToken(prefix);
+    const keyHash = await sha256Hex(apiKey);
+    const id = `vk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const record = {
+      id,
+      name: options.name,
+      tenantId: options.tenantId,
+      keyPrefix: `${apiKey.slice(0, Math.min(apiKey.length, prefix.length + 6))}...`,
+      keyHash,
+      allowedModels: options.allowedModels ? [...options.allowedModels] : void 0,
+      allowedProviders: options.allowedProviders ? [...options.allowedProviders] : void 0,
+      maxBudgetUsd: options.maxBudgetUsd,
+      maxRpm: options.maxRpm,
+      maxTpm: options.maxTpm,
+      expiresAt: options.expiresAt,
+      revoked: false,
+      createdAt: Date.now(),
+      spentUsd: 0,
+      totalRequests: 0,
+      totalTokens: 0,
+      metadata: options.metadata ? { ...options.metadata } : void 0
+    };
+    this.recordsById.set(id, record);
+    this.idByHash.set(keyHash, id);
+    return {
+      apiKey,
+      record: sanitizeRecord(record)
+    };
+  }
+  /**
+   * Verifies a raw virtual API key and returns its metadata record if valid.
+   */
+  async verifyKey(rawKey) {
+    if (!rawKey) return null;
+    const hash = await sha256Hex(rawKey);
+    const id = this.idByHash.get(hash);
+    if (!id) return null;
+    const record = this.recordsById.get(id);
+    if (!record || record.revoked) return null;
+    if (record.expiresAt !== void 0 && Date.now() > record.expiresAt) {
+      return null;
+    }
+    return sanitizeRecord(record);
+  }
+  /**
+   * Authorizes an incoming request against key validity, expiration,
+   * Model ACL, Provider ACL, FinOps USD budget, and sliding-window RPM/TPM limits.
+   */
+  async authorizeRequest(rawKey, context) {
+    if (!rawKey) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        reason: "Missing virtual API key"
+      };
+    }
+    const hash = await sha256Hex(rawKey);
+    const id = this.idByHash.get(hash);
+    if (!id) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        reason: "Invalid virtual API key"
+      };
+    }
+    const record = this.recordsById.get(id);
+    if (!record) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        reason: "Virtual API key not found"
+      };
+    }
+    if (record.revoked) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        reason: "Virtual API key has been revoked",
+        keyId: record.id,
+        tenantId: record.tenantId
+      };
+    }
+    const now = Date.now();
+    if (record.expiresAt !== void 0 && now > record.expiresAt) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        reason: "Virtual API key has expired",
+        keyId: record.id,
+        tenantId: record.tenantId
+      };
+    }
+    const reqModel = context?.model;
+    if (reqModel && record.allowedModels && record.allowedModels.length > 0) {
+      const permitted = record.allowedModels.some(
+        (pattern) => matchesPattern(reqModel, pattern)
+      );
+      if (!permitted) {
+        return {
+          allowed: false,
+          statusCode: 403,
+          reason: `Model '${reqModel}' is not permitted for virtual key '${record.name}'`,
+          keyId: record.id,
+          tenantId: record.tenantId
+        };
+      }
+    }
+    const reqProvider = context?.provider;
+    if (reqProvider && record.allowedProviders && record.allowedProviders.length > 0) {
+      const permitted = record.allowedProviders.some(
+        (pattern) => matchesPattern(reqProvider, pattern)
+      );
+      if (!permitted) {
+        return {
+          allowed: false,
+          statusCode: 403,
+          reason: `Provider '${reqProvider}' is not permitted for virtual key '${record.name}'`,
+          keyId: record.id,
+          tenantId: record.tenantId
+        };
+      }
+    }
+    if (record.maxBudgetUsd !== void 0 && record.spentUsd >= record.maxBudgetUsd) {
+      return {
+        allowed: false,
+        statusCode: 402,
+        reason: `Budget cap ($${record.maxBudgetUsd.toFixed(4)}) exceeded for virtual key '${record.name}'`,
+        keyId: record.id,
+        tenantId: record.tenantId
+      };
+    }
+    const windowCutoff = now - 6e4;
+    const history = (this.usageWindows.get(record.id) || []).filter(
+      (entry) => entry.timestamp >= windowCutoff
+    );
+    this.usageWindows.set(record.id, history);
+    if (record.maxRpm !== void 0 && history.length >= record.maxRpm) {
+      return {
+        allowed: false,
+        statusCode: 429,
+        reason: `RPM limit (${record.maxRpm}/min) exceeded for virtual key '${record.name}'`,
+        keyId: record.id,
+        tenantId: record.tenantId
+      };
+    }
+    const windowTokens = history.reduce((sum, e) => sum + e.tokens, 0);
+    const projectedTokens = windowTokens + (context?.estimatedTokens ?? 0);
+    if (record.maxTpm !== void 0 && projectedTokens > record.maxTpm) {
+      return {
+        allowed: false,
+        statusCode: 429,
+        reason: `TPM limit (${record.maxTpm}/min) exceeded for virtual key '${record.name}'`,
+        keyId: record.id,
+        tenantId: record.tenantId
+      };
+    }
+    history.push({ timestamp: now, tokens: context?.estimatedTokens ?? 0 });
+    record.lastUsedAt = now;
+    record.totalRequests += 1;
+    return {
+      allowed: true,
+      statusCode: 200,
+      keyId: record.id,
+      tenantId: record.tenantId,
+      record: sanitizeRecord(record)
+    };
+  }
+  /**
+   * Records actual post-response USD spend and token consumption for a virtual key.
+   */
+  recordSpend(keyId, costUsd, tokens = 0) {
+    const record = this.recordsById.get(keyId);
+    if (!record) return;
+    record.spentUsd = Number(
+      (record.spentUsd + Math.max(0, costUsd)).toFixed(6)
+    );
+    record.totalTokens += Math.max(0, tokens);
+    record.lastUsedAt = Date.now();
+    if (tokens > 0) {
+      const history = this.usageWindows.get(keyId) || [];
+      history.push({ timestamp: Date.now(), tokens });
+      this.usageWindows.set(keyId, history);
+    }
+  }
+  /**
+   * Immediately revokes a virtual API key.
+   */
+  revokeKey(keyId) {
+    const record = this.recordsById.get(keyId);
+    if (!record) return false;
+    record.revoked = true;
+    return true;
+  }
+  /**
+   * Rotates the secret token of an existing virtual key while preserving
+   * its tenant attribution, ACLs, and cumulative spend metrics.
+   */
+  async rotateKey(keyId) {
+    const record = this.recordsById.get(keyId);
+    if (!record || record.revoked) return null;
+    this.idByHash.delete(record.keyHash);
+    const apiKey = generateSecureToken("sk-sinaps-");
+    const newHash = await sha256Hex(apiKey);
+    record.keyHash = newHash;
+    record.keyPrefix = `${apiKey.slice(0, 16)}...`;
+    this.idByHash.set(newHash, record.id);
+    return {
+      apiKey,
+      record: sanitizeRecord(record)
+    };
+  }
+  /**
+   * Lists all virtual key metadata records (never exposes hashes or secrets).
+   */
+  listKeys(tenantId) {
+    const all = Array.from(this.recordsById.values());
+    const filtered = tenantId ? all.filter((r) => r.tenantId === tenantId) : all;
+    return filtered.map(sanitizeRecord);
+  }
+  /**
+   * Returns whether any virtual keys have been registered.
+   */
+  hasKeys() {
+    return this.recordsById.size > 0;
+  }
+};
+
 // src/core/SinapsClient.ts
 var SinapsClient = class {
   router;
@@ -14201,6 +14469,7 @@ var SinapsClient = class {
   kvCache;
   vision;
   personas;
+  virtualKeys = new VirtualKeyManager();
   kvCacheEnabled = false;
   clusteredCacheEnabled = false;
   semanticRouterEnabled;
@@ -17276,7 +17545,7 @@ var BEDROCK_MODELS = {
   DEEPSEEK_R1: "us.deepseek.r1-v1:0",
   MISTRAL_LARGE: "mistral.mistral-large-2407-v1:0"
 };
-async function sha256Hex(data) {
+async function sha256Hex2(data) {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   const arrayBuffer = bytes.buffer.slice(
     bytes.byteOffset,
@@ -17329,7 +17598,7 @@ async function signAwsRequest(params) {
   const canonicalHeaders = sortedHeaderKeys.map((k) => `${k}:${headersToSign[k].trim()}
 `).join("");
   const signedHeaders = sortedHeaderKeys.join(";");
-  const payloadHash = await sha256Hex(params.body);
+  const payloadHash = await sha256Hex2(params.body);
   const canonicalRequest = [
     params.method.toUpperCase(),
     parsedUrl.pathname,
@@ -17343,7 +17612,7 @@ async function signAwsRequest(params) {
     "AWS4-HMAC-SHA256",
     amzDate,
     credentialScope,
-    await sha256Hex(canonicalRequest)
+    await sha256Hex2(canonicalRequest)
   ].join("\n");
   const signingKey = await getSignatureKey(
     params.secretAccessKey,
@@ -22645,6 +22914,21 @@ var ZhipuProvider = class {
  */
 /**
  * SinapsAI - In-Process AI Gateway & Control Plane
+ * Zero-Dependency Multi-Tenant Virtual API Key Manager
+ *
+ * Implements:
+ * 1. Cryptographically secure virtual key generation (`sk-sinaps-...`) using Web Crypto.
+ * 2. SHA-256 key hashing (plaintext keys are never stored in memory).
+ * 3. Per-key Model ACLs (`allowedModels`), Provider ACLs (`allowedProviders`),
+ *    FinOps USD budget caps (`maxBudgetUsd`), sliding-window RPM/TPM limits,
+ *    TTL expiration (`expiresAt`), instant revocation, and zero-downtime key rotation.
+ *
+ * @author Roedy Rustam <roedyrustam.id@gmail.com>
+ * @copyright 2026 Roedy Rustam
+ * @license MIT
+ */
+/**
+ * SinapsAI - In-Process AI Gateway & Control Plane
  * Vercel AI SDK EmbeddingModelV1 Implementation
  *
  * @author Roedy Rustam <roedyrustam.id@gmail.com>
@@ -22754,6 +23038,6 @@ var ZhipuProvider = class {
  * @license MIT
  */
 
-export { ANTHROPIC_AVAILABILITY_FALLBACKS, ANTHROPIC_DEFAULT_PRICING, ANTHROPIC_MODELS, AgentPersonaRegistry, AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, AutonomousDriftHealer, AwsBedrockProvider, AzureOpenAiProvider, BEDROCK_MODELS, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CanaryProber, CircuitBreaker, CloudflareKVStorage, ClusteredSemanticCache, CognitiveBrain, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEEPSEEK_AVAILABILITY_FALLBACKS, DEEPSEEK_DEFAULT_PRICING, DEEPSEEK_MODELS, DEFAULT_CASCADE_TIERS, DashboardServer, DatasetDistiller, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, FRONTIER_AVAILABILITY_FALLBACKS, FRONTIER_CASCADE_PRESETS, FRONTIER_CASCADE_TIERS, FRONTIER_MODELS, FaithfulnessSentinel, FrontierModelRegistry, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, KvCacheOptimizer, LlmEvals, LlmOptimizer, MCP_PROTOCOL_VERSION, MCP_SUPPORTED_PROTOCOL_VERSIONS, MISTRAL_AVAILABILITY_FALLBACKS, MISTRAL_DEFAULT_PRICING, MISTRAL_MODELS, MOONSHOT_AVAILABILITY_FALLBACKS, MOONSHOT_DEFAULT_PRICING, MOONSHOT_MODELS, McpClientConnector, McpToolBridge, MistralProvider, MoonshotProvider, NumberSchemaNode, OPENAI_DEFAULT_PRICING, OPENAI_MODELS, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, QWEN_AVAILABILITY_FALLBACKS, QWEN_DEFAULT_PRICING, QWEN_MODELS, QwenProvider, RealtimeClient, RealtimeSession, RedisStorage, Router, SINAPSAI_VERSION, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SemanticRouter, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, SinapsLanguageModelV2, SinapsLanguageModelV3, SpeculativeStreamVerifier, StringSchemaNode, SwarmContext, TournamentConsensusEngine, VisionOptimizer, XAI_AVAILABILITY_FALLBACKS, XAI_DEFAULT_PRICING, XAI_MODELS, XAiProvider, ZHIPU_AVAILABILITY_FALLBACKS, ZHIPU_DEFAULT_PRICING, ZHIPU_MODELS, ZhipuProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, convertV2CallOptions, convertV2PromptToSinapsMessages, cosineSimilarity, createFastSemanticEmbedding, createOpenRouterFreeProvider, createSinapsAI, createSinapsAIV2, createSinapsAIV3, deduplicateSystemInstructions, deepMergeContext, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, evaluateResponseConfidence, executeBatch, exportOtelTraces, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, generateSpanId, generateTraceId, getSignatureKey, hmacSha256, isOpenRouterFreeModel, isSinapsSchema, isStandardSchema, isZodSchema, jsonSchema, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sha256Hex, signAwsRequest, sinapsai, toOtelTracePayload, toStandardJsonSchema, tool, tryExtractJson, validateSchema };
+export { ANTHROPIC_AVAILABILITY_FALLBACKS, ANTHROPIC_DEFAULT_PRICING, ANTHROPIC_MODELS, AgentPersonaRegistry, AgentSwarm, AgentWalletExceededError, AnthropicProvider, AnySchemaNode, ArraySchemaNode, AutonomousDriftHealer, AwsBedrockProvider, AzureOpenAiProvider, BEDROCK_MODELS, BatchExecutionError, Bm25Index, BooleanSchemaNode, BudgetExceededError, BudgetGuardrails, COHERE_MODELS, CanaryProber, CircuitBreaker, CloudflareKVStorage, ClusteredSemanticCache, CognitiveBrain, CohereProvider, ConsensusEngine, ContextCompressor, D1Storage, DEEPSEEK_AVAILABILITY_FALLBACKS, DEEPSEEK_DEFAULT_PRICING, DEEPSEEK_MODELS, DEFAULT_CASCADE_TIERS, DashboardServer, DatasetDistiller, DeepSeekProvider, DurableWorkflowEngine, EnumSchemaNode, EpisodicMemory, FRONTIER_AVAILABILITY_FALLBACKS, FRONTIER_CASCADE_PRESETS, FRONTIER_CASCADE_TIERS, FRONTIER_MODELS, FaithfulnessSentinel, FrontierModelRegistry, GEMINI_AVAILABILITY_FALLBACKS, GEMINI_DEFAULT_PRICING, GEMINI_MODELS, GROQ_MODELS, GROQ_REASONING_MODELS, GatewayRateLimitError, GatewayRateLimiter, GeminiAgentBooster, GeminiProvider, GroqProvider, HedgedExecutor, HybridRagEngine, InMemoryStorage, KnowledgeGraph, KvCacheOptimizer, LlmEvals, LlmOptimizer, MCP_PROTOCOL_VERSION, MCP_SUPPORTED_PROTOCOL_VERSIONS, MISTRAL_AVAILABILITY_FALLBACKS, MISTRAL_DEFAULT_PRICING, MISTRAL_MODELS, MOONSHOT_AVAILABILITY_FALLBACKS, MOONSHOT_DEFAULT_PRICING, MOONSHOT_MODELS, McpClientConnector, McpToolBridge, MistralProvider, MoonshotProvider, NumberSchemaNode, OPENAI_DEFAULT_PRICING, OPENAI_MODELS, OPENROUTER_DEFAULT_FREE_FALLBACKS, OPENROUTER_FREE_MODELS, OPENROUTER_FREE_MODEL_CATALOG, ObjectSchemaNode, OllamaProvider, OpenAiProvider, OpenRouterProvider, PIIGuardrails, QWEN_AVAILABILITY_FALLBACKS, QWEN_DEFAULT_PRICING, QWEN_MODELS, QwenProvider, RealtimeClient, RealtimeSession, RedisStorage, Router, SINAPSAI_VERSION, SchemaValidationError, SecurityGuardrailError, SecurityGuardrails, SemanticRouter, SinapsClient, SinapsEmbeddingModel, SinapsLanguageModel, SinapsLanguageModelV2, SinapsLanguageModelV3, SpeculativeStreamVerifier, StringSchemaNode, SwarmContext, TournamentConsensusEngine, VirtualKeyManager, VisionOptimizer, XAI_AVAILABILITY_FALLBACKS, XAI_DEFAULT_PRICING, XAI_MODELS, XAiProvider, ZHIPU_AVAILABILITY_FALLBACKS, ZHIPU_DEFAULT_PRICING, ZHIPU_MODELS, ZhipuProvider, accumulateStream, calculatePairwiseSimilarity, canonicalizeJsonValue, canonicalizeTools, chunkDocument, coerceToolArguments, computeTermFrequencyVector, convertPromptToSinapsMessages, convertToolsAndMode, convertV2CallOptions, convertV2PromptToSinapsMessages, cosineSimilarity, createFastSemanticEmbedding, createOpenRouterFreeProvider, createSinapsAI, createSinapsAIV2, createSinapsAIV3, deduplicateSystemInstructions, deepMergeContext, estimateMessageTokens, estimateTextTokens, estimateTotalTokens, evaluateResponseConfidence, executeBatch, exportOtelTraces, extractBalancedJson, extractJsonFromText, extractPromptText, formatOtelMetrics, formatPrometheusMetrics, generateSpanId, generateTraceId, getSignatureKey, hmacSha256, isOpenRouterFreeModel, isSinapsSchema, isStandardSchema, isZodSchema, jsonSchema, linkAbortSignal, mapFinishReason, minifyProsePreservingCode, reciprocalRankFusion, s, sha256Hex2 as sha256Hex, signAwsRequest, sinapsai, toOtelTracePayload, toStandardJsonSchema, tool, tryExtractJson, validateSchema };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

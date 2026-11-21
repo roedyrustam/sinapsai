@@ -105,6 +105,9 @@ npx tsx examples/50-qwen-provider-and-reasoning.ts
 
 # 51. Moonshot AI (Kimi K2 Thinking) & Zhipu AI (GLM-4.5) Multi-Provider Gateway
 npx tsx examples/51-moonshot-kimi-and-zhipu-glm.ts
+
+# 52. Multi-Tenant Virtual API Key Manager (ACLs, Budgets, RPM/TPM & Rotation)
+npx tsx examples/52-multi-tenant-virtual-keys.ts
 ```
 
 
