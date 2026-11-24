@@ -1589,5 +1589,65 @@ describe('SinapsClient', () => {
       client.clearRecordedSpans();
       expect(client.getRecordedSpans()).toHaveLength(0);
     });
+
+    it('self-heals invalid JSON drafts in client.chat.completions.createStructured()', async () => {
+      const { s } = await import('../utils/schema.js');
+      const InvoiceSchema = s.object({
+        invoiceId: s.string(),
+        amountUsd: s.number(),
+      });
+
+      const generateMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: 'bad-draft-1',
+          model: 'qwen3-turbo',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '{"invoiceId": "INV-01", "amountUsd": "not-a-number"}',
+              },
+              finishReason: 'stop',
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          id: 'healed-draft-2',
+          model: 'qwen3-turbo',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '{"invoiceId": "INV-01", "amountUsd": 249.5}',
+              },
+              finishReason: 'stop',
+            },
+          ],
+        });
+
+      const client = new SinapsClient({
+        providers: [
+          {
+            id: 'mock-structured',
+            name: 'MockStructured',
+            generateContent: generateMock,
+          },
+        ],
+      });
+
+      const result = await client.chat.completions.createStructured({
+        model: 'qwen3-turbo',
+        messages: [
+          { role: 'user', content: 'Extract invoice INV-01 for $249.5' },
+        ],
+        schema: InvoiceSchema,
+        maxRetries: 2,
+      });
+
+      expect(result.attempts).toBe(2);
+      expect(result.data).toEqual({ invoiceId: 'INV-01', amountUsd: 249.5 });
+      expect(generateMock).toHaveBeenCalledTimes(2);
+    });
   });
 });

@@ -38,6 +38,7 @@
 - [x] PHASE 36: Moonshot AI (Kimi K2) & Zhipu AI (GLM-4.5) Providers + v3.7.0 Release — 15 Unified Native Providers, `MoonshotProvider` (`kimi-k2-thinking`, `$web_search`), `ZhipuProvider` (`glm-4.5`, Hybrid Thinking, `embedding-3`), `'qwen'`/`'kimi'`/`'glm'` LlmOptimizer Cascade Presets, CLI Auto-Discovery, Example 51, Version Bump `3.7.0`
 - [x] PHASE 37: Multi-Tenant Virtual API Key Manager (`VirtualKeyManager`, `client.virtualKeys`) & Gateway HTTP Enforcement + v3.8.0 Release — SHA-256 Hashed Virtual Keys (`sk-sinaps-...`), Model/Provider ACLs, Per-Key USD Budgets, Sliding-Window RPM/TPM, Key Rotation & Revocation, Example 52, Version Bump `3.8.0`
 - [x] PHASE 38: End-to-End Virtual Key Admin REST API (`/v1/keys`), Live Model ACL Enforcement & Automatic Spend Attribution + v3.9.0 Release — `GET/POST /v1/keys`, `/revoke`, `/rotate`, live USD spend tracking via `FrontierModelRegistry.estimateCost`, `VirtualKeyError`, Version Bump `3.9.0`
+- [x] PHASE 39: SinapsAI v4.0.0 Major Release — Edge-Pure Lazy `node:http`, Modular Subpaths (`sinapsai/providers`, `sinapsai/mcp`, `sinapsai/rag`, `sinapsai/swarm`) with Code Splitting, Distributed `StateStorage` `VirtualKeyManager` + In-Process `virtualKey` Hot-Path, Full MCP `2025-06-18` (`resources/*`, `prompts/*`, `elicitation/create`), Self-Healing `createStructured<T>()`, Qwen-Omni Realtime + Live Voice Auto-Tool-Calling, Dashboard 3.0 (`691/691` Tests Pass across 68 suites, 151 Biome-clean files)
 
 
 

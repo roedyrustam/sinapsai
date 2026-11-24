@@ -15,7 +15,7 @@
  * @license MIT
  */
 
-import http from 'node:http';
+import type http from 'node:http';
 import type { SinapsMetrics } from '../types/index.js';
 import { SINAPSAI_VERSION } from '../version.js';
 import type { CanaryProviderHealth } from './CanaryProber.js';
@@ -87,8 +87,10 @@ export class DashboardServer {
   public async start(): Promise<void> {
     if (this.isRunning) return;
 
+    const httpMod = await import('node:http');
+
     return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => {
+      this.server = httpMod.createServer((req, res) => {
         this.handleHttpRequest(req, res);
       });
 
@@ -215,6 +217,63 @@ export class DashboardServer {
       return;
     }
 
+    if (pathname === '/api/cache' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(this.client.clusteredCache.getStats()));
+      return;
+    }
+
+    if (pathname === '/api/keys' && req.method === 'GET') {
+      const tenantId = parsedUrl.searchParams.get('tenantId') || undefined;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          object: 'list',
+          data: this.client.virtualKeys.listKeys(tenantId),
+        }),
+      );
+      return;
+    }
+
+    if (pathname === '/api/keys' && req.method === 'POST') {
+      let raw = '';
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', async () => {
+        try {
+          const body = JSON.parse(raw || '{}');
+          const issued = await this.client.virtualKeys.issueKey(body);
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(issued));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        }
+      });
+      return;
+    }
+
+    const revokeMatch = pathname.match(/^\/api\/keys\/([^/]+)\/revoke$/);
+    if (revokeMatch && req.method === 'POST') {
+      const revoked = this.client.virtualKeys.revokeKey(revokeMatch[1]);
+      res.writeHead(revoked ? 200 : 404, {
+        'Content-Type': 'application/json',
+      });
+      res.end(
+        JSON.stringify(
+          revoked
+            ? { revoked: true, id: revokeMatch[1] }
+            : { error: 'Virtual key not found' },
+        ),
+      );
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found', path: pathname }));
   }
@@ -254,6 +313,8 @@ export class DashboardServer {
         llmoTokensSaved: metrics.llmoMetrics?.totalTokensSaved ?? 0,
         providerMetrics: metrics.providerMetrics,
       },
+      clusteredCache: this.client.clusteredCache.getStats(),
+      virtualKeys: this.client.virtualKeys.listKeys(),
       canary: canaryHealth,
       recentHistory: this.history.slice(0, 20),
     };
@@ -500,6 +561,29 @@ export class DashboardServer {
   </div>
 
   <div class="section-title">
+    <span>Multi-Tenant Virtual Keys</span>
+    <span style="font-size: 12px; color: var(--text-muted);" id="vkeys-summary">0 Active Keys</span>
+  </div>
+  <div class="table-container" style="margin-bottom: 28px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Tenant</th>
+          <th>Prefix</th>
+          <th>Requests</th>
+          <th>Tokens</th>
+          <th>Spent / Cap</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="vkeys-tbody">
+        <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No virtual API keys issued.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title">
     <span>Recent Request History</span>
     <span style="font-size: 12px; color: var(--text-muted);">Real-time Activity Log</span>
   </div>
@@ -578,6 +662,31 @@ export class DashboardServer {
                 <span>\${(p.totalTokens || 0).toLocaleString()}</span>
               </div>
             </div>
+          \`;
+        }).join('');
+      }
+
+      const vkeys = data.virtualKeys || [];
+      const activeKeys = vkeys.filter(k => !k.revoked).length;
+      const cacheHitRate = data.clusteredCache ? Math.round((data.clusteredCache.hitRate || 0) * 100) : 0;
+      document.getElementById('vkeys-summary').textContent = activeKeys + ' Active Keys · Clustered Cache Hit Rate: ' + cacheHitRate + '%';
+      const vkeysTbody = document.getElementById('vkeys-tbody');
+      if (vkeys.length === 0) {
+        vkeysTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No virtual API keys issued.</td></tr>';
+      } else {
+        vkeysTbody.innerHTML = vkeys.map(vk => {
+          const cap = vk.maxBudgetUsd !== undefined ? '$' + vk.maxBudgetUsd.toFixed(2) : 'Unlimited';
+          const statusBadge = vk.revoked ? '<span class="tag tag-error">REVOKED</span>' : '<span class="tag tag-success">ACTIVE</span>';
+          return \`
+            <tr>
+              <td>\${vk.name}</td>
+              <td style="color: var(--cyan);">\${vk.tenantId}</td>
+              <td><code>\${vk.keyPrefix}</code></td>
+              <td>\${vk.totalRequests}</td>
+              <td>\${vk.totalTokens.toLocaleString()}</td>
+              <td>$\${vk.spentUsd.toFixed(4)} / \${cap}</td>
+              <td>\${statusBadge}</td>
+            </tr>
           \`;
         }).join('');
       }

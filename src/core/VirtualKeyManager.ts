@@ -14,6 +14,15 @@
  * @license MIT
  */
 
+import type { StateStorage } from './StateStorage.js';
+
+export interface VirtualKeyManagerOptions {
+  /** Optional distributed storage adapter (Redis, Cloudflare KV, D1) for multi-worker synchronization. */
+  storage?: StateStorage;
+  /** Key prefix in StateStorage (default: 'sinaps:vk'). */
+  namespace?: string;
+}
+
 export interface VirtualKeyOptions {
   /** Human-readable key label (e.g. "Engineering Team", "Free Tier Tenant"). */
   name: string;
@@ -138,6 +147,58 @@ export class VirtualKeyManager {
   private recordsById = new Map<string, VirtualKeyRecord>();
   private idByHash = new Map<string, string>();
   private usageWindows = new Map<string, UsageWindowEntry[]>();
+  private storage?: StateStorage;
+  private namespace: string;
+
+  constructor(options: VirtualKeyManagerOptions = {}) {
+    this.storage = options.storage;
+    this.namespace = options.namespace || 'sinaps:vk';
+  }
+
+  private recStorageKey(id: string): string {
+    return `${this.namespace}:rec:${id}`;
+  }
+
+  private hashStorageKey(hash: string): string {
+    return `${this.namespace}:hash:${hash}`;
+  }
+
+  private async persistRecord(record: VirtualKeyRecord): Promise<void> {
+    if (!this.storage) return;
+    await Promise.all([
+      this.storage.set(this.recStorageKey(record.id), record),
+      this.storage.set(this.hashStorageKey(record.keyHash), record.id),
+    ]);
+  }
+
+  private async resolveRecordByHash(
+    hash: string,
+  ): Promise<VirtualKeyRecord | undefined> {
+    let id = this.idByHash.get(hash);
+    if (!id && this.storage) {
+      const remoteId = await this.storage.get<string>(
+        this.hashStorageKey(hash),
+      );
+      if (remoteId) {
+        id = remoteId;
+        this.idByHash.set(hash, remoteId);
+      }
+    }
+    if (!id) return undefined;
+
+    if (this.storage) {
+      const remoteRecord = await this.storage.get<VirtualKeyRecord>(
+        this.recStorageKey(id),
+      );
+      if (remoteRecord) {
+        this.recordsById.set(id, remoteRecord);
+        this.idByHash.set(remoteRecord.keyHash, id);
+        return remoteRecord;
+      }
+    }
+
+    return this.recordsById.get(id);
+  }
 
   /**
    * Issues a new cryptographically secure virtual API key.
@@ -175,6 +236,7 @@ export class VirtualKeyManager {
 
     this.recordsById.set(id, record);
     this.idByHash.set(keyHash, id);
+    await this.persistRecord(record);
 
     return {
       apiKey,
@@ -190,10 +252,8 @@ export class VirtualKeyManager {
   ): Promise<Omit<VirtualKeyRecord, 'keyHash'> | null> {
     if (!rawKey) return null;
     const hash = await sha256Hex(rawKey);
-    const id = this.idByHash.get(hash);
-    if (!id) return null;
-    const record = this.recordsById.get(id);
-    if (!record || record.revoked) return null;
+    const record = await this.resolveRecordByHash(hash);
+    if (!record || record.revoked || record.keyHash !== hash) return null;
     if (record.expiresAt !== undefined && Date.now() > record.expiresAt) {
       return null;
     }
@@ -221,21 +281,12 @@ export class VirtualKeyManager {
     }
 
     const hash = await sha256Hex(rawKey);
-    const id = this.idByHash.get(hash);
-    if (!id) {
+    const record = await this.resolveRecordByHash(hash);
+    if (!record || record.keyHash !== hash) {
       return {
         allowed: false,
         statusCode: 401,
         reason: 'Invalid virtual API key',
-      };
-    }
-
-    const record = this.recordsById.get(id);
-    if (!record) {
-      return {
-        allowed: false,
-        statusCode: 401,
-        reason: 'Virtual API key not found',
       };
     }
 
@@ -345,6 +396,7 @@ export class VirtualKeyManager {
     history.push({ timestamp: now, tokens: context?.estimatedTokens ?? 0 });
     record.lastUsedAt = now;
     record.totalRequests += 1;
+    await this.persistRecord(record);
 
     return {
       allowed: true,
@@ -372,6 +424,8 @@ export class VirtualKeyManager {
       history.push({ timestamp: Date.now(), tokens });
       this.usageWindows.set(keyId, history);
     }
+
+    void this.persistRecord(record);
   }
 
   /**
@@ -381,6 +435,7 @@ export class VirtualKeyManager {
     const record = this.recordsById.get(keyId);
     if (!record) return false;
     record.revoked = true;
+    void this.persistRecord(record);
     return true;
   }
 
@@ -389,15 +444,29 @@ export class VirtualKeyManager {
    * its tenant attribution, ACLs, and cumulative spend metrics.
    */
   public async rotateKey(keyId: string): Promise<IssuedVirtualKey | null> {
-    const record = this.recordsById.get(keyId);
+    let record = this.recordsById.get(keyId);
+    if (!record && this.storage) {
+      const remote = await this.storage.get<VirtualKeyRecord>(
+        this.recStorageKey(keyId),
+      );
+      if (remote) {
+        record = remote;
+        this.recordsById.set(keyId, remote);
+      }
+    }
     if (!record || record.revoked) return null;
 
-    this.idByHash.delete(record.keyHash);
+    const oldHash = record.keyHash;
+    this.idByHash.delete(oldHash);
+    if (this.storage) {
+      await this.storage.delete(this.hashStorageKey(oldHash));
+    }
     const apiKey = generateSecureToken('sk-sinaps-');
     const newHash = await sha256Hex(apiKey);
     record.keyHash = newHash;
     record.keyPrefix = `${apiKey.slice(0, 16)}...`;
     this.idByHash.set(newHash, record.id);
+    await this.persistRecord(record);
 
     return {
       apiKey,

@@ -1,5 +1,23 @@
 # Changelog
 
+## [4.0.0] - 2026-11-25
+### Added
+- **Edge-Pure Architecture & Modular Subpath Exports (`sinapsai/providers`, `sinapsai/mcp`, `sinapsai/rag`, `sinapsai/swarm`)**:
+  - Replaced top-level `node:http` import in `DashboardServer` with lazy dynamic `await import('node:http')` inside `start()`, guaranteeing 100% pure Web Standards across root `sinapsai` imports on strict Edge bundlers.
+  - Enabled ESM code-splitting (`splitting: true` in `tsup.config.ts`) and added tree-shakeable subpath entry points (`./providers`, `./mcp`, `./rag`, `./swarm`) with full CJS/ESM/TypeScript `typesVersions` support.
+- **Distributed `StateStorage` Sync & In-Process `virtualKey` Enforcement (`VirtualKeyManager` & `SinapsClient`)**:
+  - Connected `VirtualKeyManager` to `StateStorage` (`RedisStorage`, `CloudflareKVStorage`, `D1Storage`, `InMemoryStorage`) for multi-worker key hydration, spend tracking, rotation, and revocation.
+  - Wired `request.virtualKey` directly into `SinapsClient.chat.completions.create()` (streaming & non-streaming) and `SinapsClient.embeddings.create()` with automatic post-response USD cost attribution.
+- **Full MCP `2025-06-18` Protocol Suite (`McpBridge.ts`)**:
+  - Added `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, and `elicitation/create` (`registerResource`, `registerPrompt`, `setElicitationHandler`) with dynamic capability negotiation in `initialize`.
+  - Auto-registered live built-in MCP resources `sinaps://models/frontier` and `sinaps://knowledge-graph/stats` on `SinapsClient`.
+- **Self-Healing Typed Structured Outputs (`client.chat.completions.createStructured<T>()`)**:
+  - Combines `jsonSchema()`, `extractJsonFromText()`, and `validateSchema()` with automatic targeted self-correction retry loops when an upstream LLM emits invalid or schema-drifted JSON.
+- **Realtime Voice Auto-Tool-Calling, Qwen-Omni Live & Control Plane Dashboard 3.0**:
+  - Added `'qwen'` (`qwen3-omni-flash-realtime` DashScope WebSocket) and hands-free bidirectional `McpToolBridge` auto-tool-calling (`mcpBridge`, `onToolCall`) on `RealtimeClient` across OpenAI Realtime, Qwen-Omni, and Gemini Live.
+  - Upgraded `DashboardServer` 3.0 with `/api/keys`, `/api/keys/:id/revoke`, `/api/cache`, and live Multi-Tenant Virtual Keys & Clustered Cache panels.
+  - Added Example 53 (`examples/53-v4-structured-mcp-resources-and-subpaths.ts`) and bumped `SINAPSAI_VERSION` to `4.0.0`.
+
 ## [3.9.0] - 2026-11-22
 ### Added
 - **End-to-End Multi-Tenant Virtual Key Gateway Loop (`src/cli/server.ts`, `VirtualKeyError`)**:

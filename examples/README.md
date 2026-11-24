@@ -108,6 +108,9 @@ npx tsx examples/51-moonshot-kimi-and-zhipu-glm.ts
 
 # 52. Multi-Tenant Virtual API Key Manager (ACLs, Budgets, RPM/TPM & Rotation)
 npx tsx examples/52-multi-tenant-virtual-keys.ts
+
+# 53. SinapsAI v4.0 — Modular Subpaths, Self-Healing Structured Outputs & Full MCP 2025-06-18
+npx tsx examples/53-v4-structured-mcp-resources-and-subpaths.ts
 ```
 
 

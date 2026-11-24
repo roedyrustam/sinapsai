@@ -197,16 +197,69 @@ export type McpSamplingHandler = (
   request: McpSamplingRequest,
 ) => Promise<McpSamplingResult>;
 
+export interface McpResourceMetadata {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpResourceDefinition extends McpResourceMetadata {
+  read: () =>
+    | Promise<string | { text?: string; blob?: string; mimeType?: string }>
+    | string
+    | { text?: string; blob?: string; mimeType?: string };
+}
+
+export interface McpPromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface McpPromptMessage {
+  role: 'user' | 'assistant';
+  content: McpContent;
+}
+
+export interface McpPromptDefinition {
+  name: string;
+  description?: string;
+  arguments?: McpPromptArgument[];
+  render: (
+    args?: Record<string, string>,
+  ) =>
+    | Promise<{ description?: string; messages: McpPromptMessage[] }>
+    | { description?: string; messages: McpPromptMessage[] };
+}
+
+export interface McpElicitationRequest {
+  message: string;
+  requestedSchema: McpToolInputSchema;
+}
+
+export interface McpElicitationResult {
+  action: 'accept' | 'decline' | 'cancel';
+  content?: Record<string, unknown>;
+}
+
+export type McpElicitationHandler = (
+  request: McpElicitationRequest,
+) => Promise<McpElicitationResult>;
+
 /**
  * In-process Model Context Protocol (MCP) tool bridge.
  *
- * Provides seamless registration of local tools, bi-directional schema conversion
- * to OpenAI/Unified format, error-resilient tool call execution, and standard
- * JSON-RPC 2.0 protocol dispatching (including MCP 2025-06-18 sampling/createMessage).
+ * Provides seamless registration of local tools, resources, prompts, elicitation,
+ * bi-directional schema conversion to OpenAI/Unified format, error-resilient tool call
+ * execution, and standard JSON-RPC 2.0 protocol dispatching (MCP 2025-06-18).
  */
 export class McpToolBridge {
   private tools = new Map<string, McpToolDefinition>();
+  private resources = new Map<string, McpResourceDefinition>();
+  private prompts = new Map<string, McpPromptDefinition>();
   private samplingHandler?: McpSamplingHandler;
+  private elicitationHandler?: McpElicitationHandler;
 
   constructor(
     tools?: McpToolDefinition[],
@@ -232,6 +285,101 @@ export class McpToolBridge {
    */
   public hasSamplingHandler(): boolean {
     return typeof this.samplingHandler === 'function';
+  }
+
+  /**
+   * Registers an MCP 2025-06-18 structured user elicitation handler (`elicitation/create`).
+   */
+  public setElicitationHandler(handler: McpElicitationHandler): void {
+    this.elicitationHandler = handler;
+  }
+
+  public hasElicitationHandler(): boolean {
+    return typeof this.elicitationHandler === 'function';
+  }
+
+  /**
+   * Registers an MCP Resource (`resources/list`, `resources/read`).
+   */
+  public registerResource(resource: McpResourceDefinition): this {
+    if (!resource.uri || !resource.name) {
+      throw new Error('MCP resource must specify a non-empty uri and name.');
+    }
+    this.resources.set(resource.uri, resource);
+    return this;
+  }
+
+  public hasResource(uri: string): boolean {
+    return this.resources.has(uri);
+  }
+
+  public listResources(): McpResourceMetadata[] {
+    return Array.from(this.resources.values()).map(
+      ({ uri, name, description, mimeType }) => ({
+        uri,
+        name,
+        ...(description ? { description } : {}),
+        ...(mimeType ? { mimeType } : {}),
+      }),
+    );
+  }
+
+  public async readResource(uri: string): Promise<{
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  }> {
+    const def = this.resources.get(uri);
+    if (!def) {
+      throw new Error(`Resource not found: ${uri}`);
+    }
+    const raw = await def.read();
+    if (typeof raw === 'string') {
+      return {
+        uri,
+        mimeType: def.mimeType || 'text/plain',
+        text: raw,
+      };
+    }
+    return {
+      uri,
+      mimeType: raw.mimeType || def.mimeType || 'application/json',
+      ...(raw.text !== undefined ? { text: raw.text } : {}),
+      ...(raw.blob !== undefined ? { blob: raw.blob } : {}),
+    };
+  }
+
+  /**
+   * Registers a reusable MCP Prompt template (`prompts/list`, `prompts/get`).
+   */
+  public registerPrompt(prompt: McpPromptDefinition): this {
+    if (!prompt.name) {
+      throw new Error('MCP prompt must specify a non-empty name.');
+    }
+    this.prompts.set(prompt.name, prompt);
+    return this;
+  }
+
+  public listPrompts(): Array<Omit<McpPromptDefinition, 'render'>> {
+    return Array.from(this.prompts.values()).map(
+      ({ name, description, arguments: args }) => ({
+        name,
+        ...(description ? { description } : {}),
+        ...(args ? { arguments: args } : {}),
+      }),
+    );
+  }
+
+  public async getPrompt(
+    name: string,
+    args?: Record<string, string>,
+  ): Promise<{ description?: string; messages: McpPromptMessage[] }> {
+    const def = this.prompts.get(name);
+    if (!def) {
+      throw new Error(`Prompt not found: ${name}`);
+    }
+    return def.render(args);
   }
 
   /**
@@ -648,8 +796,17 @@ export class McpToolBridge {
         const capabilities: Record<string, unknown> = {
           tools: {},
         };
+        if (this.resources.size > 0) {
+          capabilities.resources = {};
+        }
+        if (this.prompts.size > 0) {
+          capabilities.prompts = {};
+        }
         if (this.samplingHandler) {
           capabilities.sampling = {};
+        }
+        if (this.elicitationHandler) {
+          capabilities.elicitation = {};
         }
 
         return {
@@ -664,6 +821,149 @@ export class McpToolBridge {
             },
           },
         };
+      }
+
+      case 'resources/list': {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            resources: this.listResources(),
+          },
+        };
+      }
+
+      case 'resources/read': {
+        const uri = params?.uri;
+        if (!uri || typeof uri !== 'string') {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32602,
+              message: 'Invalid params: "uri" string is required.',
+            },
+          };
+        }
+        if (!this.resources.has(uri)) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32002,
+              message: `Resource not found: ${uri}`,
+            },
+          };
+        }
+        try {
+          const content = await this.readResource(uri);
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              contents: [content],
+            },
+          };
+        } catch (err) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32603,
+              message:
+                err instanceof Error ? err.message : 'Failed to read resource.',
+            },
+          };
+        }
+      }
+
+      case 'prompts/list': {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            prompts: this.listPrompts(),
+          },
+        };
+      }
+
+      case 'prompts/get': {
+        const name = params?.name;
+        if (!name || typeof name !== 'string') {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32602,
+              message: 'Invalid params: "name" string is required.',
+            },
+          };
+        }
+        try {
+          const rendered = await this.getPrompt(name, params?.arguments);
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: rendered,
+          };
+        } catch (err) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32601,
+              message:
+                err instanceof Error
+                  ? err.message
+                  : `Prompt not found: ${name}`,
+            },
+          };
+        }
+      }
+
+      case 'elicitation/create': {
+        if (!this.elicitationHandler) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32601,
+              message: 'MCP elicitation/create handler is not configured.',
+            },
+          };
+        }
+        if (!params || typeof params.message !== 'string') {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32602,
+              message: 'Invalid params: "message" string is required.',
+            },
+          };
+        }
+        try {
+          const result = await this.elicitationHandler(
+            params as McpElicitationRequest,
+          );
+          return {
+            jsonrpc: '2.0',
+            id,
+            result,
+          };
+        } catch (err) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32603,
+              message:
+                err instanceof Error
+                  ? err.message
+                  : 'MCP elicitation execution failed.',
+            },
+          };
+        }
       }
 
       case 'sampling/createMessage': {

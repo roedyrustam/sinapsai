@@ -8,7 +8,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { VirtualKeyManager } from './VirtualKeyManager.js';
+import { InMemoryStorage } from './InMemoryStorage.js';
+import { SinapsClient } from './SinapsClient.js';
+import { VirtualKeyError, VirtualKeyManager } from './VirtualKeyManager.js';
 
 describe('VirtualKeyManager (Multi-Tenant Virtual API Keys)', () => {
   it('issues, hashes, and verifies virtual API keys without storing plaintext', async () => {
@@ -111,5 +113,70 @@ describe('VirtualKeyManager (Multi-Tenant Virtual API Keys)', () => {
     const expAuth = await manager.authorizeRequest(expired.apiKey);
     expect(expAuth.allowed).toBe(false);
     expect(expAuth.statusCode).toBe(401);
+  });
+
+  it('synchronizes virtual keys across distributed workers via StateStorage and enforces request.virtualKey in SinapsClient', async () => {
+    const sharedStorage = new InMemoryStorage({ autoSweep: false });
+    const workerA = new VirtualKeyManager({ storage: sharedStorage });
+    const workerB = new VirtualKeyManager({ storage: sharedStorage });
+
+    const issued = await workerA.issueKey({
+      name: 'Distributed Key',
+      tenantId: 'tenant-dist',
+      allowedModels: ['qwen3-turbo'],
+    });
+
+    // Worker B has an empty local Map initially, hydrates seamlessly from StateStorage
+    const verifiedOnB = await workerB.verifyKey(issued.apiKey);
+    expect(verifiedOnB?.id).toBe(issued.record.id);
+
+    // Enforce directly in SinapsClient hot-path
+    const client = new SinapsClient({
+      storage: sharedStorage,
+      providers: [
+        {
+          id: 'mock-qwen',
+          name: 'Qwen',
+          generateContent: async (req) => ({
+            id: 'resp-vk-1',
+            model: req.model,
+            choices: [
+              {
+                message: { role: 'assistant', content: 'OK' },
+                finishReason: 'stop',
+              },
+            ],
+            usage: {
+              promptTokens: 1000,
+              completionTokens: 500,
+              totalTokens: 1500,
+            },
+          }),
+        },
+      ],
+    });
+
+    // Allowed model succeeds and records spend
+    const ok = await client.chat.completions.create({
+      model: 'qwen3-turbo',
+      messages: [{ role: 'user', content: 'Hello' }],
+      virtualKey: issued.apiKey,
+    });
+    expect('choices' in ok && ok.choices[0].message.content).toBe('OK');
+
+    const keys = client.virtualKeys.listKeys('tenant-dist');
+    expect(keys[0].totalTokens).toBe(1500);
+    expect(keys[0].spentUsd).toBeGreaterThan(0);
+
+    // Disallowed model throws typed VirtualKeyError (403)
+    await expect(
+      client.chat.completions.create({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Blocked' }],
+        virtualKey: issued.apiKey,
+      }),
+    ).rejects.toThrow(VirtualKeyError);
+
+    sharedStorage.destroy();
   });
 });

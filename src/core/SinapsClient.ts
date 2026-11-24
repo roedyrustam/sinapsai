@@ -115,6 +115,7 @@ import {
   type GroundingVerificationResult,
   type GroundingVerifiedRequest,
 } from './FaithfulnessSentinel.js';
+import { FrontierModelRegistry } from './FrontierModelRegistry.js';
 import { GeminiAgentBooster } from './GeminiAgentBooster.js';
 import type { HedgedExecutor, HedgingOptions } from './HedgedExecutor.js';
 import { HybridRagEngine, type HybridRagOptions } from './HybridRag.js';
@@ -149,7 +150,7 @@ import {
   SpeculativeStreamVerifier,
 } from './SpeculativeStreamVerifier.js';
 import type { StateStorage } from './StateStorage.js';
-import { VirtualKeyManager } from './VirtualKeyManager.js';
+import { VirtualKeyError, VirtualKeyManager } from './VirtualKeyManager.js';
 import {
   VisionOptimizer,
   type VisionOptimizerOptions,
@@ -321,7 +322,7 @@ export class SinapsClient {
   public readonly kvCache: KvCacheOptimizer;
   public readonly vision: VisionOptimizer;
   public readonly personas: AgentPersonaRegistry;
-  public readonly virtualKeys = new VirtualKeyManager();
+  public readonly virtualKeys: VirtualKeyManager;
   private kvCacheEnabled = false;
   private clusteredCacheEnabled = false;
   private semanticRouterEnabled: boolean;
@@ -345,6 +346,7 @@ export class SinapsClient {
 
   constructor(options: SinapsClientOptions) {
     this.storage = options.storage || new InMemoryStorage();
+    this.virtualKeys = new VirtualKeyManager({ storage: this.storage });
     this.hooks = options.hooks;
     this.mcp = options.mcpBridge || new McpToolBridge();
     if (!this.mcp.hasSamplingHandler()) {
@@ -527,6 +529,32 @@ export class SinapsClient {
       this.personas = new AgentPersonaRegistry();
     }
 
+    // Register built-in live MCP Resources for Frontier Models & KnowledgeGraph
+    if (!this.mcp.hasResource('sinaps://models/frontier')) {
+      this.mcp.registerResource({
+        uri: 'sinaps://models/frontier',
+        name: 'SinapsAI Frontier Model Catalog',
+        description:
+          'Live late-2026 frontier LLM taxonomy, pricing, context windows, and capabilities.',
+        mimeType: 'application/json',
+        read: () => JSON.stringify(FrontierModelRegistry.list()),
+      });
+    }
+    if (!this.mcp.hasResource('sinaps://knowledge-graph/stats')) {
+      this.mcp.registerResource({
+        uri: 'sinaps://knowledge-graph/stats',
+        name: 'SinapsAI Knowledge Graph Stats',
+        description:
+          'Live entity and relation counts from the in-process KnowledgeGraph.',
+        mimeType: 'application/json',
+        read: () =>
+          JSON.stringify({
+            nodes: this.graph.getAllNodes().length,
+            edges: this.graph.getAllEdges().length,
+          }),
+      });
+    }
+
     // Initialize Speculative Multi-Draft Consensus
     this.consensus = {
       create: async (
@@ -669,9 +697,9 @@ export class SinapsClient {
               ? lastUserMsg.content
               : Array.isArray(lastUserMsg?.content)
                 ? lastUserMsg.content
-                  .filter((p) => p.type === 'text')
-                  .map((p) => p.text)
-                  .join(' ')
+                    .filter((p) => p.type === 'text')
+                    .map((p) => p.text)
+                    .join(' ')
                 : '';
 
           if (lastUserText.trim().length > 0) {
@@ -732,6 +760,24 @@ export class SinapsClient {
         }
 
         const resolvedModel = this.resolveModel(requestedModel);
+
+        // Enforce in-process Virtual API Key ACLs, budgets, and RPM/TPM limits if supplied
+        let activeVirtualKeyId: string | undefined;
+        if (request.virtualKey) {
+          const vkAuth = await this.virtualKeys.authorizeRequest(
+            request.virtualKey,
+            { model: resolvedModel },
+          );
+          if (!vkAuth.allowed) {
+            throw new VirtualKeyError(
+              vkAuth.reason || 'Unauthorized: Invalid Virtual API Key',
+              vkAuth.statusCode as 401 | 402 | 403 | 429,
+              vkAuth.keyId,
+              vkAuth.tenantId,
+            );
+          }
+          activeVirtualKeyId = vkAuth.keyId;
+        }
 
         const fullReq: UnifiedApiRequest = {
           model: resolvedModel,
@@ -868,7 +914,7 @@ export class SinapsClient {
                     const calculated =
                       chunk.usage.totalTokens ??
                       (chunk.usage.promptTokens || 0) +
-                      (chunk.usage.completionTokens || 0);
+                        (chunk.usage.completionTokens || 0);
                     actualStreamTokens =
                       calculated > 0 ? calculated : undefined;
                   }
@@ -895,10 +941,55 @@ export class SinapsClient {
             );
           }
 
+          if (activeVirtualKeyId) {
+            const vkManager = this.virtualKeys;
+            const keyId = activeVirtualKeyId;
+            const upstreamVk = streamResult;
+            streamResult = (async function* () {
+              let vkTokens = 0;
+              let vkCostUsd = 0;
+              try {
+                for await (const chunk of upstreamVk) {
+                  if (chunk.usage) {
+                    vkTokens =
+                      chunk.usage.totalTokens ||
+                      (chunk.usage.promptTokens || 0) +
+                        (chunk.usage.completionTokens || 0);
+                    vkCostUsd = FrontierModelRegistry.estimateCost(
+                      chunk.model || resolvedModel,
+                      chunk.usage,
+                    );
+                  }
+                  yield chunk;
+                }
+              } finally {
+                if (vkCostUsd > 0 || vkTokens > 0) {
+                  vkManager.recordSpend(keyId, vkCostUsd, vkTokens);
+                }
+              }
+            })();
+          }
+
           return streamResult;
         }
 
         let finalResponse = res as UnifiedApiResponse;
+
+        if (
+          activeVirtualKeyId &&
+          'usage' in finalResponse &&
+          finalResponse.usage
+        ) {
+          const vkCostUsd = FrontierModelRegistry.estimateCost(
+            finalResponse.model || resolvedModel,
+            finalResponse.usage,
+          );
+          this.virtualKeys.recordSpend(
+            activeVirtualKeyId,
+            vkCostUsd,
+            finalResponse.usage.totalTokens || 0,
+          );
+        }
 
         // Reversibly restore PII values if vault contains tokens
         if (
@@ -939,28 +1030,28 @@ export class SinapsClient {
                 finalResponse.usage?.totalTokens ?? 0,
               ...(finalResponse.usage?.reasoningTokens !== undefined
                 ? {
-                  'gen_ai.usage.reasoning_tokens':
-                    finalResponse.usage.reasoningTokens,
-                }
+                    'gen_ai.usage.reasoning_tokens':
+                      finalResponse.usage.reasoningTokens,
+                  }
                 : {}),
               ...(finalResponse.usage?.cachedPromptTokens !== undefined
                 ? {
-                  'gen_ai.usage.cache_read.input_tokens':
-                    finalResponse.usage.cachedPromptTokens,
-                }
+                    'gen_ai.usage.cache_read.input_tokens':
+                      finalResponse.usage.cachedPromptTokens,
+                  }
                 : {}),
               ...(finalResponse.usage?.cacheWriteTokens !== undefined
                 ? {
-                  'gen_ai.usage.cache_creation.input_tokens':
-                    finalResponse.usage.cacheWriteTokens,
-                }
+                    'gen_ai.usage.cache_creation.input_tokens':
+                      finalResponse.usage.cacheWriteTokens,
+                  }
                 : {}),
               ...(fromClusteredCache && clusterHitMeta
                 ? {
-                  'sinapsai.cache.hit': true,
-                  'sinapsai.cache.cluster_id': clusterHitMeta.clusterId,
-                  'sinapsai.cache.similarity': clusterHitMeta.similarity,
-                }
+                    'sinapsai.cache.hit': true,
+                    'sinapsai.cache.cluster_id': clusterHitMeta.clusterId,
+                    'sinapsai.cache.similarity': clusterHitMeta.similarity,
+                  }
                 : {}),
             },
           });
@@ -1034,44 +1125,93 @@ export class SinapsClient {
 
       /**
        * Creates a non-streaming chat completion and validates the output against any schema
-       * (Standard Schema v1, Zod, SinapsAI SchemaNode, or JSON Schema) with strict type-safety.
+       * (Standard Schema v1, Zod, SinapsAI SchemaNode, or JSON Schema) with strict type-safety
+       * and optional targeted self-healing retry loops (`maxRetries`).
        */
-      createStructured: async <T = unknown>(
+      createStructured: async <T = never, TSchema = unknown>(
         request: Omit<
           CreateChatCompletionRequestNonStreaming,
           'responseFormat'
         > & {
-          schema: unknown;
+          schema: TSchema;
           schemaName?: string;
           schemaDescription?: string;
           strict?: boolean;
+          maxRetries?: number;
         },
-      ): Promise<{ data: T; response: UnifiedApiResponse }> => {
-        const schemaName = request.schemaName || 'structured_output';
-        const format = jsonSchema(schemaName, request.schema, {
-          description: request.schemaDescription,
-          strict: request.strict,
+      ): Promise<{
+        data: [T] extends [never]
+          ? TSchema extends import('../utils/schema.js').SchemaNode<infer U>
+            ? U
+            : unknown
+          : T;
+        response: UnifiedApiResponse;
+        attempts: number;
+      }> => {
+        const {
+          schema,
+          schemaName = 'structured_output',
+          schemaDescription,
+          strict,
+          maxRetries = 1,
+          messages: initialMessages,
+          ...restReq
+        } = request;
+
+        const format = jsonSchema(schemaName, schema, {
+          description: schemaDescription,
+          strict,
         });
 
-        const res = (await this.chat.completions.create({
-          ...request,
-          stream: false,
-          responseFormat: format,
-        })) as UnifiedApiResponse;
+        type ResolvedData = [T] extends [never]
+          ? TSchema extends import('../utils/schema.js').SchemaNode<infer U>
+            ? U
+            : unknown
+          : T;
 
-        const content = res.choices?.[0]?.message?.content || '{}';
-        const parsed = tryExtractJson<unknown>(content) ?? {};
+        const workingMessages: ChatMessage[] = [...initialMessages];
+        let lastErrors: string[] = [];
+        let lastParsed: unknown = {};
 
-        const validation = await validateSchema<T>(request.schema, parsed);
-        if (!validation.success) {
-          throw new SchemaValidationError(
-            `Structured output validation failed: ${validation.errors.join('; ')}`,
-            '',
-            parsed,
-          );
+        for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+          const res = (await this.chat.completions.create({
+            ...restReq,
+            messages: workingMessages,
+            stream: false,
+            responseFormat: format,
+          })) as UnifiedApiResponse;
+
+          const content = res.choices?.[0]?.message?.content || '{}';
+          const parsed = tryExtractJson<unknown>(content) ?? {};
+          lastParsed = parsed;
+
+          const validation = await validateSchema<ResolvedData>(schema, parsed);
+          if (validation.success) {
+            return {
+              data: validation.data,
+              response: res,
+              attempts: attempt,
+            };
+          }
+
+          lastErrors = validation.errors;
+          if (attempt <= maxRetries) {
+            workingMessages.push({
+              role: 'assistant',
+              content,
+            });
+            workingMessages.push({
+              role: 'user',
+              content: `Your previous response failed JSON schema validation (${lastErrors.join('; ')}). Reply ONLY with valid JSON conforming strictly to the schema.`,
+            });
+          }
         }
 
-        return { data: validation.data, response: res };
+        throw new SchemaValidationError(
+          `Structured output validation failed: ${lastErrors.join('; ')}`,
+          '',
+          lastParsed,
+        );
       },
 
       /**
@@ -1164,6 +1304,23 @@ export class SinapsClient {
       request: CreateEmbeddingRequest,
     ): Promise<CreateEmbeddingResponse> => {
       const model = this.resolveModel(request.model);
+      let activeVirtualKeyId: string | undefined;
+      if (request.virtualKey) {
+        const vkAuth = await this.virtualKeys.authorizeRequest(
+          request.virtualKey,
+          { model },
+        );
+        if (!vkAuth.allowed) {
+          throw new VirtualKeyError(
+            vkAuth.reason || 'Unauthorized: Invalid Virtual API Key',
+            vkAuth.statusCode as 401 | 402 | 403 | 429,
+            vkAuth.keyId,
+            vkAuth.tenantId,
+          );
+        }
+        activeVirtualKeyId = vkAuth.keyId;
+      }
+
       const fullReq: CreateEmbeddingRequest = {
         ...request,
         model,
@@ -1179,9 +1336,9 @@ export class SinapsClient {
           this.router.getPrimaryCandidateProviderId(dummyReq);
         const inputTokens = Array.isArray(request.input)
           ? request.input.reduce(
-            (acc, str) => acc + Math.ceil(str.length / 4),
-            0,
-          )
+              (acc, str) => acc + Math.ceil(str.length / 4),
+              0,
+            )
           : Math.ceil(request.input.length / 4);
         const check = await this.rateLimiter.check(dummyReq, {
           estimatedTokens: inputTokens,
@@ -1198,7 +1355,22 @@ export class SinapsClient {
         }
       }
 
-      return this.router.executeEmbedding(fullReq);
+      const embRes = await this.router.executeEmbedding(fullReq);
+      if (activeVirtualKeyId && embRes.usage) {
+        const costUsd = FrontierModelRegistry.estimateCost(
+          embRes.model || model,
+          {
+            promptTokens: embRes.usage.promptTokens || 0,
+            completionTokens: 0,
+          },
+        );
+        this.virtualKeys.recordSpend(
+          activeVirtualKeyId,
+          costUsd,
+          embRes.usage.totalTokens || 0,
+        );
+      }
+      return embRes;
     },
   };
 
@@ -1706,17 +1878,17 @@ export class SinapsClient {
         }));
 
       const assistantMessage: UnifiedApiResponse['choices'][number]['message'] =
-      {
-        role: 'assistant',
-        content: contentAcc.length > 0 ? contentAcc : null,
-        ...(reasoningAcc.length > 0
-          ? { reasoning_content: reasoningAcc }
-          : {}),
-        ...(assembledToolCalls.length > 0
-          ? { tool_calls: assembledToolCalls }
-          : {}),
-        ...(stepGrounding ? { grounding: stepGrounding } : {}),
-      };
+        {
+          role: 'assistant',
+          content: contentAcc.length > 0 ? contentAcc : null,
+          ...(reasoningAcc.length > 0
+            ? { reasoning_content: reasoningAcc }
+            : {}),
+          ...(assembledToolCalls.length > 0
+            ? { tool_calls: assembledToolCalls }
+            : {}),
+          ...(stepGrounding ? { grounding: stepGrounding } : {}),
+        };
 
       latestResponse = {
         id: responseId,

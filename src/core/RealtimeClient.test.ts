@@ -319,4 +319,64 @@ describe('RealtimeClient & RealtimeSession', () => {
     expect(onAudioDelta).toHaveBeenCalledWith('T0FC');
     session.close();
   });
+
+  it('supports Qwen-Omni Realtime WebSocket and auto-executes MCP tools live', async () => {
+    const { McpToolBridge } = await import('./McpBridge.js');
+    const bridge = new McpToolBridge();
+    bridge.registerTool({
+      name: 'get_stock_price',
+      description: 'Fetch live stock quote',
+      inputSchema: {
+        type: 'object',
+        properties: { ticker: { type: 'string' } },
+      },
+      handler: ({ ticker }: { ticker: string }) => ({
+        ticker,
+        priceUsd: 188.5,
+      }),
+    });
+
+    const onToolCall = vi.fn();
+    const session = new RealtimeSession({
+      provider: 'qwen',
+      apiKey: 'sk-dashscope-live',
+      mcpBridge: bridge,
+      onToolCall,
+    });
+    await session.connect();
+
+    // biome-ignore lint/suspicious/noExplicitAny: mock inspection
+    const ws = (session as any).ws as MockWebSocket;
+    expect(ws.url).toContain(
+      'wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime',
+    );
+
+    const initMsg = JSON.parse(ws.sentMessages[0]);
+    expect(initMsg.session.voice).toBe('Cherry');
+    expect(initMsg.session.tools[0].name).toBe('get_stock_price');
+
+    ws.simulateMessage(
+      JSON.stringify({
+        type: 'response.function_call_arguments.done',
+        call_id: 'call_qwen_1',
+        name: 'get_stock_price',
+        arguments: '{"ticker":"NVDA"}',
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 15));
+
+    expect(onToolCall).toHaveBeenCalledWith(
+      'get_stock_price',
+      '{"ticker":"NVDA"}',
+      expect.stringContaining('188.5'),
+    );
+    const toolOutMsg = JSON.parse(ws.sentMessages[1]);
+    expect(toolOutMsg.type).toBe('conversation.item.create');
+    expect(toolOutMsg.item.type).toBe('function_call_output');
+    expect(toolOutMsg.item.call_id).toBe('call_qwen_1');
+    expect(JSON.parse(ws.sentMessages[2])).toEqual({ type: 'response.create' });
+
+    session.close();
+  });
 });

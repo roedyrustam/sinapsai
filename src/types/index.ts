@@ -327,6 +327,8 @@ export interface CreateEmbeddingRequest {
   user?: string;
   signal?: AbortSignal;
   dimensions?: number;
+  /** Optional multi-tenant virtual API key (`sk-sinaps-...`) validated against `client.virtualKeys`. */
+  virtualKey?: string;
 }
 
 export interface EmbeddingItem {

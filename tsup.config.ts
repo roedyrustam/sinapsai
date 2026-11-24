@@ -9,10 +9,18 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/ai-sdk/index.ts', 'src/cli/index.ts'],
+  entry: [
+    'src/index.ts',
+    'src/ai-sdk/index.ts',
+    'src/providers/index.ts',
+    'src/mcp/index.ts',
+    'src/rag/index.ts',
+    'src/swarm/index.ts',
+    'src/cli/index.ts',
+  ],
   format: ['cjs', 'esm'],
   dts: false,
-  splitting: false,
+  splitting: true,
   sourcemap: true,
   clean: true,
   treeshake: true,

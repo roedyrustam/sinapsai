@@ -1,6 +1,6 @@
 {
   "name": "sinapsai",
-  "version": "3.9.0",
+  "version": "4.0.0",
   "description": "Zero-dependency in-process AI Gateway & Control Plane with Vision Token Optimizer, Speculative Stream Verifier, Dynamic Agent Persona Registry, Clustered Semantic Cache, Swarm Tournament Consensus, KV-Cache Prefix Pinning, Semantic Router, Cognitive Brain, Multi-Agent Swarm, A2A Handoff Protocol, Universal MCP Ingestion, OpenTelemetry Tracing, Autonomous Agent Loop, Circuit Breaker, Rate Limiting, PII/Security Guardrails, and Unified LLM API for Node.js, Edge & TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -30,12 +30,64 @@
       "require": "./dist/ai-sdk/index.cjs",
       "default": "./dist/ai-sdk/index.js"
     },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "workerd": "./dist/providers/index.js",
+      "edge-light": "./dist/providers/index.js",
+      "bun": "./dist/providers/index.js",
+      "deno": "./dist/providers/index.js",
+      "import": "./dist/providers/index.js",
+      "require": "./dist/providers/index.cjs",
+      "default": "./dist/providers/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "workerd": "./dist/mcp/index.js",
+      "edge-light": "./dist/mcp/index.js",
+      "bun": "./dist/mcp/index.js",
+      "deno": "./dist/mcp/index.js",
+      "import": "./dist/mcp/index.js",
+      "require": "./dist/mcp/index.cjs",
+      "default": "./dist/mcp/index.js"
+    },
+    "./rag": {
+      "types": "./dist/rag/index.d.ts",
+      "workerd": "./dist/rag/index.js",
+      "edge-light": "./dist/rag/index.js",
+      "bun": "./dist/rag/index.js",
+      "deno": "./dist/rag/index.js",
+      "import": "./dist/rag/index.js",
+      "require": "./dist/rag/index.cjs",
+      "default": "./dist/rag/index.js"
+    },
+    "./swarm": {
+      "types": "./dist/swarm/index.d.ts",
+      "workerd": "./dist/swarm/index.js",
+      "edge-light": "./dist/swarm/index.js",
+      "bun": "./dist/swarm/index.js",
+      "deno": "./dist/swarm/index.js",
+      "import": "./dist/swarm/index.js",
+      "require": "./dist/swarm/index.cjs",
+      "default": "./dist/swarm/index.js"
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
     "*": {
       "ai-sdk": [
         "dist/ai-sdk/index.d.ts"
+      ],
+      "providers": [
+        "dist/providers/index.d.ts"
+      ],
+      "mcp": [
+        "dist/mcp/index.d.ts"
+      ],
+      "rag": [
+        "dist/rag/index.d.ts"
+      ],
+      "swarm": [
+        "dist/swarm/index.d.ts"
       ]
     }
   },

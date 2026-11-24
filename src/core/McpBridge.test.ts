@@ -1074,5 +1074,91 @@ describe('SinapsClient.runWithTools', () => {
       expect(res?.result.content.text).toBe('Client sampled text');
       expect(res?.result.model).toBe('gemini-3.8-flash');
     });
+
+    it('supports MCP 2025-06-18 resources/list, resources/read, prompts/list, prompts/get, and elicitation/create', async () => {
+      const mockProvider: Provider = {
+        id: 'mock-mcp-full',
+        name: 'mock-mcp-full',
+        generateContent: vi.fn(),
+      };
+      const client = new SinapsClient({ providers: [mockProvider] });
+
+      client.mcp.registerPrompt({
+        name: 'code_review',
+        description: 'Structured code review prompt',
+        arguments: [{ name: 'language', required: true }],
+        render: (args) => ({
+          description: `Review ${args?.language || 'TypeScript'} code`,
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Audit this ${args?.language || 'TypeScript'} snippet.`,
+              },
+            },
+          ],
+        }),
+      });
+
+      client.mcp.setElicitationHandler(async (req) => ({
+        action: 'accept',
+        content: { confirmed: true, echo: req.message },
+      }));
+
+      const initRes = await client.mcp.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 30,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18' },
+      });
+      expect(initRes.result.capabilities.resources).toBeDefined();
+      expect(initRes.result.capabilities.prompts).toBeDefined();
+      expect(initRes.result.capabilities.elicitation).toBeDefined();
+
+      // Built-in frontier models resource
+      const resList = await client.mcp.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 31,
+        method: 'resources/list',
+      });
+      expect(
+        resList.result.resources.some(
+          (r: { uri: string }) => r.uri === 'sinaps://models/frontier',
+        ),
+      ).toBe(true);
+
+      const resRead = await client.mcp.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 32,
+        method: 'resources/read',
+        params: { uri: 'sinaps://models/frontier' },
+      });
+      const parsedCatalog = JSON.parse(resRead.result.contents[0].text);
+      expect(Array.isArray(parsedCatalog)).toBe(true);
+      expect(parsedCatalog.length).toBeGreaterThan(10);
+
+      // Prompts
+      const promptGet = await client.mcp.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 33,
+        method: 'prompts/get',
+        params: { name: 'code_review', arguments: { language: 'Rust' } },
+      });
+      expect(promptGet.result.messages[0].content.text).toContain('Rust');
+
+      // Elicitation
+      const elicitRes = await client.mcp.handleJsonRpc({
+        jsonrpc: '2.0',
+        id: 34,
+        method: 'elicitation/create',
+        params: {
+          message: 'Confirm deployment?',
+          requestedSchema: { type: 'object' },
+        },
+      });
+      expect(elicitRes.result.action).toBe('accept');
+      expect(elicitRes.result.content.confirmed).toBe(true);
+    });
   });
 });

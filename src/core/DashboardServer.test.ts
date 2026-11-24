@@ -176,4 +176,46 @@ describe('DashboardServer', () => {
     await client.stopDashboard();
     expect(dash.isRunning).toBe(false);
   });
+
+  it('serves Dashboard 3.0 /api/keys, /api/keys/:id/revoke, and /api/cache endpoints', async () => {
+    client = createTestClient();
+    await client.startDashboard({ port: 13147 });
+
+    try {
+      const createRes = await fetch('http://127.0.0.1:13147/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Dashboard Key',
+          tenantId: 'dash-tenant',
+          maxBudgetUsd: 5,
+        }),
+      });
+      expect(createRes.status).toBe(201);
+      const issued = (await createRes.json()) as {
+        apiKey: string;
+        record: { id: string };
+      };
+      expect(issued.apiKey.startsWith('sk-sinaps-')).toBe(true);
+
+      const summaryRes = await fetch('http://127.0.0.1:13147/api/summary');
+      const summary = (await summaryRes.json()) as {
+        virtualKeys: Array<{ id: string }>;
+        clusteredCache: { totalEntries: number };
+      };
+      expect(summary.virtualKeys).toHaveLength(1);
+      expect(summary.clusteredCache.totalEntries).toBe(0);
+
+      const cacheRes = await fetch('http://127.0.0.1:13147/api/cache');
+      expect(cacheRes.status).toBe(200);
+
+      const revokeRes = await fetch(
+        `http://127.0.0.1:13147/api/keys/${issued.record.id}/revoke`,
+        { method: 'POST' },
+      );
+      expect(revokeRes.status).toBe(200);
+    } finally {
+      await client.stopDashboard();
+    }
+  });
 });

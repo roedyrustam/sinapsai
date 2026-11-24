@@ -13,17 +13,23 @@
  * @license MIT
  */
 
-export type RealtimeProviderType = 'openai' | 'gemini' | 'custom';
+import type { McpToolBridge } from './McpBridge.js';
+
+export type RealtimeProviderType = 'openai' | 'gemini' | 'qwen' | 'custom';
 
 export interface RealtimeConnectOptions {
   /**
-   * Target provider: 'openai' | 'gemini' | 'custom'
+   * Target provider: 'openai' | 'gemini' | 'qwen' | 'custom'
    */
   provider?: RealtimeProviderType;
   /**
-   * Model identifier (e.g. 'gpt-realtime', 'gpt-4o-realtime-preview', or 'gemini-3.1-flash-live-preview')
+   * Model identifier (e.g. 'gpt-realtime', 'gemini-3.1-flash-live-preview', or 'qwen3-omni-flash-realtime')
    */
   model?: string;
+  /**
+   * Optional McpToolBridge for automatic hands-free bidirectional tool execution during voice/video sessions.
+   */
+  mcpBridge?: McpToolBridge;
   /**
    * API Key for the real-time endpoint
    */
@@ -56,6 +62,7 @@ export interface RealtimeConnectOptions {
   onAudioDelta?: (base64Audio: string) => void;
   onTurnComplete?: () => void;
   onInterrupted?: () => void;
+  onToolCall?: (name: string, args: string, output: string) => void;
   onRawMessage?: (data: unknown) => void;
 }
 
@@ -74,10 +81,10 @@ export class RealtimeSession {
 
   private getModel(): string {
     const provider = this.getProvider();
-    return (
-      this.options.model ||
-      (provider === 'openai' ? 'gpt-realtime' : 'gemini-3.1-flash-live-preview')
-    );
+    if (this.options.model) return this.options.model;
+    if (provider === 'openai') return 'gpt-realtime';
+    if (provider === 'qwen') return 'qwen3-omni-flash-realtime';
+    return 'gemini-3.1-flash-live-preview';
   }
 
   /**
@@ -91,6 +98,9 @@ export class RealtimeSession {
 
     if (provider === 'openai') {
       return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
+    }
+    if (provider === 'qwen') {
+      return `wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=${encodeURIComponent(model)}`;
     }
     if (provider === 'gemini') {
       return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.options.apiKey ?? ''}`;
@@ -118,7 +128,7 @@ export class RealtimeSession {
     return new Promise((resolve, reject) => {
       try {
         const protocols =
-          this.getProvider() === 'openai'
+          this.getProvider() === 'openai' || this.getProvider() === 'qwen'
             ? ['realtime', `openai-insecure-api-key.${this.options.apiKey}`]
             : undefined;
         this.ws = protocols
@@ -163,7 +173,15 @@ export class RealtimeSession {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     const provider = this.getProvider();
-    if (provider === 'openai') {
+    const bridgeTools = this.options.mcpBridge?.toUnifiedTools() ?? [];
+
+    if (provider === 'openai' || provider === 'qwen') {
+      const realtimeTools = bridgeTools.map((t) => ({
+        type: 'function',
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters ?? { type: 'object', properties: {} },
+      }));
       const sessionUpdate = {
         type: 'session.update',
         session: {
@@ -171,13 +189,15 @@ export class RealtimeSession {
           instructions:
             this.options.instructions ??
             'You are a helpful real-time AI assistant.',
-          voice: this.options.voice ?? 'alloy',
+          voice:
+            this.options.voice ?? (provider === 'qwen' ? 'Cherry' : 'alloy'),
           input_audio_format: 'pcm16',
           output_audio_format: 'pcm16',
           turn_detection: {
             type: 'server_vad',
             threshold: 0.5,
           },
+          ...(realtimeTools.length > 0 ? { tools: realtimeTools } : {}),
         },
       };
       this.ws.send(JSON.stringify(sessionUpdate));
@@ -209,6 +229,20 @@ export class RealtimeSession {
         setup.systemInstruction = {
           parts: [{ text: this.options.instructions }],
         };
+      }
+      if (bridgeTools.length > 0) {
+        setup.tools = [
+          {
+            functionDeclarations: bridgeTools.map((t) => ({
+              name: t.function.name,
+              description: t.function.description,
+              parameters: t.function.parameters ?? {
+                type: 'object',
+                properties: {},
+              },
+            })),
+          },
+        ];
       }
 
       this.ws.send(JSON.stringify({ setup }));
@@ -248,9 +282,26 @@ export class RealtimeSession {
         this.options.onTurnComplete?.();
       } else if (parsed.type === 'input_audio_buffer.speech_started') {
         this.options.onInterrupted?.();
+      } else if (
+        parsed.type === 'response.function_call_arguments.done' &&
+        this.options.mcpBridge &&
+        typeof parsed.name === 'string'
+      ) {
+        const callId = String(parsed.call_id || `call_${Date.now()}`);
+        const fnName = parsed.name;
+        const fnArgs =
+          typeof parsed.arguments === 'string' ? parsed.arguments : '{}';
+        void this.executeLiveToolCallOpenAi(callId, fnName, fnArgs);
       }
 
-      // Handle Gemini Live BidiGenerateContent Server Events
+      // Handle Gemini Live BidiGenerateContent Server Events & Tool Calls
+      if (
+        parsed.toolCall?.functionCalls &&
+        Array.isArray(parsed.toolCall.functionCalls) &&
+        this.options.mcpBridge
+      ) {
+        void this.executeLiveToolCallsGemini(parsed.toolCall.functionCalls);
+      }
       if (parsed.setupComplete !== undefined) {
         this.options.onSetupComplete?.();
       }
@@ -297,6 +348,88 @@ export class RealtimeSession {
       }
     } catch {
       // Discard unparseable binary or raw frames
+    }
+  }
+
+  private async executeLiveToolCallOpenAi(
+    callId: string,
+    name: string,
+    argsJson: string,
+  ): Promise<void> {
+    if (
+      !this.options.mcpBridge ||
+      !this.ws ||
+      this.ws.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    const result = await this.options.mcpBridge.executeToolCall({
+      id: callId,
+      type: 'function',
+      function: { name, arguments: argsJson },
+    });
+    const outputText = result.content
+      .map((c) => (c.type === 'text' ? c.text : JSON.stringify(c)))
+      .join('\n');
+
+    this.options.onToolCall?.(name, argsJson, outputText);
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id: callId,
+            output: outputText,
+          },
+        }),
+      );
+      this.ws.send(JSON.stringify({ type: 'response.create' }));
+    }
+  }
+
+  private async executeLiveToolCallsGemini(
+    calls: Array<{
+      id?: string;
+      name?: string;
+      args?: Record<string, unknown>;
+    }>,
+  ): Promise<void> {
+    if (
+      !this.options.mcpBridge ||
+      !this.ws ||
+      this.ws.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    const functionResponses: Array<Record<string, unknown>> = [];
+    for (const fc of calls) {
+      if (!fc.name) continue;
+      const callId = fc.id || `gem_call_${Date.now()}`;
+      const argsJson = JSON.stringify(fc.args ?? {});
+      const result = await this.options.mcpBridge.executeToolCall({
+        id: callId,
+        type: 'function',
+        function: { name: fc.name, arguments: argsJson },
+      });
+      const outputText = result.content
+        .map((c) => (c.type === 'text' ? c.text : JSON.stringify(c)))
+        .join('\n');
+      this.options.onToolCall?.(fc.name, argsJson, outputText);
+      functionResponses.push({
+        id: callId,
+        name: fc.name,
+        response: { output: outputText, isError: Boolean(result.isError) },
+      });
+    }
+
+    if (
+      functionResponses.length > 0 &&
+      this.ws &&
+      this.ws.readyState === WebSocket.OPEN
+    ) {
+      this.ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
     }
   }
 

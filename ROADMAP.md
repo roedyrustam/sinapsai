@@ -321,6 +321,12 @@
 - [x] **Live Model ACL & Automatic Spend Attribution**: Validasi Model ACL per-request pada `/v1/chat/completions`, `/v1/responses`, dan `/v1/embeddings` serta pencatatan biaya USD otomatis pasca-respons via `FrontierModelRegistry.estimateCost` ke `client.virtualKeys.recordSpend()`.
 - [x] **Rilis v3.9.0**: Penambahan `VirtualKeyError`, `UnifiedApiRequest.virtualKey`, integration tests di `src/cli/server.test.ts`, dan bump versi ke **v3.9.0**.
 
+## Phase 35: Enterprise & Edge-Modular Edition (v4.0.0) - *Completed*
+- [x] **Edge Purity & Modular Subpaths**: Lazy `await import('node:http')` pada `DashboardServer` + ESM code-splitting & subpath exports (`sinapsai/providers`, `sinapsai/mcp`, `sinapsai/rag`, `sinapsai/swarm`).
+- [x] **Distributed `VirtualKeyManager` & Hot-Path Enforcement**: Sinkronisasi lintas-worker via `StateStorage` serta penegakan `request.virtualKey` langsung di `SinapsClient.chat.completions.create()` & `embeddings.create()`.
+- [x] **Full MCP `2025-06-18` & Self-Healing `createStructured<T>()`**: Dukungan `resources/list`, `resources/read` (`sinaps://models/frontier`, `sinaps://knowledge-graph/stats`), `prompts/list`, `prompts/get`, `elicitation/create`, dan loop validasi JSON terstruktur otomatis.
+- [x] **Realtime Auto-Tool-Calling, Qwen-Omni & Dashboard 3.0**: Eksekusi tool `McpToolBridge` hands-free di `RealtimeClient`, provider `'qwen'` (`qwen3-omni-flash-realtime`), endpoint/UI `/api/keys` & `/api/cache` di `DashboardServer` 3.0, Example 53, dan rilis mayor **v4.0.0** (691/691 tests lulus).
+
 
 
 
